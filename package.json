@@ -1,0 +1,33 @@
+{
+  "name": "@silbercuechrome/mcp",
+  "version": "0.1.0",
+  "description": "SilbercueChrome MCP Server — Chrome browser automation via CDP",
+  "type": "module",
+  "bin": {
+    "silbercuechrome": "./build/index.js"
+  },
+  "main": "./build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "eslint": "^9",
+    "prettier": "^3",
+    "typescript": "^5.7",
+    "typescript-eslint": "^8",
+    "vitest": "^3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
