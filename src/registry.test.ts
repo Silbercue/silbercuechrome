@@ -2,26 +2,26 @@ import { describe, it, expect, vi } from "vitest";
 import { ToolRegistry } from "./registry.js";
 
 describe("ToolRegistry", () => {
-  it("should be instantiable with McpServer, CdpClient, and sessionId", () => {
-    const registry = new ToolRegistry({} as never, {} as never, "session-1");
+  it("should be instantiable with McpServer, CdpClient, sessionId, and TabStateCache", () => {
+    const registry = new ToolRegistry({} as never, {} as never, "session-1", {} as never);
     expect(registry).toBeDefined();
     expect(registry).toBeInstanceOf(ToolRegistry);
   });
 
   it("should have a registerAll method", () => {
-    const registry = new ToolRegistry({} as never, {} as never, "session-1");
+    const registry = new ToolRegistry({} as never, {} as never, "session-1", {} as never);
     expect(typeof registry.registerAll).toBe("function");
   });
 
-  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, and type tools via server.tool()", () => {
+  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, and tab_status tools via server.tool()", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
     const mockCdpClient = {} as never;
 
-    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1");
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(7);
+    expect(toolFn).toHaveBeenCalledTimes(8);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -88,6 +88,12 @@ describe("ToolRegistry", () => {
         text: expect.anything(),
         clear: expect.anything(),
       }),
+      expect.any(Function),
+    );
+    expect(toolFn).toHaveBeenCalledWith(
+      "tab_status",
+      "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
+      {},
       expect.any(Function),
     );
   });
