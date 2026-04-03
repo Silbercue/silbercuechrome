@@ -22,3 +22,5 @@ export { virtualDeskSchema, virtualDeskHandler } from "./virtual-desk.js";
 export type { VirtualDeskParams } from "./virtual-desk.js";
 export { runPlanSchema, runPlanHandler } from "./run-plan.js";
 export type { RunPlanParams } from "./run-plan.js";
+export { domSnapshotSchema, domSnapshotHandler } from "./dom-snapshot.js";
+export type { DomSnapshotParams } from "./dom-snapshot.js";

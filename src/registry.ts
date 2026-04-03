@@ -25,6 +25,8 @@ import { virtualDeskHandler } from "./tools/virtual-desk.js";
 import type { VirtualDeskParams } from "./tools/virtual-desk.js";
 import { runPlanSchema, runPlanHandler } from "./tools/run-plan.js";
 import type { RunPlanParams } from "./tools/run-plan.js";
+import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
+import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -220,6 +222,17 @@ export class ToolRegistry {
     );
 
     this.server.tool(
+      "dom_snapshot",
+      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+      {
+        ref: domSnapshotSchema.shape.ref,
+      },
+      async (params) => {
+        return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+      },
+    );
+
+    this.server.tool(
       "run_plan",
       "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results.",
       {
@@ -282,6 +295,9 @@ export class ToolRegistry {
         this._tabStateCache,
         this.connectionStatus,
       );
+    });
+    this._handlers.set("dom_snapshot", async (params) => {
+      return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
   }
 }

@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(11);
+    expect(toolFn).toHaveBeenCalledTimes(12);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -110,6 +110,14 @@ describe("ToolRegistry", () => {
       "virtual_desk",
       "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
       {},
+      expect.any(Function),
+    );
+    expect(toolFn).toHaveBeenCalledWith(
+      "dom_snapshot",
+      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+      expect.objectContaining({
+        ref: expect.anything(),
+      }),
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(

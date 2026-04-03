@@ -129,6 +129,16 @@ export class A11yTreeProcessor {
     return this.nodeInfoMap.get(backendNodeId);
   }
 
+  /** Returns true if the ref map has been populated (i.e. getTree was called at least once). */
+  hasRefs(): boolean {
+    return this.refMap.size > 0;
+  }
+
+  getRefForBackendNodeId(backendNodeId: number): string | undefined {
+    const refNum = this.refMap.get(backendNodeId);
+    return refNum !== undefined ? `e${refNum}` : undefined;
+  }
+
   findClosestRef(ref: string, roleFilter?: Set<string>): ClosestRefSuggestion | null {
     const match = ref.match(/^e(\d+)$/);
     if (!match || this.reverseMap.size === 0) return null;
