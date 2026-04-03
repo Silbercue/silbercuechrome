@@ -123,9 +123,10 @@ export class ToolRegistry {
       "Take a compressed WebP screenshot of the current page (max 800px wide, <100KB)",
       {
         full_page: screenshotSchema.shape.full_page,
+        som: screenshotSchema.shape.som,
       },
       async (params) => {
-        return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId);
+        return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
       },
     );
 
@@ -255,7 +256,7 @@ export class ToolRegistry {
       return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
     this._handlers.set("screenshot", async (params) => {
-      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId);
+      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
     this._handlers.set("wait_for", async (params) => {
       return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
