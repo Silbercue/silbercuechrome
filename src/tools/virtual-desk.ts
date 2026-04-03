@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
-import type { ToolResponse } from "../types.js";
+import type { ToolResponse, ConnectionStatus } from "../types.js";
 import type { TabStateCache } from "../cache/tab-state-cache.js";
+import { wrapCdpError } from "./error-utils.js";
 
 export const virtualDeskSchema = z.object({});
 export type VirtualDeskParams = z.infer<typeof virtualDeskSchema>;
@@ -40,9 +41,20 @@ export async function virtualDeskHandler(
   cdpClient: CdpClient,
   sessionId: string | undefined,
   tabStateCache: TabStateCache,
+  connectionStatus?: ConnectionStatus,
 ): Promise<ToolResponse> {
   const start = performance.now();
   const method = "virtual_desk";
+
+  // If disconnected or reconnecting, report status immediately
+  if (connectionStatus && connectionStatus !== "connected") {
+    const elapsedMs = Math.round(performance.now() - start);
+    return {
+      content: [{ type: "text", text: `Connection: ${connectionStatus} — tool calls may fail until reconnected` }],
+      isError: true,
+      _meta: { elapsedMs, method },
+    };
+  }
 
   try {
     // Single CDP call for ALL tabs — no N+1 problem
@@ -82,10 +94,8 @@ export async function virtualDeskHandler(
     };
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(`[virtual_desk] failed after ${elapsedMs}ms:`, message);
     return {
-      content: [{ type: "text", text: `virtual_desk failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, method) }],
       isError: true,
       _meta: { elapsedMs, method },
     };

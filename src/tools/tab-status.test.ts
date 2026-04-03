@@ -74,7 +74,7 @@ describe("tabStatusHandler", () => {
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("returns error when CDP connection fails", async () => {
+  it("returns friendly error when CDP connection is lost", async () => {
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("tab1");
 
@@ -86,7 +86,8 @@ describe("tabStatusHandler", () => {
     const result = await tabStatusHandler({}, cdp, "s1", cache);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("tab_status failed: Transport closed unexpectedly");
+    expect(result.content[0].text).toContain("CDP connection lost");
+    expect(result.content[0].text).toContain("reconnect");
     expect(result._meta?.method).toBe("tab_status");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
@@ -135,6 +136,31 @@ describe("tabStatusHandler", () => {
     expect(errorLine).toBeDefined();
     // "  - " prefix is 4 chars, then 200 X's
     expect(errorLine!.length).toBe(4 + 200);
+  });
+
+  it("shows connection status when disconnected", async () => {
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+    cache.setActiveTarget("tab1");
+    const cdp = createMockCdp();
+
+    const result = await tabStatusHandler({}, cdp, "s1", cache, "disconnected");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Connection: disconnected");
+    expect(result.content[0].text).toContain("tool calls may fail");
+    expect(result._meta?.method).toBe("tab_status");
+  });
+
+  it("shows connection status when reconnecting", async () => {
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+    cache.setActiveTarget("tab1");
+    const cdp = createMockCdp();
+
+    const result = await tabStatusHandler({}, cdp, "s1", cache, "reconnecting");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Connection: reconnecting");
+    expect(result._meta?.method).toBe("tab_status");
   });
 
   it("_meta includes elapsedMs and method", async () => {

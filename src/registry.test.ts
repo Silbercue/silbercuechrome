@@ -176,4 +176,62 @@ describe("ToolRegistry", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]).toHaveProperty("text", "Unknown tool: run_plan");
   });
+
+  it("updateClient swaps cdpClient and sessionId", () => {
+    const oldClient = { send: vi.fn() } as never;
+    const newClient = { send: vi.fn().mockResolvedValue({ result: { type: "number", value: 99 } }) } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, oldClient, "session-old", {} as never);
+
+    registry.updateClient(newClient, "session-new");
+
+    expect(registry.sessionId).toBe("session-new");
+  });
+
+  it("tool handlers use new cdpClient after updateClient", async () => {
+    const oldClient = {
+      send: vi.fn().mockResolvedValue({ result: { type: "string", value: "old" } }),
+    } as never;
+    const newClient = {
+      send: vi.fn().mockResolvedValue({ result: { type: "string", value: "new" } }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, oldClient, "session-old", {} as never);
+    registry.registerAll();
+
+    // Swap to new client
+    registry.updateClient(newClient, "session-new");
+
+    // Execute a tool — should use the new client
+    const result = await registry.executeTool("evaluate", {
+      expression: "test",
+      await_promise: false,
+    });
+
+    expect(result).toBeDefined();
+    // The new client's send should have been called, not the old one
+    expect((newClient as { send: ReturnType<typeof vi.fn> }).send).toHaveBeenCalled();
+  });
+
+  it("connectionStatus returns status from callback", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never, () => "reconnecting");
+
+    expect(registry.connectionStatus).toBe("reconnecting");
+  });
+
+  it("connectionStatus defaults to connected when no callback", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
+
+    expect(registry.connectionStatus).toBe("connected");
+  });
 });

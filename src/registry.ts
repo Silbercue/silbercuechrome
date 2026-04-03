@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
-import type { ToolResponse } from "./types.js";
+import type { ToolResponse, ConnectionStatus } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -29,13 +29,17 @@ export class ToolRegistry {
   private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>) => Promise<ToolResponse>>();
 
+  private _getConnectionStatus: (() => ConnectionStatus) | null = null;
+
   constructor(
     private server: McpServer,
     private cdpClient: CdpClient,
     sessionId: string,
     private _tabStateCache: TabStateCache,
+    getConnectionStatus?: () => ConnectionStatus,
   ) {
     this._sessionId = sessionId;
+    this._getConnectionStatus = getConnectionStatus ?? null;
   }
 
   get sessionId(): string {
@@ -44,6 +48,17 @@ export class ToolRegistry {
 
   updateSession(sessionId: string): void {
     this._sessionId = sessionId;
+  }
+
+  /** Swap the CDP client and session after a successful reconnect */
+  updateClient(cdpClient: CdpClient, sessionId: string): void {
+    this.cdpClient = cdpClient;
+    this._sessionId = sessionId;
+  }
+
+  /** Get current connection status (connected, reconnecting, disconnected) */
+  get connectionStatus(): ConnectionStatus {
+    return this._getConnectionStatus?.() ?? "connected";
   }
 
   async executeTool(name: string, params: Record<string, unknown>): Promise<ToolResponse> {
@@ -158,6 +173,7 @@ export class ToolRegistry {
           this.cdpClient,
           this.sessionId,
           this._tabStateCache,
+          this.connectionStatus,
         );
       },
     );
@@ -193,6 +209,7 @@ export class ToolRegistry {
           this.cdpClient,
           this.sessionId,
           this._tabStateCache,
+          this.connectionStatus,
         );
       },
     );
@@ -237,6 +254,7 @@ export class ToolRegistry {
         this.cdpClient,
         this.sessionId,
         this._tabStateCache,
+        this.connectionStatus,
       );
     });
     this._handlers.set("switch_tab", async (params) => {
@@ -256,6 +274,7 @@ export class ToolRegistry {
         this.cdpClient,
         this.sessionId,
         this._tabStateCache,
+        this.connectionStatus,
       );
     });
   }

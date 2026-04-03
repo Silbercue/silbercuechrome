@@ -254,7 +254,30 @@ describe("virtualDeskHandler", () => {
     expect(result._meta?.method).toBe("virtual_desk");
   });
 
-  it("returns error when CDP connection fails", async () => {
+  it("shows connection status when disconnected", async () => {
+    const cdp = createMockCdp();
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache, "disconnected");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Connection: disconnected");
+    expect(result.content[0].text).toContain("tool calls may fail");
+    expect(result._meta?.method).toBe("virtual_desk");
+  });
+
+  it("shows connection status when reconnecting", async () => {
+    const cdp = createMockCdp();
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache, "reconnecting");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Connection: reconnecting");
+    expect(result._meta?.method).toBe("virtual_desk");
+  });
+
+  it("returns friendly error when CDP connection is lost", async () => {
     const cdp = createMockCdp();
     (cdp.send as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Transport closed unexpectedly"),
@@ -264,7 +287,8 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("virtual_desk failed: Transport closed unexpectedly");
+    expect(result.content[0].text).toContain("CDP connection lost");
+    expect(result.content[0].text).toContain("reconnect");
     expect(result._meta?.method).toBe("virtual_desk");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
   });

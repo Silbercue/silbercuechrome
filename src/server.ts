@@ -43,21 +43,53 @@ export async function startServer(): Promise<void> {
   tabStateCache.setActiveTarget(pageTarget.targetId);
   tabStateCache.attachToClient(cdpClient, sessionId);
 
-  // 5. Create MCP server and register tools
+  // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
     version: "0.1.0",
   });
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status);
   registry.registerAll();
 
-  // 6. Start stdio transport
+  // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
+  // H1 fix: Registered AFTER registry creation to avoid TDZ reference
+  connection.onReconnect(async (reconn) => {
+    const newCdpClient = reconn.cdpClient;
+
+    // 1. Attach to page target (same as initial startup)
+    const { targetInfos: newTargets } = await newCdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
+    let newPageTarget = newTargets.find((t) => t.type === "page");
+    if (!newPageTarget) {
+      const { targetId } = await newCdpClient.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+      newPageTarget = { targetId, type: "page", url: "about:blank" };
+    }
+    const { sessionId: newSessionId } = await newCdpClient.send<{ sessionId: string }>("Target.attachToTarget", {
+      targetId: newPageTarget.targetId,
+      flatten: true,
+    });
+
+    // 2. Enable CDP domains on the new session
+    await newCdpClient.send("Runtime.enable", {}, newSessionId);
+    await newCdpClient.send("Page.enable", {}, newSessionId);
+    await newCdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, newSessionId);
+    await newCdpClient.send("Accessibility.enable", {}, newSessionId);
+
+    // 3. Re-wire TabStateCache: detach from old, attach to new
+    tabStateCache.detachFromClient();
+    tabStateCache.setActiveTarget(newPageTarget.targetId);
+    tabStateCache.attachToClient(newCdpClient, newSessionId);
+
+    // 4. Re-wire ToolRegistry
+    registry.updateClient(newCdpClient, newSessionId);
+  });
+
+  // 7. Start stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("SilbercueChrome MCP server running on stdio");
 
-  // 7. Graceful shutdown
+  // 8. Graceful shutdown
   const shutdown = async () => {
     tabStateCache.detachFromClient();
     await server.close();

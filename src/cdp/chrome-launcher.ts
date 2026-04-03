@@ -139,12 +139,13 @@ export async function launchChrome(
     const cdpClient = new CdpClient(transport);
 
     // Wait for Chrome to be ready — Browser.getVersion must succeed
+    // B1: 5s pipe startup timeout (NFR11/NFR14 compliance)
     await Promise.race([
       cdpClient.send("Browser.getVersion"),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () => reject(new Error("Chrome startup timed out after 10s")),
-          10_000,
+          () => reject(new Error("Chrome startup timed out after 5s")),
+          5_000,
         ),
       ),
     ]);
@@ -167,7 +168,7 @@ interface VersionResponse {
 
 async function fetchJsonVersion(
   port: number,
-  timeoutMs = 2000,
+  timeoutMs = 500,
 ): Promise<VersionResponse> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -243,33 +244,161 @@ export class ChromeConnection {
   private _exitHandler: (() => void) | null = null;
   private _closed = false;
 
+  // Reconnect fields (Story 5.2)
+  private _cdpClient: CdpClient;
+  private _transport: CdpTransport;
+  private _childProcess: ChildProcess | undefined;
+  private _tmpDir: string | undefined;
+  private _reconnecting = false;
+  private _onReconnect: ((connection: ChromeConnection) => Promise<void>) | null = null;
+  private readonly _headless: boolean;
+  private readonly _port: number;
+
   constructor(
-    public readonly cdpClient: CdpClient,
-    public readonly transport: CdpTransport,
+    cdpClient: CdpClient,
+    transport: CdpTransport,
     public readonly transportType: TransportType,
-    public readonly childProcess: ChildProcess | undefined,
-    private readonly _tmpDir: string | undefined,
+    childProcess: ChildProcess | undefined,
+    tmpDir: string | undefined,
+    _launcher?: ChromeLauncher,
+    port?: number,
+    headless?: boolean,
   ) {
+    this._cdpClient = cdpClient;
+    this._transport = transport;
+    this._childProcess = childProcess;
+    this._tmpDir = tmpDir;
+    this._port = port ?? 9222;
+    this._headless = headless ?? true;
+
     // C1 fix: Passive status tracking via CdpClient.onClose —
     // detects unexpected transport close (WebSocket drop, pipe break)
-    this.cdpClient.onClose(() => {
-      this.status = "disconnected";
-    });
+    this._setupOnClose(cdpClient);
 
-    if (this.childProcess) {
-      // Track status on child process exit
-      this.childProcess.on("exit", () => {
-        this.status = "disconnected";
-      });
-
-      // H4 fix: Only register 'exit' handler for sync cleanup —
-      // no SIGINT/SIGTERM handlers that call process.exit()
-      this._exitHandler = () => {
-        if (this._closed) return;
-        this.childProcess?.kill();
-      };
-      globalThis.process.on("exit", this._exitHandler);
+    if (this._childProcess) {
+      this._setupChildProcessHandlers(this._childProcess);
     }
+  }
+
+  get cdpClient(): CdpClient {
+    return this._cdpClient;
+  }
+
+  get transport(): CdpTransport {
+    return this._transport;
+  }
+
+  get childProcess(): ChildProcess | undefined {
+    return this._childProcess;
+  }
+
+  /** Register a callback to be invoked after successful reconnect for re-wiring */
+  onReconnect(callback: (connection: ChromeConnection) => Promise<void>): void {
+    this._onReconnect = callback;
+  }
+
+  /**
+   * Attempt to reconnect to Chrome (max 3 retries, 500ms delay between attempts).
+   * Returns true if reconnect succeeded, false otherwise.
+   */
+  async reconnect(): Promise<boolean> {
+    if (this._reconnecting || this._closed) return false;
+    this._reconnecting = true;
+    this.status = "reconnecting";
+
+    // Best-effort close old client/transport
+    try {
+      await this._cdpClient.close();
+    } catch {
+      /* best-effort */
+    }
+
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // B2: Check _closed inside the loop so close() during reconnect aborts immediately
+      if (this._closed) {
+        this._reconnecting = false;
+        return false;
+      }
+
+      if (attempt > 1) {
+        await new Promise((r) => setTimeout(r, 500));
+        // B2: Re-check after the pause — close() may have been called while waiting
+        if (this._closed) {
+          this._reconnecting = false;
+          return false;
+        }
+      }
+
+      try {
+        if (this.transportType === "websocket") {
+          // WebSocket reconnect: Chrome is still running, reconnect to same port
+          // B1: fetchJsonVersion uses 500ms default, WebSocket connect 2s
+          const versionInfo = await fetchJsonVersion(this._port);
+          if (!versionInfo.webSocketDebuggerUrl) {
+            throw new Error("Missing webSocketDebuggerUrl");
+          }
+          const wsUrl = versionInfo.webSocketDebuggerUrl as string;
+          const newTransport = await WebSocketTransport.connect(wsUrl, { timeoutMs: 2000 });
+          const newClient = new CdpClient(newTransport);
+          await newClient.send("Browser.getVersion");
+
+          this._transport = newTransport;
+          this._cdpClient = newClient;
+        } else {
+          // Pipe reconnect: Chrome process is dead, relaunch
+          const result = await launchChrome({ headless: this._headless });
+          this._transport = result.transport;
+          this._cdpClient = result.cdpClient;
+
+          // Clean up old child process handlers
+          if (this._exitHandler) {
+            globalThis.process.removeListener("exit", this._exitHandler);
+            this._exitHandler = null;
+          }
+
+          this._childProcess = result.process;
+          const tmpDirFlag = result.process.spawnargs.find((a) =>
+            a.startsWith("--user-data-dir="),
+          );
+          this._tmpDir = tmpDirFlag?.split("=")[1];
+
+          // Setup handlers for new child process
+          this._setupChildProcessHandlers(this._childProcess);
+        }
+
+        // Setup onClose for the new CdpClient to detect future disconnects
+        this._setupOnClose(this._cdpClient);
+
+        // C1: Invoke onReconnect callback BEFORE setting status to connected.
+        // If callback fails, status stays disconnected.
+        if (this._onReconnect) {
+          try {
+            await this._onReconnect(this);
+          } catch (cbErr) {
+            const cbMsg = cbErr instanceof Error ? cbErr.message : String(cbErr);
+            debug("onReconnect callback failed on attempt %d: %s", attempt, cbMsg);
+            this.status = "disconnected";
+            this._reconnecting = false;
+            throw cbErr;
+          }
+        }
+
+        this.status = "connected";
+        this._reconnecting = false;
+
+        debug("Reconnect succeeded on attempt %d", attempt);
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        debug("Reconnect attempt %d/%d failed: %s", attempt, maxAttempts, msg);
+      }
+    }
+
+    this.status = "disconnected";
+    this._reconnecting = false;
+    debug("All %d reconnect attempts failed", maxAttempts);
+    return false;
   }
 
   async close(): Promise<void> {
@@ -282,23 +411,23 @@ export class ChromeConnection {
       globalThis.process.removeListener("exit", this._exitHandler);
 
     // Close CDP client (which closes the transport)
-    await this.cdpClient.close();
+    await this._cdpClient.close();
 
     // Terminate child process if we launched it
-    if (this.childProcess && !this.childProcess.killed) {
+    if (this._childProcess && !this._childProcess.killed) {
       if (globalThis.process.platform === "win32") {
         // H3 fix: On Windows, kill() sends taskkill — no SIGTERM/SIGKILL distinction
-        this.childProcess.kill();
+        this._childProcess.kill();
       } else {
         // POSIX: SIGTERM first, force SIGKILL after 5s
-        this.childProcess.kill("SIGTERM");
+        this._childProcess.kill("SIGTERM");
         const forceTimer = setTimeout(() => {
-          if (!this.childProcess!.killed) {
-            this.childProcess!.kill("SIGKILL");
+          if (!this._childProcess!.killed) {
+            this._childProcess!.kill("SIGKILL");
           }
         }, 5000);
         forceTimer.unref();
-        this.childProcess.once("exit", () => clearTimeout(forceTimer));
+        this._childProcess.once("exit", () => clearTimeout(forceTimer));
       }
     }
 
@@ -306,6 +435,38 @@ export class ChromeConnection {
     if (this._tmpDir) {
       await rm(this._tmpDir, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  /** Register onClose callback on a CdpClient to trigger reconnect on unexpected disconnect */
+  private _setupOnClose(client: CdpClient): void {
+    client.onClose(() => {
+      if (this._closed) return; // deliberate shutdown — no reconnect
+      this.status = "disconnected";
+      // Fire-and-forget reconnect
+      this.reconnect().catch((err) => {
+        debug("Reconnect error: %s", err instanceof Error ? err.message : String(err));
+      });
+    });
+  }
+
+  /** Setup child process exit handler and global exit cleanup */
+  private _setupChildProcessHandlers(child: ChildProcess): void {
+    // Track status on child process exit + trigger reconnect
+    child.on("exit", () => {
+      if (this._closed) return; // deliberate shutdown
+      this.status = "disconnected";
+      debug("Chrome process exited, attempting relaunch...");
+      this.reconnect().catch((err) => {
+        debug("Reconnect after crash error: %s", err instanceof Error ? err.message : String(err));
+      });
+    });
+
+    // H4 fix: Only register 'exit' handler for sync cleanup
+    this._exitHandler = () => {
+      if (this._closed) return;
+      this._childProcess?.kill();
+    };
+    globalThis.process.on("exit", this._exitHandler);
   }
 }
 
@@ -354,6 +515,9 @@ export class ChromeLauncher {
       result.transportType,
       result.process,
       tmpDir,
+      this,
+      this._port,
+      this._headless,
     );
 
     debug("Connected via pipe");
@@ -387,6 +551,9 @@ export class ChromeLauncher {
       "websocket",
       undefined,
       undefined,
+      this,
+      port,
+      this._headless,
     );
   }
 }

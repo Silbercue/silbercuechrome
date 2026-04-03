@@ -484,7 +484,7 @@ describe("ChromeConnection", () => {
     expect(transport.close).toHaveBeenCalledTimes(1);
   });
 
-  it("sets status to disconnected when child process exits", async () => {
+  it("sets status to reconnecting when child process exits (auto-reconnect)", async () => {
     const transport = {
       send: vi.fn(() => true),
       onMessage: vi.fn(),
@@ -510,7 +510,8 @@ describe("ChromeConnection", () => {
 
     expect(conn.status).toBe("connected");
     mockChild.emit("exit", 0, null);
-    expect(conn.status).toBe("disconnected");
+    // Status transitions to "reconnecting" because auto-reconnect fires
+    expect(conn.status).toBe("reconnecting");
 
     await conn.close();
   });
@@ -552,7 +553,7 @@ describe("ChromeConnection", () => {
     );
   });
 
-  it("sets status to disconnected on unexpected transport close (H5)", async () => {
+  it("sets status to reconnecting on unexpected transport close (auto-reconnect)", async () => {
     // Capture the onClose callback that CdpClient registers
     let transportCloseCallback: (() => void) | undefined;
     const transport = {
@@ -581,6 +582,420 @@ describe("ChromeConnection", () => {
     // Simulate unexpected transport close
     transportCloseCallback!();
 
+    // Status transitions to "reconnecting" because auto-reconnect fires
+    expect(conn.status).toBe("reconnecting");
+
+    await conn.close();
+  });
+});
+
+// ── Reconnect tests (Story 5.2) ──────────────────────────────────────
+
+describe("ChromeConnection.reconnect", () => {
+  it("reconnect does not trigger when connection is deliberately closed", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+    );
+
+    await conn.close();
     expect(conn.status).toBe("disconnected");
+
+    const result = await conn.reconnect();
+    expect(result).toBe(false);
+    // Status stays disconnected — no reconnecting state
+    expect(conn.status).toBe("disconnected");
+  });
+
+  it("parallel reconnect attempts are prevented", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+    );
+
+    // Start first reconnect (will fail because no WS server, but triggers state)
+    const p1 = conn.reconnect();
+    // Second reconnect should immediately return false (already reconnecting)
+    const p2 = conn.reconnect();
+
+    const [result1, result2] = await Promise.all([p1, p2]);
+
+    // One attempt ran (and failed), the other was rejected
+    expect(result2).toBe(false);
+    // After failed reconnect, status should be disconnected
+    expect(conn.status).toBe("disconnected");
+
+    await conn.close();
+  });
+
+  it("status transitions: connected -> reconnecting -> disconnected (all retries failed)", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+      undefined,
+      19999, // non-existent port for fast failure
+    );
+
+    expect(conn.status).toBe("connected");
+
+    const result = await conn.reconnect();
+
+    expect(result).toBe(false);
+    expect(conn.status).toBe("disconnected");
+
+    await conn.close();
+  }, 15_000);
+
+  it("reconnect calls onReconnect callback on success", async () => {
+    // Start a real WS mock server for reconnect
+    const port = await new Promise<number>((resolve) => {
+      wsServer = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          const addr = wsServer!.address() as { port: number };
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/reconnect-uuid`,
+            }),
+          );
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+
+      wsServer.on("upgrade", (req, socket) => {
+        const key = req.headers["sec-websocket-key"] as string;
+        const accept = createHash("sha1")
+          .update(key + "258EAFA5-E914-47DA-95CA-5AB0DC85B411")
+          .digest("base64");
+
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            `Sec-WebSocket-Accept: ${accept}\r\n` +
+            "\r\n",
+        );
+
+        wsSockets.push(socket as Socket);
+
+        socket.on("data", (data: Buffer) => {
+          const cdpMsg = decodeWsFrame(data);
+          if (cdpMsg) {
+            try {
+              const parsed = JSON.parse(cdpMsg);
+              if (parsed.method === "Browser.getVersion") {
+                const response = JSON.stringify({
+                  id: parsed.id,
+                  result: { product: "Chrome/136.0" },
+                });
+                socket.write(encodeServerFrame(0x1, response));
+              }
+            } catch {
+              // ignore
+            }
+          }
+        });
+      });
+
+      wsServer.listen(0, "127.0.0.1", () => {
+        const addr = wsServer!.address() as { port: number };
+        resolve(addr.port);
+      });
+    });
+
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+      undefined,
+      port,
+    );
+
+    const onReconnectFn = vi.fn(async () => {});
+    conn.onReconnect(onReconnectFn);
+
+    const result = await conn.reconnect();
+
+    expect(result).toBe(true);
+    expect(conn.status).toBe("connected");
+    expect(onReconnectFn).toHaveBeenCalledTimes(1);
+    expect(onReconnectFn).toHaveBeenCalledWith(conn);
+
+    // Verify a new CdpClient was created (different from original)
+    expect(conn.cdpClient).not.toBe(cdpClient);
+
+    await conn.close();
+  });
+
+  it("pipe transport: child process exit triggers reconnect", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const mockChild = new EventEmitter() as ChildProcess;
+    mockChild.killed = false;
+    mockChild.kill = vi.fn(() => true);
+
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "pipe",
+      mockChild,
+      undefined,
+    );
+
+    expect(conn.status).toBe("connected");
+
+    // Simulate child process exit (Chrome crash)
+    mockChild.emit("exit", 1, null);
+
+    // Reconnect should be triggered
+    expect(conn.status).toBe("reconnecting");
+
+    await conn.close();
+  });
+
+  it("retries 3 times with 500ms pause between attempts before giving up", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+      undefined,
+      19999, // non-existent port for fast failure
+    );
+
+    const startTime = Date.now();
+    const result = await conn.reconnect();
+    const elapsed = Date.now() - startTime;
+
+    expect(result).toBe(false);
+    expect(conn.status).toBe("disconnected");
+    // 3 attempts with 500ms pause between attempt 1→2 and 2→3 = at least ~1000ms
+    // (first attempt has no pause)
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+
+    await conn.close();
+  }, 15_000);
+
+  it("close() during reconnect aborts the retry loop", async () => {
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+      undefined,
+      19999, // non-existent port for fast failure
+    );
+
+    // Start reconnect (will retry 3 times against non-existent port)
+    const reconnectPromise = conn.reconnect();
+
+    // Close after a short delay (during retry pause)
+    await new Promise((r) => setTimeout(r, 200));
+    await conn.close();
+
+    const result = await reconnectPromise;
+
+    expect(result).toBe(false);
+    expect(conn.status).toBe("disconnected");
+  }, 15_000);
+
+  it("onReconnect callback error leaves status as disconnected", async () => {
+    // Start a real WS mock server for reconnect
+    const port = await new Promise<number>((resolve) => {
+      wsServer = createServer((req, res) => {
+        if (req.url === "/json/version") {
+          const addr = wsServer!.address() as { port: number };
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/callback-err-uuid`,
+            }),
+          );
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+
+      wsServer.on("upgrade", (req, socket) => {
+        const key = req.headers["sec-websocket-key"] as string;
+        const accept = createHash("sha1")
+          .update(key + "258EAFA5-E914-47DA-95CA-5AB0DC85B411")
+          .digest("base64");
+
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            `Sec-WebSocket-Accept: ${accept}\r\n` +
+            "\r\n",
+        );
+
+        wsSockets.push(socket as Socket);
+
+        socket.on("data", (data: Buffer) => {
+          const cdpMsg = decodeWsFrame(data);
+          if (cdpMsg) {
+            try {
+              const parsed = JSON.parse(cdpMsg);
+              if (parsed.method === "Browser.getVersion") {
+                const response = JSON.stringify({
+                  id: parsed.id,
+                  result: { product: "Chrome/136.0" },
+                });
+                socket.write(encodeServerFrame(0x1, response));
+              }
+            } catch {
+              // ignore
+            }
+          }
+        });
+      });
+
+      wsServer.listen(0, "127.0.0.1", () => {
+        const addr = wsServer!.address() as { port: number };
+        resolve(addr.port);
+      });
+    });
+
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+      undefined,
+      port,
+    );
+
+    // Register a callback that throws
+    conn.onReconnect(async () => {
+      throw new Error("callback failed");
+    });
+
+    const result = await conn.reconnect();
+
+    // C1: callback error means reconnect fails, status stays disconnected
+    expect(result).toBe(false);
+    expect(conn.status).toBe("disconnected");
+
+    await conn.close();
+  });
+
+  it("websocket transport: socket close triggers reconnect", async () => {
+    let transportCloseCallback: (() => void) | undefined;
+    const transport = {
+      send: vi.fn(() => true),
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn((cb: () => void) => {
+        transportCloseCallback = cb;
+      }),
+      close: vi.fn(async () => {}),
+      connected: true,
+    };
+    const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+    const conn = new ChromeConnection(
+      cdpClient,
+      transport,
+      "websocket",
+      undefined,
+      undefined,
+    );
+
+    expect(conn.status).toBe("connected");
+
+    // Simulate transport close
+    transportCloseCallback!();
+
+    // Reconnect should be triggered (status = reconnecting)
+    expect(conn.status).toBe("reconnecting");
+
+    await conn.close();
   });
 });
