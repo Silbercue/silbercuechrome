@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
+import type { TabStateCache } from "./cache/tab-state-cache.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -14,12 +15,15 @@ import { clickSchema, clickHandler } from "./tools/click.js";
 import type { ClickParams } from "./tools/click.js";
 import { typeSchema, typeHandler } from "./tools/type.js";
 import type { TypeParams } from "./tools/type.js";
+import { tabStatusHandler } from "./tools/tab-status.js";
+import type { TabStatusParams } from "./tools/tab-status.js";
 
 export class ToolRegistry {
   constructor(
     private server: McpServer,
     private cdpClient: CdpClient,
     private sessionId: string,
+    private _tabStateCache: TabStateCache,
   ) {}
 
   registerAll(): void {
@@ -109,6 +113,20 @@ export class ToolRegistry {
       },
       async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId);
+      },
+    );
+
+    this.server.tool(
+      "tab_status",
+      "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
+      {},
+      async (params) => {
+        return tabStatusHandler(
+          params as unknown as TabStatusParams,
+          this.cdpClient,
+          this.sessionId,
+          this._tabStateCache,
+        );
       },
     );
   }

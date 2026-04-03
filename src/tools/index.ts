@@ -14,3 +14,5 @@ export { typeSchema, typeHandler } from "./type.js";
 export type { TypeParams } from "./type.js";
 export { resolveElement, buildRefNotFoundError } from "./element-utils.js";
 export type { ResolvedElement, ElementTarget } from "./element-utils.js";
+export { tabStatusSchema, tabStatusHandler } from "./tab-status.js";
+export type { TabStatusParams } from "./tab-status.js";

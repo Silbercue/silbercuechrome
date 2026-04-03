@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ChromeLauncher } from "./cdp/chrome-launcher.js";
 import { ToolRegistry } from "./registry.js";
+import { TabStateCache } from "./cache/tab-state-cache.js";
 
 interface TargetInfo {
   targetId: string;
@@ -37,22 +38,28 @@ export async function startServer(): Promise<void> {
   await cdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId);
   await cdpClient.send("Accessibility.enable", {}, sessionId);
 
-  // 4. Create MCP server and register tools
+  // 4. Create TabStateCache and attach to CDP events
+  const tabStateCache = new TabStateCache({ ttlMs: 30_000 });
+  tabStateCache.setActiveTarget(pageTarget.targetId);
+  tabStateCache.attachToClient(cdpClient, sessionId);
+
+  // 5. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
     version: "0.1.0",
   });
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache);
   registry.registerAll();
 
-  // 5. Start stdio transport
+  // 6. Start stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("SilbercueChrome MCP server running on stdio");
 
-  // 6. Graceful shutdown
+  // 7. Graceful shutdown
   const shutdown = async () => {
+    tabStateCache.detachFromClient();
     await server.close();
     await connection.close();
     process.exit(0);
