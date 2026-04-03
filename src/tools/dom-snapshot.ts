@@ -4,6 +4,7 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
+import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "./visual-constants.js";
 
 // --- Schema ---
 
@@ -49,11 +50,6 @@ interface CaptureSnapshotResponse {
 
 // --- Constants ---
 
-const COMPUTED_STYLES = [
-  "display", "visibility", "color", "background-color",
-  "font-size", "position", "z-index",
-] as const;
-
 const INTERACTIVE_TAGS = new Set([
   "A", "BUTTON", "INPUT", "SELECT", "TEXTAREA",
   "IMG", "H1", "H2", "H3", "H4", "H5", "H6", "LABEL",
@@ -64,13 +60,6 @@ const INTERACTIVE_ROLES = new Set([
   "radio", "switch", "slider", "option", "treeitem",
   "textbox", "searchbox", "combobox", "spinbutton",
   "menuitemcheckbox", "menuitemradio",
-]);
-
-const CLICKABLE_TAGS = new Set(["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA"]);
-
-const CLICKABLE_ROLES = new Set([
-  "button", "link", "checkbox", "radio", "tab", "menuitem",
-  "switch", "slider", "option", "treeitem",
 ]);
 
 const MAX_ELEMENTS = 150;

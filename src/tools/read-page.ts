@@ -8,10 +8,10 @@ export const readPageSchema = z.object({
   depth: z.number().optional().default(3).describe("Tree depth to return (default: 3)"),
   ref: z.string().optional().describe("Element ref (e.g. 'e5') to get subtree for"),
   filter: z
-    .enum(["interactive", "all", "landmark"])
+    .enum(["interactive", "all", "landmark", "visual"])
     .optional()
     .default("interactive")
-    .describe("Filter mode: interactive (default), all, or landmark"),
+    .describe("Filter mode: interactive (default), all, landmark, or visual (adds bounds/click/visibility)"),
 });
 
 export type ReadPageParams = z.infer<typeof readPageSchema>;
@@ -41,6 +41,7 @@ export async function readPageHandler(
         method,
         refCount: result.refCount,
         depth: result.depth,
+        ...(result.hasVisualData !== undefined ? { hasVisualData: result.hasVisualData } : {}),
       },
     };
   } catch (err) {

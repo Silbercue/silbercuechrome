@@ -1,6 +1,8 @@
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager, SessionInfo } from "../cdp/session-manager.js";
 import { wrapCdpError } from "../tools/error-utils.js";
+import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "../tools/visual-constants.js";
+import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
 
 // --- CDP A11y Types ---
 
@@ -33,13 +35,41 @@ export interface AXNode {
 export interface TreeOptions {
   depth?: number;
   ref?: string;
-  filter?: "interactive" | "all" | "landmark";
+  filter?: "interactive" | "all" | "landmark" | "visual";
 }
 
 export interface TreeResult {
   text: string;
   refCount: number;
   depth: number;
+  hasVisualData?: boolean;
+}
+
+// --- Visual Enrichment Types ---
+
+interface VisualInfo {
+  bounds: { x: number; y: number; w: number; h: number };
+  isClickable: boolean;
+  isVisible: boolean;
+}
+
+interface SnapshotDocument {
+  nodes: {
+    backendNodeId: number[];
+    nodeName: number[];
+  };
+  layout: {
+    nodeIndex: number[];
+    bounds: number[][];
+    styles: {
+      properties: number[][];
+    };
+  };
+}
+
+interface CaptureSnapshotResponse {
+  documents: SnapshotDocument[];
+  strings: string[];
 }
 
 // --- Constants ---
@@ -139,6 +169,114 @@ export class A11yTreeProcessor {
     return refNum !== undefined ? `e${refNum}` : undefined;
   }
 
+  private async fetchVisualData(
+    cdpClient: CdpClient,
+    sessionId: string,
+  ): Promise<Map<number, VisualInfo>> {
+    const snapshot = await cdpClient.send<CaptureSnapshotResponse>(
+      "DOMSnapshot.captureSnapshot",
+      {
+        computedStyles: [...COMPUTED_STYLES],
+        includeDOMRects: true,
+        includeBlendedBackgroundColors: true,
+        includePaintOrder: true,
+      },
+      sessionId,
+    );
+
+    const visualMap = new Map<number, VisualInfo>();
+
+    if (!snapshot.documents || snapshot.documents.length === 0) {
+      return visualMap;
+    }
+
+    const doc = snapshot.documents[0];
+    const strings = snapshot.strings;
+
+    // Build layout index map: nodeIndex → layoutIndex
+    const layoutMap = new Map<number, number>();
+    for (let li = 0; li < doc.layout.nodeIndex.length; li++) {
+      layoutMap.set(doc.layout.nodeIndex[li], li);
+    }
+
+    const totalNodes = doc.nodes.backendNodeId.length;
+
+    for (let ni = 0; ni < totalNodes; ni++) {
+      const backendNodeId = doc.nodes.backendNodeId[ni];
+
+      // Only process nodes that have a ref (i.e., are in the A11y tree)
+      if (!this.refMap.has(backendNodeId)) continue;
+
+      const li = layoutMap.get(ni);
+
+      // No layout → hidden element
+      if (li === undefined) {
+        visualMap.set(backendNodeId, {
+          bounds: { x: 0, y: 0, w: 0, h: 0 },
+          isClickable: this.computeIsClickable(ni, backendNodeId, doc, strings),
+          isVisible: false,
+        });
+        continue;
+      }
+
+      // Read bounds
+      const boundsArr = doc.layout.bounds[li];
+      if (!boundsArr || boundsArr.length < 4) continue;
+
+      const [x, y, w, h] = boundsArr;
+
+      // Read computed styles: display, visibility are at indices 0, 1
+      const styleProps = doc.layout.styles.properties[li] ?? [];
+      const displayVal = this.getSnapshotString(strings, styleProps[0]);
+      const visibilityVal = this.getSnapshotString(strings, styleProps[1]);
+
+      // isVisible calculation
+      const isVisible =
+        displayVal !== "none" &&
+        visibilityVal !== "hidden" &&
+        w >= 1 && h >= 1 &&
+        x + w > 0 && y + h > 0 &&
+        x < EMULATED_WIDTH && y < EMULATED_HEIGHT;
+
+      const isClickable = this.computeIsClickable(ni, backendNodeId, doc, strings);
+
+      visualMap.set(backendNodeId, {
+        bounds: {
+          x: Math.round(x),
+          y: Math.round(y),
+          w: Math.round(w),
+          h: Math.round(h),
+        },
+        isClickable,
+        isVisible,
+      });
+    }
+
+    return visualMap;
+  }
+
+  private computeIsClickable(
+    nodeIndex: number,
+    backendNodeId: number,
+    doc: SnapshotDocument,
+    strings: string[],
+  ): boolean {
+    // Tag from DOMSnapshot
+    const tag = this.getSnapshotString(strings, doc.nodes.nodeName[nodeIndex]);
+    if (CLICKABLE_TAGS.has(tag)) return true;
+
+    // Role from A11y tree nodeInfoMap
+    const nodeInfo = this.nodeInfoMap.get(backendNodeId);
+    if (nodeInfo && CLICKABLE_ROLES.has(nodeInfo.role)) return true;
+
+    return false;
+  }
+
+  private getSnapshotString(strings: string[], index: number): string {
+    if (index === undefined || index < 0 || index >= strings.length) return "";
+    return strings[index];
+  }
+
   findClosestRef(ref: string, roleFilter?: Set<string>): ClosestRefSuggestion | null {
     const match = ref.match(/^e(\d+)$/);
     if (!match || this.reverseMap.size === 0) return null;
@@ -205,7 +343,12 @@ export class A11yTreeProcessor {
     const nodes = result.nodes;
 
     if (!nodes || nodes.length === 0) {
-      return { text: this.formatHeader("", 0, filter, depth), refCount: 0, depth };
+      return {
+        text: this.formatHeader("", 0, filter, depth),
+        refCount: 0,
+        depth,
+        ...(filter === "visual" ? { hasVisualData: false } : {}),
+      };
     }
 
     // Build nodeId → AXNode map
@@ -290,6 +433,19 @@ export class A11yTreeProcessor {
       }
     }
 
+    // Fetch visual data only for "visual" filter — zero overhead for other filters
+    let visualMap: Map<number, VisualInfo> | undefined;
+    let visualDataFailed = false;
+    if (filter === "visual") {
+      try {
+        visualMap = await this.fetchVisualData(cdpClient, sessionId);
+      } catch {
+        // M1: DOMSnapshot may fail on certain pages — fall back to tree without visual data
+        visualMap = undefined;
+        visualDataFailed = true;
+      }
+    }
+
     // Handle subtree query
     if (options.ref) {
       // For subtree, search across all nodes (main + OOPIF)
@@ -302,7 +458,7 @@ export class A11yTreeProcessor {
       for (const node of allNodes) {
         combinedNodeMap.set(node.nodeId, node);
       }
-      return this.getSubtree(options.ref, combinedNodeMap, allNodes, filter, depth);
+      return this.getSubtree(options.ref, combinedNodeMap, allNodes, filter, depth, visualMap, visualDataFailed);
     }
 
     // Get page title from root node
@@ -311,7 +467,7 @@ export class A11yTreeProcessor {
     // Build tree text from root (main frame)
     const root = nodes[0];
     const lines: string[] = [];
-    this.renderNode(root, nodeMap, 0, filter, lines);
+    this.renderNode(root, nodeMap, 0, filter, lines, visualMap);
 
     // Append OOPIF sections
     for (const section of oopifSections) {
@@ -321,7 +477,7 @@ export class A11yTreeProcessor {
       }
       lines.push(`--- iframe: ${section.url} ---`);
       if (section.nodes.length > 0) {
-        this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines);
+        this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines, visualMap);
       }
     }
 
@@ -330,7 +486,12 @@ export class A11yTreeProcessor {
     const text = this.formatHeader(pageTitle, refCount, filter, depth)
       + (lines.length > 0 ? "\n\n" + lines.join("\n") : "");
 
-    return { text, refCount, depth };
+    return {
+      text,
+      refCount,
+      depth,
+      ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
+    };
   }
 
   private getSubtree(
@@ -339,6 +500,8 @@ export class A11yTreeProcessor {
     nodes: AXNode[],
     filter: string,
     depth: number,
+    visualMap?: Map<number, VisualInfo>,
+    visualDataFailed = false,
   ): TreeResult {
     const backendId = this.resolveRef(ref);
     if (backendId === undefined) {
@@ -357,12 +520,17 @@ export class A11yTreeProcessor {
     }
 
     const lines: string[] = [];
-    this.renderNode(targetNode, nodeMap, 0, filter, lines);
+    this.renderNode(targetNode, nodeMap, 0, filter, lines, visualMap);
 
     const refCount = lines.length;
     const text = `Subtree for ${ref} — ${refCount} elements\n\n` + lines.join("\n");
 
-    return { text, refCount, depth };
+    return {
+      text,
+      refCount,
+      depth,
+      ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
+    };
   }
 
   private renderNode(
@@ -371,10 +539,11 @@ export class A11yTreeProcessor {
     indentLevel: number,
     filter: string,
     lines: string[],
+    visualMap?: Map<number, VisualInfo>,
   ): void {
     if (node.ignored) {
       // Ignored nodes: skip but process children at same indent level
-      this.renderChildren(node, nodeMap, indentLevel, filter, lines);
+      this.renderChildren(node, nodeMap, indentLevel, filter, lines, visualMap);
       return;
     }
 
@@ -385,14 +554,27 @@ export class A11yTreeProcessor {
       const refNum = this.refMap.get(node.backendDOMNodeId);
       if (refNum !== undefined) {
         const indent = "  ".repeat(indentLevel);
-        const line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node);
+
+        // Append visual info if visualMap is provided
+        if (visualMap) {
+          const vi = visualMap.get(node.backendDOMNodeId);
+          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
+            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
+            if (vi.isClickable) line += " click";
+            if (vi.isVisible) line += " vis";
+          } else {
+            line += " [hidden]";
+          }
+        }
+
         lines.push(line);
       }
     }
 
     // Always render children (even if this node didn't pass filter)
     const nextIndent = passesFilter ? indentLevel + 1 : indentLevel;
-    this.renderChildren(node, nodeMap, nextIndent, filter, lines);
+    this.renderChildren(node, nodeMap, nextIndent, filter, lines, visualMap);
   }
 
   private renderChildren(
@@ -401,12 +583,13 @@ export class A11yTreeProcessor {
     indentLevel: number,
     filter: string,
     lines: string[],
+    visualMap?: Map<number, VisualInfo>,
   ): void {
     if (!node.childIds) return;
     for (const childId of node.childIds) {
       const child = nodeMap.get(childId);
       if (child) {
-        this.renderNode(child, nodeMap, indentLevel, filter, lines);
+        this.renderNode(child, nodeMap, indentLevel, filter, lines, visualMap);
       }
     }
   }
@@ -418,7 +601,7 @@ export class A11yTreeProcessor {
   private passesFilter(node: AXNode, role: string, filter: string): boolean {
     if (filter === "all") return true;
     if (filter === "landmark") return LANDMARK_ROLES.has(role);
-    // interactive filter
+    // interactive and visual filters use the same element selection
     if (INTERACTIVE_ROLES.has(role)) return true;
     // Check focusable property
     if (node.properties) {

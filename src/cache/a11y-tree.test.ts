@@ -1084,4 +1084,291 @@ describe("A11yTreeProcessor", () => {
     expect(result.text).toContain("--- iframe: https://accounts.google.com/login ---");
     expect(result.text).toContain('[e3] button "Sign In"');
   });
+
+  // --- Visual enrichment tests (Story 5b.3) ---
+
+  function makeDomSnapshot(elements: Array<{
+    backendNodeId: number;
+    nodeName: string;
+    bounds?: [number, number, number, number];
+    display?: string;
+    visibility?: string;
+  }>) {
+    const strings: string[] = [];
+    const strIndex = (s: string) => {
+      let idx = strings.indexOf(s);
+      if (idx === -1) { idx = strings.length; strings.push(s); }
+      return idx;
+    };
+
+    const backendNodeIds: number[] = [];
+    const nodeNames: number[] = [];
+    const layoutNodeIndex: number[] = [];
+    const layoutBounds: number[][] = [];
+    const layoutStyleProps: number[][] = [];
+
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      backendNodeIds.push(el.backendNodeId);
+      nodeNames.push(strIndex(el.nodeName));
+
+      if (el.bounds) {
+        layoutNodeIndex.push(i);
+        layoutBounds.push(el.bounds);
+        layoutStyleProps.push([
+          strIndex(el.display ?? "block"),
+          strIndex(el.visibility ?? "visible"),
+          strIndex("rgb(0,0,0)"),
+          strIndex("rgb(255,255,255)"),
+          strIndex("16px"),
+          strIndex("static"),
+          strIndex("auto"),
+        ]);
+      }
+    }
+
+    return {
+      documents: [{
+        nodes: { backendNodeId: backendNodeIds, nodeName: nodeNames },
+        layout: {
+          nodeIndex: layoutNodeIndex,
+          bounds: layoutBounds,
+          styles: { properties: layoutStyleProps },
+        },
+      }],
+      strings,
+    };
+  }
+
+  function mockCdpClientVisual(
+    nodes: AXNode[],
+    domSnapshot: ReturnType<typeof makeDomSnapshot>,
+    url = "https://example.com/visual",
+  ): CdpClient {
+    return {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: url } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes });
+        }
+        if (method === "DOMSnapshot.captureSnapshot") {
+          return Promise.resolve(domSnapshot);
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+  }
+
+  it("getTree with filter visual produces lines with bounds info", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Submit" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+    ]);
+    const cdp = mockCdpClientVisual(nodes, snapshot);
+    const result = await processor.getTree(cdp, "s1", { filter: "visual" });
+
+    expect(result.text).toContain("[120,340 80x32]");
+    expect(result.text).toContain("click");
+    expect(result.text).toContain("vis");
+    expect(result.hasVisualData).toBe(true);
+  });
+
+  it("getTree with filter interactive produces lines WITHOUT bounds info (regression)", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Submit" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const cdp = mockCdpClient(nodes, "https://example.com/noreg");
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+    expect(result.text).not.toContain("[120,340");
+    expect(result.text).not.toContain("[hidden]");
+    expect(result.hasVisualData).toBeUndefined();
+  });
+
+  it("fetchVisualData parses DOMSnapshot correctly (bounds, isClickable, isVisible)", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2", "3"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Click Me" },
+        backendDOMNodeId: 101,
+      }),
+      makeNode({
+        nodeId: "3",
+        parentId: "1",
+        role: { type: "role", value: "heading" },
+        name: { type: "computedString", value: "Title" },
+        backendDOMNodeId: 102,
+        properties: [{ name: "focusable", value: { type: "boolean", value: true } }],
+      }),
+    ];
+
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [50, 100, 200, 40] },
+      { backendNodeId: 102, nodeName: "H1", bounds: [10, 10, 500, 60] },
+    ]);
+    const cdp = mockCdpClientVisual(nodes, snapshot);
+    const result = await processor.getTree(cdp, "s1", { filter: "visual" });
+
+    // Button should be clickable (BUTTON tag)
+    const lines = result.text.split("\n");
+    const buttonLine = lines.find(l => l.includes("button"));
+    expect(buttonLine).toContain("[50,100 200x40]");
+    expect(buttonLine).toContain("click");
+    expect(buttonLine).toContain("vis");
+
+    // Heading should NOT be clickable (H1 is not in CLICKABLE_TAGS, heading not in CLICKABLE_ROLES)
+    const headingLine = lines.find(l => l.includes("heading"));
+    expect(headingLine).toContain("[10,10 500x60]");
+    expect(headingLine).not.toContain("click");
+    expect(headingLine).toContain("vis");
+  });
+
+  // H1: hasVisualData set to false when tree is empty but filter is visual
+  it("H1: empty tree with filter visual returns hasVisualData false", async () => {
+    const snapshot = makeDomSnapshot([]);
+    const cdp = mockCdpClientVisual([], snapshot, "https://example.com/empty-visual");
+    const result = await processor.getTree(cdp, "s1", { filter: "visual" });
+
+    expect(result.refCount).toBe(0);
+    expect(result.hasVisualData).toBe(false);
+  });
+
+  // H1: empty tree without visual filter has no hasVisualData
+  it("H1: empty tree with filter interactive has no hasVisualData", async () => {
+    const cdp = mockCdpClient([], "https://example.com/empty-interactive");
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+    expect(result.refCount).toBe(0);
+    expect(result.hasVisualData).toBeUndefined();
+  });
+
+  // H2: nodes without layout (w=0, h=0) show [hidden] instead of [0,0 0x0]
+  it("H2: nodes without layout show [hidden] instead of zero bounds", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2", "3"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Visible" },
+        backendDOMNodeId: 101,
+      }),
+      makeNode({
+        nodeId: "3",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "NoLayout" },
+        backendDOMNodeId: 102,
+      }),
+    ];
+    // backendNodeId 102 has no bounds (not in layout) → [hidden]
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [50, 50, 100, 30] },
+      { backendNodeId: 102, nodeName: "BUTTON" }, // no bounds → no layout
+    ]);
+    const cdp = mockCdpClientVisual(nodes, snapshot, "https://example.com/h2-no-layout");
+    const result = await processor.getTree(cdp, "s1", { filter: "visual" });
+
+    const lines = result.text.split("\n");
+    const visibleLine = lines.find(l => l.includes("Visible"));
+    const noLayoutLine = lines.find(l => l.includes("NoLayout"));
+
+    expect(visibleLine).toContain("[50,50 100x30]");
+    expect(noLayoutLine).toContain("[hidden]");
+    expect(noLayoutLine).not.toContain("[0,0 0x0]");
+  });
+
+  // M1: DOMSnapshot failure falls back to tree without visual data
+  it("M1: DOMSnapshot failure returns tree with hasVisualData false", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "OK" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/m1-fail" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes });
+        }
+        if (method === "DOMSnapshot.captureSnapshot") {
+          return Promise.reject(new Error("DOMSnapshot not supported"));
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const result = await processor.getTree(cdp, "s1", { filter: "visual" });
+
+    // Should NOT throw — returns tree without visual data
+    expect(result.refCount).toBeGreaterThan(0);
+    expect(result.hasVisualData).toBe(false);
+    // Button should be in output without visual annotations
+    expect(result.text).toContain("button");
+    expect(result.text).not.toContain("[hidden]");
+    expect(result.text).not.toContain("click");
+  });
 });

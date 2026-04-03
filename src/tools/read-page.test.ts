@@ -4,7 +4,60 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 import type { AXNode } from "../cache/a11y-tree.js";
 
-function mockCdpClient(nodes: AXNode[], url = "https://example.com"): CdpClient {
+function makeDomSnapshot(elements: Array<{
+  backendNodeId: number;
+  nodeName: string;
+  bounds?: [number, number, number, number];
+  display?: string;
+  visibility?: string;
+}>) {
+  const strings: string[] = [];
+  const strIndex = (s: string) => {
+    let idx = strings.indexOf(s);
+    if (idx === -1) { idx = strings.length; strings.push(s); }
+    return idx;
+  };
+
+  const backendNodeIds: number[] = [];
+  const nodeNames: number[] = [];
+  const layoutNodeIndex: number[] = [];
+  const layoutBounds: number[][] = [];
+  const layoutStyleProps: number[][] = [];
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    backendNodeIds.push(el.backendNodeId);
+    nodeNames.push(strIndex(el.nodeName));
+
+    if (el.bounds) {
+      layoutNodeIndex.push(i);
+      layoutBounds.push(el.bounds);
+      layoutStyleProps.push([
+        strIndex(el.display ?? "block"),
+        strIndex(el.visibility ?? "visible"),
+        strIndex("rgb(0,0,0)"),
+        strIndex("rgb(255,255,255)"),
+        strIndex("16px"),
+        strIndex("static"),
+        strIndex("auto"),
+      ]);
+    }
+  }
+
+  return {
+    documents: [{
+      nodes: { backendNodeId: backendNodeIds, nodeName: nodeNames },
+      layout: {
+        nodeIndex: layoutNodeIndex,
+        bounds: layoutBounds,
+        styles: { properties: layoutStyleProps },
+      },
+    }],
+    strings,
+  };
+}
+
+function mockCdpClient(nodes: AXNode[], url = "https://example.com", domSnapshot?: ReturnType<typeof makeDomSnapshot>): CdpClient {
   return {
     send: vi.fn().mockImplementation((method: string) => {
       if (method === "Runtime.evaluate") {
@@ -12,6 +65,9 @@ function mockCdpClient(nodes: AXNode[], url = "https://example.com"): CdpClient 
       }
       if (method === "Accessibility.getFullAXTree") {
         return Promise.resolve({ nodes });
+      }
+      if (method === "DOMSnapshot.captureSnapshot") {
+        return Promise.resolve(domSnapshot ?? { documents: [], strings: [] });
       }
       return Promise.resolve({});
     }),
@@ -79,6 +135,12 @@ describe("readPageSchema", () => {
     expect(readPageSchema.parse({ filter: "all" }).filter).toBe("all");
     expect(readPageSchema.parse({ filter: "landmark" }).filter).toBe("landmark");
     expect(() => readPageSchema.parse({ filter: "invalid" })).toThrow();
+  });
+
+  // Test: filter "visual" accepted
+  it("should accept filter visual", () => {
+    const parsed = readPageSchema.parse({ filter: "visual" });
+    expect(parsed.filter).toBe("visual");
   });
 });
 
@@ -180,5 +242,186 @@ describe("readPageHandler", () => {
     expect(result._meta!.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(result._meta!.refCount).toBeGreaterThanOrEqual(0);
     expect(result._meta!.depth).toBe(3);
+  });
+
+  // Test: filter visual calls DOMSnapshot.captureSnapshot
+  it("should call DOMSnapshot.captureSnapshot for filter visual", async () => {
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+      { backendNodeId: 102, nodeName: "A", bounds: [200, 400, 60, 20] },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com", snapshot);
+    await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    expect(cdp.send).toHaveBeenCalledWith(
+      "DOMSnapshot.captureSnapshot",
+      expect.objectContaining({ includeDOMRects: true }),
+      "s1",
+    );
+  });
+
+  // Test: filter interactive does NOT call DOMSnapshot.captureSnapshot
+  it("should NOT call DOMSnapshot.captureSnapshot for filter interactive", async () => {
+    const cdp = mockCdpClient(sampleNodes);
+    await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+    const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+    const snapshotCalls = calls.filter(
+      (c: string[]) => c[0] === "DOMSnapshot.captureSnapshot",
+    );
+    expect(snapshotCalls.length).toBe(0);
+  });
+
+  // Test: visual output contains bounds format [x,y wxh] click vis
+  it("should include [x,y wxh] click vis format in visual output", async () => {
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+      { backendNodeId: 102, nodeName: "A", bounds: [200, 400, 60, 20] },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com", snapshot);
+    const result = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    expect(result.content[0].text).toContain("[120,340 80x32]");
+    expect(result.content[0].text).toContain("click");
+    expect(result.content[0].text).toContain("vis");
+  });
+
+  // Test: isClickable correct for button (true) vs heading (false)
+  it("should mark button as clickable and heading as not clickable", async () => {
+    const nodesWithHeading: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        name: { type: "computedString", value: "Test" },
+        backendDOMNodeId: 100,
+        childIds: ["2", "3"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Submit" },
+        backendDOMNodeId: 101,
+      }),
+      makeNode({
+        nodeId: "3",
+        parentId: "1",
+        role: { type: "role", value: "heading" },
+        name: { type: "computedString", value: "Title" },
+        backendDOMNodeId: 102,
+        properties: [{ name: "focusable", value: { type: "boolean", value: true } }],
+      }),
+    ];
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+      { backendNodeId: 102, nodeName: "H1", bounds: [10, 10, 300, 40] },
+    ]);
+    const cdp = mockCdpClient(nodesWithHeading, "https://example.com", snapshot);
+    const result = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    const lines = result.content[0].text.split("\n");
+    const buttonLine = lines.find((l: string) => l.includes("button"));
+    const headingLine = lines.find((l: string) => l.includes("heading"));
+
+    expect(buttonLine).toContain("click");
+    expect(headingLine).not.toContain("click");
+  });
+
+  // Test: isVisible false for off-screen elements
+  it("should mark off-screen elements as not visible", async () => {
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [2000, 2000, 80, 32] },
+      { backendNodeId: 102, nodeName: "A", bounds: [200, 400, 60, 20] },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com", snapshot);
+    const result = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    const lines = result.content[0].text.split("\n");
+    const buttonLine = lines.find((l: string) => l.includes("button"));
+    const linkLine = lines.find((l: string) => l.includes("link"));
+
+    // Off-screen button should not have "vis"
+    expect(buttonLine).not.toContain("vis");
+    // On-screen link should have "vis"
+    expect(linkLine).toContain("vis");
+  });
+
+  // Test: ref + filter visual returns subtree with visual data
+  it("should return subtree with visual data for ref + visual filter", async () => {
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+      { backendNodeId: 102, nodeName: "A", bounds: [200, 400, 60, 20] },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com", snapshot);
+
+    // First call to assign refs
+    await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+    // Subtree for e2 (button) with visual
+    const result = await readPageHandler({ depth: 3, filter: "visual", ref: "e2" }, cdp, "s1");
+
+    expect(result.content[0].text).toContain("Subtree for e2");
+    expect(result.content[0].text).toContain("[120,340 80x32]");
+  });
+
+  // Test: _meta.hasVisualData is true for visual, undefined for interactive
+  it("should set _meta.hasVisualData only for visual filter", async () => {
+    const snapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+      { backendNodeId: 102, nodeName: "A", bounds: [200, 400, 60, 20] },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com", snapshot);
+
+    const visualResult = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+    expect(visualResult._meta!.hasVisualData).toBe(true);
+
+    // Reset and test interactive
+    a11yTree.reset();
+    const interactiveResult = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+    expect(interactiveResult._meta!.hasVisualData).toBeUndefined();
+  });
+
+  // M1: DOMSnapshot failure → hasVisualData false in _meta, no isError
+  it("M1: should return hasVisualData false when DOMSnapshot fails", async () => {
+    a11yTree.reset();
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/m1" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes: sampleNodes });
+        }
+        if (method === "DOMSnapshot.captureSnapshot") {
+          return Promise.reject(new Error("DOMSnapshot not supported"));
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const result = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result._meta!.hasVisualData).toBe(false);
+    expect(result.content[0].text).toContain("button");
+  });
+
+  // H1: empty tree with visual filter → hasVisualData false in _meta
+  it("H1: should return hasVisualData false for empty tree with visual filter", async () => {
+    a11yTree.reset();
+    const cdp = mockCdpClient([], "https://example.com/empty-h1");
+    const result = await readPageHandler({ depth: 3, filter: "visual" }, cdp, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result._meta!.hasVisualData).toBe(false);
+    expect(result._meta!.refCount).toBe(0);
   });
 });
