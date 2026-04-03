@@ -10,3 +10,5 @@ export interface ToolResponse {
 }
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
+
+export type TransportType = "pipe" | "websocket";
