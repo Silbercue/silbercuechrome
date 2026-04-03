@@ -4,9 +4,13 @@ export interface ToolMeta {
   method: string;
 }
 
+export type ToolContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export interface ToolResponse {
   [key: string]: unknown;
-  content: Array<{ type: "text"; text: string }>;
+  content: Array<ToolContentBlock>;
   isError?: boolean;
   _meta?: ToolMeta;
 }
