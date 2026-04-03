@@ -1,2 +1,16 @@
 export { evaluateSchema, evaluateHandler } from "./evaluate.js";
 export type { EvaluateParams } from "./evaluate.js";
+export { navigateSchema, navigateHandler } from "./navigate.js";
+export type { NavigateParams } from "./navigate.js";
+export { readPageSchema, readPageHandler } from "./read-page.js";
+export type { ReadPageParams } from "./read-page.js";
+export { screenshotSchema, screenshotHandler } from "./screenshot.js";
+export type { ScreenshotParams } from "./screenshot.js";
+export { waitForSchema, waitForHandler } from "./wait-for.js";
+export type { WaitForParams } from "./wait-for.js";
+export { clickSchema, clickHandler } from "./click.js";
+export type { ClickParams } from "./click.js";
+export { typeSchema, typeHandler } from "./type.js";
+export type { TypeParams } from "./type.js";
+export { resolveElement, buildRefNotFoundError } from "./element-utils.js";
+export type { ResolvedElement, ElementTarget } from "./element-utils.js";

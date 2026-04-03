@@ -34,6 +34,8 @@ export async function startServer(): Promise<void> {
   // 3. Activate CDP domains on the page session
   await cdpClient.send("Runtime.enable", {}, sessionId);
   await cdpClient.send("Page.enable", {}, sessionId);
+  await cdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId);
+  await cdpClient.send("Accessibility.enable", {}, sessionId);
 
   // 4. Create MCP server and register tools
   const server = new McpServer({

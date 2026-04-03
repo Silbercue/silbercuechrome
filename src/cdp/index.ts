@@ -9,3 +9,5 @@ export {
 } from "./chrome-launcher.js";
 export type { ChromeConnectionOptions, LaunchOptions } from "./chrome-launcher.js";
 export { debug } from "./debug.js";
+export { settle } from "./settle.js";
+export type { SettleOptions, SettleResult } from "./settle.js";
