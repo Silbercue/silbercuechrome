@@ -17,14 +17,28 @@ import { typeSchema, typeHandler } from "./tools/type.js";
 import type { TypeParams } from "./tools/type.js";
 import { tabStatusHandler } from "./tools/tab-status.js";
 import type { TabStatusParams } from "./tools/tab-status.js";
+import { switchTabSchema, switchTabHandler } from "./tools/switch-tab.js";
+import type { SwitchTabParams } from "./tools/switch-tab.js";
 
 export class ToolRegistry {
+  private _sessionId: string;
+
   constructor(
     private server: McpServer,
     private cdpClient: CdpClient,
-    private sessionId: string,
+    sessionId: string,
     private _tabStateCache: TabStateCache,
-  ) {}
+  ) {
+    this._sessionId = sessionId;
+  }
+
+  get sessionId(): string {
+    return this._sessionId;
+  }
+
+  updateSession(sessionId: string): void {
+    this._sessionId = sessionId;
+  }
 
   registerAll(): void {
     this.server.tool(
@@ -126,6 +140,27 @@ export class ToolRegistry {
           this.cdpClient,
           this.sessionId,
           this._tabStateCache,
+        );
+      },
+    );
+
+    this.server.tool(
+      "switch_tab",
+      "Open, switch to, or close browser tabs",
+      {
+        action: switchTabSchema.shape.action,
+        url: switchTabSchema.shape.url,
+        tab_id: switchTabSchema.shape.tab_id,
+      },
+      async (params) => {
+        return switchTabHandler(
+          params as unknown as SwitchTabParams,
+          this.cdpClient,
+          this.sessionId,
+          this._tabStateCache,
+          (newSessionId) => {
+            this.updateSession(newSessionId);
+          },
         );
       },
     );

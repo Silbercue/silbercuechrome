@@ -13,7 +13,7 @@ describe("ToolRegistry", () => {
     expect(typeof registry.registerAll).toBe("function");
   });
 
-  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, and tab_status tools via server.tool()", () => {
+  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, tab_status, and switch_tab tools via server.tool()", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
     const mockCdpClient = {} as never;
@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(8);
+    expect(toolFn).toHaveBeenCalledTimes(9);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -96,5 +96,23 @@ describe("ToolRegistry", () => {
       {},
       expect.any(Function),
     );
+    expect(toolFn).toHaveBeenCalledWith(
+      "switch_tab",
+      "Open, switch to, or close browser tabs",
+      expect.objectContaining({
+        action: expect.anything(),
+        url: expect.anything(),
+        tab_id: expect.anything(),
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("updateSession changes sessionId for subsequent tool calls", () => {
+    const registry = new ToolRegistry({} as never, {} as never, "session-1", {} as never);
+    expect(registry.sessionId).toBe("session-1");
+
+    registry.updateSession("session-2");
+    expect(registry.sessionId).toBe("session-2");
   });
 });

@@ -16,3 +16,5 @@ export { resolveElement, buildRefNotFoundError } from "./element-utils.js";
 export type { ResolvedElement, ElementTarget } from "./element-utils.js";
 export { tabStatusSchema, tabStatusHandler } from "./tab-status.js";
 export type { TabStatusParams } from "./tab-status.js";
+export { switchTabSchema, switchTabHandler } from "./switch-tab.js";
+export type { SwitchTabParams } from "./switch-tab.js";
