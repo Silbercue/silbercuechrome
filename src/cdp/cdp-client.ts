@@ -25,6 +25,7 @@ export class CdpClient {
   private readonly _onceListeners = new Map<string, Set<RegisteredListener>>();
   private readonly _timeoutMs: number;
   private _closed = false;
+  private _onCloseCallback: (() => void) | null = null;
 
   constructor(
     private readonly transport: CdpTransport,
@@ -39,7 +40,9 @@ export class CdpClient {
     });
 
     this.transport.onClose(() => {
+      this._closed = true;
       this._rejectAll(new Error("Transport closed unexpectedly"));
+      this._onCloseCallback?.();
     });
   }
 
@@ -108,6 +111,10 @@ export class CdpClient {
         }
       }
     }
+  }
+
+  onClose(callback: () => void): void {
+    this._onCloseCallback = callback;
   }
 
   async close(): Promise<void> {
