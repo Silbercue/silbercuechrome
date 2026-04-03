@@ -1,4 +1,6 @@
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager, SessionInfo } from "../cdp/session-manager.js";
+import { wrapCdpError } from "../tools/error-utils.js";
 
 // --- CDP A11y Types ---
 
@@ -84,6 +86,7 @@ export class A11yTreeProcessor {
   private refMap = new Map<number, number>(); // backendDOMNodeId → refNumber
   private reverseMap = new Map<number, number>(); // refNumber → backendDOMNodeId
   private nodeInfoMap = new Map<number, { role: string; name: string }>(); // backendDOMNodeId → { role, name }
+  private sessionNodeMap = new Map<string, Set<number>>(); // sessionId → Set<backendDOMNodeId>
   private nextRef = 1;
   private lastUrl = "";
 
@@ -91,8 +94,28 @@ export class A11yTreeProcessor {
     this.refMap.clear();
     this.reverseMap.clear();
     this.nodeInfoMap.clear();
+    this.sessionNodeMap.clear();
     this.nextRef = 1;
     this.lastUrl = "";
+  }
+
+  /**
+   * H1: Remove all node references for a detached OOPIF session.
+   * Called when an OOPIF frame navigates away or is destroyed.
+   */
+  removeNodesForSession(sessionId: string): void {
+    const nodeIds = this.sessionNodeMap.get(sessionId);
+    if (!nodeIds) return;
+
+    for (const backendNodeId of nodeIds) {
+      const refNum = this.refMap.get(backendNodeId);
+      if (refNum !== undefined) {
+        this.reverseMap.delete(refNum);
+      }
+      this.refMap.delete(backendNodeId);
+      this.nodeInfoMap.delete(backendNodeId);
+    }
+    this.sessionNodeMap.delete(sessionId);
   }
 
   resolveRef(ref: string): number | undefined {
@@ -143,6 +166,7 @@ export class A11yTreeProcessor {
     cdpClient: CdpClient,
     sessionId: string,
     options: TreeOptions = {},
+    sessionManager?: SessionManager,
   ): Promise<TreeResult> {
     const depth = options.depth ?? 3;
     const filter = options.filter ?? "interactive";
@@ -162,7 +186,7 @@ export class A11yTreeProcessor {
       this.lastUrl = currentUrl;
     }
 
-    // Fetch A11y tree from CDP
+    // Fetch A11y tree from CDP — main frame
     const result = await cdpClient.send<{ nodes: AXNode[] }>(
       "Accessibility.getFullAXTree",
       { depth },
@@ -180,7 +204,7 @@ export class A11yTreeProcessor {
       nodeMap.set(node.nodeId, node);
     }
 
-    // Assign refs to all non-ignored nodes with backendDOMNodeId
+    // Assign refs to all non-ignored nodes with backendDOMNodeId (main frame)
     for (const node of nodes) {
       if (node.ignored || node.backendDOMNodeId === undefined) continue;
       if (!this.refMap.has(node.backendDOMNodeId)) {
@@ -193,22 +217,106 @@ export class A11yTreeProcessor {
         role: (node.role?.value as string) ?? "",
         name: (node.name?.value as string) ?? "",
       });
+      // Track which session owns this node (H1: for cleanup on detach)
+      if (!this.sessionNodeMap.has(sessionId)) {
+        this.sessionNodeMap.set(sessionId, new Set());
+      }
+      this.sessionNodeMap.get(sessionId)!.add(node.backendDOMNodeId);
+      // Register node with SessionManager for main frame
+      sessionManager?.registerNode(node.backendDOMNodeId, sessionId);
+    }
+
+    // Fetch OOPIF A11y trees if SessionManager is available
+    const oopifSections: Array<{ url: string; nodes: AXNode[]; sessionId: string }> = [];
+    if (sessionManager) {
+      const sessions = sessionManager.getAllSessions();
+      const oopifSessions = sessions.filter((s: SessionInfo) => !s.isMain);
+
+      if (oopifSessions.length > 0) {
+        const oopifResults = await Promise.all(
+          oopifSessions.map(async (s: SessionInfo) => {
+            try {
+              const oopifResult = await cdpClient.send<{ nodes: AXNode[] }>(
+                "Accessibility.getFullAXTree",
+                { depth },
+                s.sessionId,
+              );
+              return { url: s.url, nodes: oopifResult.nodes ?? [], sessionId: s.sessionId };
+            } catch (err) {
+              // M1: OOPIF may have been detached between getAllSessions and fetch
+              wrapCdpError(err, "A11yTreeProcessor.getTree(OOPIF)");
+              return { url: s.url, nodes: [] as AXNode[], sessionId: s.sessionId };
+            }
+          }),
+        );
+
+        for (const oopifResult of oopifResults) {
+          if (oopifResult.nodes.length > 0) {
+            oopifSections.push(oopifResult);
+
+            // Assign refs and register nodes for OOPIF
+            for (const node of oopifResult.nodes) {
+              // Add to nodeMap with session-prefixed keys to avoid collisions
+              nodeMap.set(`${oopifResult.sessionId}:${node.nodeId}`, node);
+              if (node.ignored || node.backendDOMNodeId === undefined) continue;
+              if (!this.refMap.has(node.backendDOMNodeId)) {
+                const refNum = this.nextRef++;
+                this.refMap.set(node.backendDOMNodeId, refNum);
+                this.reverseMap.set(refNum, node.backendDOMNodeId);
+              }
+              this.nodeInfoMap.set(node.backendDOMNodeId, {
+                role: (node.role?.value as string) ?? "",
+                name: (node.name?.value as string) ?? "",
+              });
+              // Track which session owns this node (H1: for cleanup on detach)
+              if (!this.sessionNodeMap.has(oopifResult.sessionId)) {
+                this.sessionNodeMap.set(oopifResult.sessionId, new Set());
+              }
+              this.sessionNodeMap.get(oopifResult.sessionId)!.add(node.backendDOMNodeId);
+              sessionManager.registerNode(node.backendDOMNodeId, oopifResult.sessionId);
+            }
+          }
+        }
+      }
     }
 
     // Handle subtree query
     if (options.ref) {
-      return this.getSubtree(options.ref, nodeMap, nodes, filter, depth);
+      // For subtree, search across all nodes (main + OOPIF)
+      const allNodes = [...nodes];
+      for (const section of oopifSections) {
+        allNodes.push(...section.nodes);
+      }
+      // Build a combined nodeMap for subtree
+      const combinedNodeMap = new Map<string, AXNode>();
+      for (const node of allNodes) {
+        combinedNodeMap.set(node.nodeId, node);
+      }
+      return this.getSubtree(options.ref, combinedNodeMap, allNodes, filter, depth);
     }
 
     // Get page title from root node
     const pageTitle = this.getPageTitle(nodes);
 
-    // Build tree text from root
+    // Build tree text from root (main frame)
     const root = nodes[0];
     const lines: string[] = [];
     this.renderNode(root, nodeMap, 0, filter, lines);
 
-    const refCount = lines.length;
+    // Append OOPIF sections
+    for (const section of oopifSections) {
+      const oopifNodeMap = new Map<string, AXNode>();
+      for (const node of section.nodes) {
+        oopifNodeMap.set(node.nodeId, node);
+      }
+      lines.push(`--- iframe: ${section.url} ---`);
+      if (section.nodes.length > 0) {
+        this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines);
+      }
+    }
+
+    // H5: Count only actual element lines, not separator lines (--- iframe: ... ---)
+    const refCount = lines.filter((l) => !l.startsWith("--- ")).length;
     const text = this.formatHeader(pageTitle, refCount, filter, depth)
       + (lines.length > 0 ? "\n\n" + lines.join("\n") : "");
 

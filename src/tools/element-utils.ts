@@ -1,5 +1,7 @@
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import { a11yTree, RefNotFoundError } from "../cache/a11y-tree.js";
+import { wrapCdpError } from "./error-utils.js";
 
 // --- Public Types ---
 
@@ -9,6 +11,7 @@ export interface ResolvedElement {
   role: string;
   name: string;
   resolvedVia: "ref" | "css";
+  resolvedSessionId: string;
 }
 
 export interface ElementTarget {
@@ -22,11 +25,13 @@ export interface ElementTarget {
  * Resolve an element target (ref or CSS selector) to a ResolvedElement.
  * When both ref and selector are given, ref takes priority.
  * Throws RefNotFoundError when a ref cannot be resolved.
+ * When sessionManager is provided, routes to the correct OOPIF session.
  */
 export async function resolveElement(
   cdpClient: CdpClient,
   sessionId: string,
   target: ElementTarget,
+  sessionManager?: SessionManager,
 ): Promise<ResolvedElement> {
   // Ref path (preferred)
   if (target.ref) {
@@ -34,15 +39,23 @@ export async function resolveElement(
     if (backendNodeId === undefined) {
       throw new RefNotFoundError(`Element ${target.ref} not found.`);
     }
+    // Determine the correct session for this node (main or OOPIF)
+    const targetSessionId = sessionManager?.getSessionForNode(backendNodeId) ?? sessionId;
+
     // Get objectId via DOM.resolveNode — may fail for stale refs (node removed from DOM)
     let resolved: { object: { objectId: string } };
     try {
       resolved = await cdpClient.send<{ object: { objectId: string } }>(
         "DOM.resolveNode",
         { backendNodeId },
-        sessionId,
+        targetSessionId,
       );
-    } catch {
+    } catch (err) {
+      // M1: Distinguish CDP connection errors from stale refs
+      const wrapped = wrapCdpError(err, "resolveElement");
+      if (wrapped.startsWith("CDP connection lost")) {
+        throw new Error(wrapped);
+      }
       throw new RefNotFoundError(
         `Element ${target.ref} not found (stale ref — node no longer in DOM).`,
       );
@@ -55,10 +68,11 @@ export async function resolveElement(
       role: info?.role ?? "",
       name: info?.name ?? "",
       resolvedVia: "ref",
+      resolvedSessionId: targetSessionId,
     };
   }
 
-  // CSS path
+  // CSS path — always main frame (CSS selectors don't work cross-frame)
   const doc = await cdpClient.send<{ root: { nodeId: number } }>(
     "DOM.getDocument",
     { depth: 0 },
@@ -89,6 +103,7 @@ export async function resolveElement(
     role: "",    // role not reliably available via CSS path
     name: "",    // name not reliably available via CSS path
     resolvedVia: "css",
+    resolvedSessionId: sessionId,
   };
 }
 

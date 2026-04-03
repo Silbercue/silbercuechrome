@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
+import type { SessionManager } from "./cdp/session-manager.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
 import type { ToolResponse, ConnectionStatus } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
@@ -30,6 +31,7 @@ export class ToolRegistry {
   private _handlers = new Map<string, (params: Record<string, unknown>) => Promise<ToolResponse>>();
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
+  private _sessionManager: SessionManager | undefined;
 
   constructor(
     private server: McpServer,
@@ -37,9 +39,11 @@ export class ToolRegistry {
     sessionId: string,
     private _tabStateCache: TabStateCache,
     getConnectionStatus?: () => ConnectionStatus,
+    sessionManager?: SessionManager,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
+    this._sessionManager = sessionManager;
   }
 
   get sessionId(): string {
@@ -108,7 +112,7 @@ export class ToolRegistry {
         filter: readPageSchema.shape.filter,
       },
       async (params) => {
-        return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId);
+        return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
       },
     );
 
@@ -145,7 +149,7 @@ export class ToolRegistry {
         selector: clickSchema.shape.selector,
       },
       async (params) => {
-        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId);
+        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
       },
     );
 
@@ -159,7 +163,7 @@ export class ToolRegistry {
         clear: typeSchema.shape.clear,
       },
       async (params) => {
-        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId);
+        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
       },
     );
 
@@ -195,6 +199,7 @@ export class ToolRegistry {
           (newSessionId) => {
             this.updateSession(newSessionId);
           },
+          this._sessionManager,
         );
       },
     );
@@ -234,7 +239,7 @@ export class ToolRegistry {
       return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
     });
     this._handlers.set("read_page", async (params) => {
-      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId);
+      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
     this._handlers.set("screenshot", async (params) => {
       return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId);
@@ -243,10 +248,10 @@ export class ToolRegistry {
       return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
     });
     this._handlers.set("click", async (params) => {
-      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId);
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
     this._handlers.set("type", async (params) => {
-      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId);
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
     this._handlers.set("tab_status", async (params) => {
       return tabStatusHandler(
@@ -266,6 +271,7 @@ export class ToolRegistry {
         (newSessionId) => {
           this.updateSession(newSessionId);
         },
+        this._sessionManager,
       );
     });
     this._handlers.set("virtual_desk", async (params) => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { settle } from "../cdp/settle.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
@@ -76,6 +77,7 @@ export async function clickHandler(
   params: ClickParams,
   cdpClient: CdpClient,
   sessionId?: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
 
@@ -94,14 +96,14 @@ export async function clickHandler(
   }
 
   try {
-    // Resolve element via shared utility
+    // Resolve element via shared utility (with OOPIF routing)
     const target = params.ref ? { ref: params.ref } : { selector: params.selector };
-    const element = await resolveElement(cdpClient, sessionId!, target);
+    const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
 
-    // Dispatch click (Task 4)
-    await dispatchClick(cdpClient, sessionId!, element.backendNodeId);
+    // Dispatch click using the resolved session (may be OOPIF or main)
+    await dispatchClick(cdpClient, element.resolvedSessionId, element.backendNodeId);
 
-    // Auto-settle (Task 5)
+    // Auto-settle — always on main frame session (navigation is main-frame concern)
     const frameTree = await cdpClient.send<{ frameTree: { frame: { id: string } } }>(
       "Page.getFrameTree",
       {},

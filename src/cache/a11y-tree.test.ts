@@ -672,4 +672,416 @@ describe("A11yTreeProcessor", () => {
 
     expect(result.text).toContain('(disabled)');
   });
+
+  // --- OOPIF tests ---
+
+  it("getTree with multiple sessions merges A11y trees", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        name: { type: "computedString", value: "Main Page" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Main Button" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        name: { type: "computedString", value: "OAuth Frame" },
+        backendDOMNodeId: 200,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "textbox" },
+        name: { type: "computedString", value: "Email" },
+        backendDOMNodeId: 201,
+      }),
+    ];
+
+    // Mock CDP that returns different results per session
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") {
+            return Promise.resolve({ nodes: oopifNodes });
+          }
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    // Mock SessionManager
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "frame-1", url: "https://accounts.google.com", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" }, mockSessionManager);
+
+    // Main frame button + OOPIF textbox should both be present
+    expect(result.text).toContain('[e2] button "Main Button"');
+    expect(result.text).toContain('--- iframe: https://accounts.google.com ---');
+    expect(result.text).toContain('[e4] textbox "Email"');
+  });
+
+  it("OOPIF nodes get regular ref IDs in sequence", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2", "3"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Btn1" },
+        backendDOMNodeId: 101,
+      }),
+      makeNode({
+        nodeId: "3",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Btn2" },
+        backendDOMNodeId: 102,
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 300,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "textbox" },
+        name: { type: "computedString", value: "Input" },
+        backendDOMNodeId: 301,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/seq" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") return Promise.resolve({ nodes: oopifNodes });
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "f-1", url: "https://stripe.com", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" }, mockSessionManager);
+
+    // Main: e1=WebArea(100), e2=Btn1(101), e3=Btn2(102)
+    // OOPIF: e4=WebArea(300), e5=Input(301)
+    // Rendered interactive: e2, e3 (main), e5 (OOPIF)
+    expect(result.text).toContain("[e2] button");
+    expect(result.text).toContain("[e3] button");
+    expect(result.text).toContain("[e5] textbox");
+
+    // Ref IDs should be sequential, no gaps in rendered elements
+    expect(processor.resolveRef("e2")).toBe(101);
+    expect(processor.resolveRef("e3")).toBe(102);
+    expect(processor.resolveRef("e5")).toBe(301);
+  });
+
+  it("H5: refCount excludes separator lines", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Main Btn" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 200,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "OOPIF Btn" },
+        backendDOMNodeId: 201,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/h5" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") return Promise.resolve({ nodes: oopifNodes });
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "f-1", url: "https://oopif.example.com", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" }, mockSessionManager);
+
+    // Should have separator line but refCount should only count element lines
+    expect(result.text).toContain("--- iframe:");
+    // 2 interactive elements: main button + OOPIF button (not separator)
+    expect(result.refCount).toBe(2);
+  });
+
+  it("H1: removeNodesForSession cleans up refs for detached OOPIF", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Main" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 300,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "textbox" },
+        name: { type: "computedString", value: "Email" },
+        backendDOMNodeId: 301,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/h1" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") return Promise.resolve({ nodes: oopifNodes });
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "f-1", url: "https://accounts.google.com", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    // Build tree first
+    await processor.getTree(cdp, "s1", { filter: "interactive" }, mockSessionManager);
+
+    // OOPIF nodes should be resolvable
+    expect(processor.resolveRef("e4")).toBe(301); // OOPIF textbox
+
+    // Simulate OOPIF detach — remove nodes for that session
+    processor.removeNodesForSession("oopif-s1");
+
+    // OOPIF refs should now be undefined
+    expect(processor.resolveRef("e4")).toBeUndefined();
+    // Main frame refs should still work
+    expect(processor.resolveRef("e2")).toBe(101);
+  });
+
+  it("multi-session subtree query works across OOPIF nodes", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Main Btn" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 300,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "textbox" },
+        name: { type: "computedString", value: "Email" },
+        backendDOMNodeId: 301,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/subtree-oopif" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") return Promise.resolve({ nodes: oopifNodes });
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "f-1", url: "https://stripe.com", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    // Build tree
+    await processor.getTree(cdp, "s1", { filter: "all" }, mockSessionManager);
+
+    // Subtree query on OOPIF root (e3=WebArea(300))
+    const result = await processor.getTree(cdp, "s1", { ref: "e3", filter: "all" }, mockSessionManager);
+
+    expect(result.text).toContain("Subtree for e3");
+    expect(result.text).toContain("textbox");
+  });
+
+  it("OOPIF section shows iframe URL separator", async () => {
+    const mainNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: [],
+      }),
+    ];
+
+    const oopifNodes: AXNode[] = [
+      makeNode({
+        nodeId: "o1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 200,
+        childIds: ["o2"],
+      }),
+      makeNode({
+        nodeId: "o2",
+        parentId: "o1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Sign In" },
+        backendDOMNodeId: 201,
+      }),
+    ];
+
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, _params: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          return Promise.resolve({ result: { value: "https://example.com/sep" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (sessionId === "oopif-s1") return Promise.resolve({ nodes: oopifNodes });
+          return Promise.resolve({ nodes: mainNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const mockSessionManager = {
+      getAllSessions: () => [
+        { sessionId: "s1", frameId: "main", url: "", isMain: true },
+        { sessionId: "oopif-s1", frameId: "f-1", url: "https://accounts.google.com/login", isMain: false },
+      ],
+      registerNode: vi.fn(),
+    } as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await processor.getTree(cdp, "s1", { filter: "interactive" }, mockSessionManager);
+
+    expect(result.text).toContain("--- iframe: https://accounts.google.com/login ---");
+    expect(result.text).toContain('[e3] button "Sign In"');
+  });
 });

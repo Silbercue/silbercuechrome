@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { a11yTree, RefNotFoundError } from "../cache/a11y-tree.js";
 
@@ -19,6 +20,7 @@ export async function readPageHandler(
   params: ReadPageParams,
   cdpClient: CdpClient,
   sessionId?: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
   const method = "read_page";
@@ -28,7 +30,7 @@ export async function readPageHandler(
       depth: params.depth,
       ref: params.ref,
       filter: params.filter,
-    });
+    }, sessionManager);
 
     const elapsedMs = Math.round(performance.now() - start);
 

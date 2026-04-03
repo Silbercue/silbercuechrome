@@ -153,6 +153,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient, sendFn } = createMockCdp();
 
@@ -186,6 +187,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     // Box: TL(100,100) TR(200,100) BR(200,200) BL(100,200)
     // Center: x = (100+200)/2 = 150, y = (100+200)/2 = 150
@@ -224,6 +226,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp();
 
@@ -247,6 +250,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient, sendFn } = createMockCdp();
 
@@ -268,6 +272,7 @@ describe("clickHandler", () => {
       role: "",
       name: "",
       resolvedVia: "css",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp();
 
@@ -284,6 +289,7 @@ describe("clickHandler", () => {
       cdpClient,
       "s1",
       { selector: "#submit-btn" },
+      undefined,
     );
   });
 
@@ -353,6 +359,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     mockSettle.mockResolvedValue({ settled: true, signal: "networkIdle", elapsedMs: 100 });
     const { cdpClient } = createMockCdp();
@@ -370,6 +377,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     mockSettle.mockResolvedValue({ settled: false, signal: "timeout", elapsedMs: 5000 });
     const { cdpClient } = createMockCdp();
@@ -393,6 +401,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp();
 
@@ -404,6 +413,7 @@ describe("clickHandler", () => {
       cdpClient,
       "s1",
       { ref: "e5" },
+      undefined,
     );
   });
 
@@ -416,6 +426,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp({
       "DOM.getBoxModel": () => {
@@ -442,6 +453,7 @@ describe("clickHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp({
       "DOM.scrollIntoViewIfNeeded": () => {
@@ -457,6 +469,58 @@ describe("clickHandler", () => {
         type: "text",
         text: "click failed: Could not find node with given id",
       }),
+    );
+  });
+
+  // --- OOPIF tests ---
+
+  it("click resolves OOPIF element and uses correct session", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 300,
+      objectId: "obj-300",
+      role: "button",
+      name: "Sign In",
+      resolvedVia: "ref",
+      resolvedSessionId: "oopif-session-1",
+    });
+    const { cdpClient, sendFn } = createMockCdp();
+    const mockSessionManager = {} as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await clickHandler({ ref: "e42" }, cdpClient, "s1", mockSessionManager);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ text: "Clicked e42 (ref)" }),
+    );
+
+    // Verify CDP calls use OOPIF session for element interaction
+    expect(sendFn).toHaveBeenCalledWith(
+      "DOM.scrollIntoViewIfNeeded",
+      { backendNodeId: 300 },
+      "oopif-session-1",
+    );
+    expect(sendFn).toHaveBeenCalledWith(
+      "DOM.getBoxModel",
+      { backendNodeId: 300 },
+      "oopif-session-1",
+    );
+
+    // Mouse events use OOPIF session
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(2);
+    expect(mouseEvents[0][2]).toBe("oopif-session-1");
+
+    // Settle uses main session
+    expect(sendFn).toHaveBeenCalledWith("Page.getFrameTree", {}, "s1");
+
+    // resolveElement was called with sessionManager
+    expect(mockResolveElement).toHaveBeenCalledWith(
+      cdpClient,
+      "s1",
+      { ref: "e42" },
+      mockSessionManager,
     );
   });
 });

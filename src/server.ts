@@ -1,8 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ChromeLauncher } from "./cdp/chrome-launcher.js";
+import { SessionManager } from "./cdp/session-manager.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
+import { a11yTree } from "./cache/a11y-tree.js";
 
 interface TargetInfo {
   targetId: string;
@@ -43,13 +45,21 @@ export async function startServer(): Promise<void> {
   tabStateCache.setActiveTarget(pageTarget.targetId);
   tabStateCache.attachToClient(cdpClient, sessionId);
 
+  // 4b. Create SessionManager for OOPIF support
+  const sessionManager = new SessionManager(cdpClient, sessionId);
+  // H1: Wire up OOPIF detach callback to clean A11yTreeProcessor ref-maps
+  sessionManager.onOopifDetach((detachedSessionId) => {
+    a11yTree.removeNodesForSession(detachedSessionId);
+  });
+  await sessionManager.init();
+
   // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
     version: "0.1.0",
   });
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
@@ -82,6 +92,9 @@ export async function startServer(): Promise<void> {
 
     // 4. Re-wire ToolRegistry
     registry.updateClient(newCdpClient, newSessionId);
+
+    // 5. Re-initialize SessionManager for OOPIF support
+    await sessionManager.reinit(newCdpClient, newSessionId);
   });
 
   // 7. Start stdio transport
@@ -91,6 +104,7 @@ export async function startServer(): Promise<void> {
 
   // 8. Graceful shutdown
   const shutdown = async () => {
+    sessionManager.detach();
     tabStateCache.detachFromClient();
     await server.close();
     await connection.close();

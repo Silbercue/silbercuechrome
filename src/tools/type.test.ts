@@ -84,13 +84,14 @@ function createMockCdp(overrides: Record<string, unknown> = {}): MockCdpSetup {
 
 // --- Helper: default resolved element ---
 
-function mockTextbox(overrides: Partial<{ backendNodeId: number; objectId: string; role: string; name: string }> = {}) {
+function mockTextbox(overrides: Partial<{ backendNodeId: number; objectId: string; role: string; name: string; resolvedSessionId: string }> = {}) {
   return {
     backendNodeId: 42,
     objectId: "obj-42",
     role: "textbox",
     name: "Email",
     resolvedVia: "ref" as const,
+    resolvedSessionId: "s1",
     ...overrides,
   };
 }
@@ -182,6 +183,7 @@ describe("typeHandler", () => {
       cdpClient,
       "s1",
       { ref: "e12" },
+      undefined,
     );
   });
 
@@ -240,6 +242,7 @@ describe("typeHandler", () => {
       role: "button",
       name: "Submit",
       resolvedVia: "ref",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp();
 
@@ -263,6 +266,7 @@ describe("typeHandler", () => {
       role: "",
       name: "",
       resolvedVia: "css",
+      resolvedSessionId: "s1",
     });
     const { cdpClient, sendFn } = createMockCdp();
 
@@ -284,6 +288,7 @@ describe("typeHandler", () => {
       cdpClient,
       "s1",
       { selector: "input[name='email']" },
+      undefined,
     );
     expect(sendFn).toHaveBeenCalledWith("DOM.focus", { backendNodeId: 100 }, "s1");
     expect(sendFn).toHaveBeenCalledWith("Input.insertText", { text: "test" }, "s1");
@@ -318,6 +323,7 @@ describe("typeHandler", () => {
       role: "",
       name: "",
       resolvedVia: "css",
+      resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp();
 
@@ -509,5 +515,67 @@ describe("typeHandler", () => {
     const result = await typeHandler({ ref: "e12", text: "hello", clear: false }, cdpClient, "s1");
 
     expect(result._meta?.cleared).toBe(false);
+  });
+
+  // --- OOPIF tests ---
+
+  it("type resolves OOPIF element and uses correct session", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 300,
+      objectId: "obj-300",
+      role: "textbox",
+      name: "Email",
+      resolvedVia: "ref",
+      resolvedSessionId: "oopif-session-1",
+    });
+    const { cdpClient, sendFn } = createMockCdp();
+    const mockSessionManager = {} as unknown as import("../cdp/session-manager.js").SessionManager;
+
+    const result = await typeHandler(
+      { ref: "e42", text: "user@example.com", clear: true },
+      cdpClient,
+      "s1",
+      mockSessionManager,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Typed \"user@example.com\""),
+      }),
+    );
+
+    // Verify DOM.focus uses OOPIF session
+    expect(sendFn).toHaveBeenCalledWith(
+      "DOM.focus",
+      { backendNodeId: 300 },
+      "oopif-session-1",
+    );
+
+    // Verify Runtime.callFunctionOn (clear) uses OOPIF session
+    expect(sendFn).toHaveBeenCalledWith(
+      "Runtime.callFunctionOn",
+      expect.objectContaining({
+        objectId: "obj-300",
+        returnByValue: true,
+      }),
+      "oopif-session-1",
+    );
+
+    // Verify Input.insertText uses OOPIF session
+    expect(sendFn).toHaveBeenCalledWith(
+      "Input.insertText",
+      { text: "user@example.com" },
+      "oopif-session-1",
+    );
+
+    // resolveElement was called with sessionManager
+    expect(mockResolveElement).toHaveBeenCalledWith(
+      cdpClient,
+      "s1",
+      { ref: "e42" },
+      mockSessionManager,
+    );
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 
@@ -42,6 +43,7 @@ export async function typeHandler(
   params: TypeParams,
   cdpClient: CdpClient,
   sessionId?: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
 
@@ -75,9 +77,10 @@ export async function typeHandler(
   }
 
   try {
-    // Step 1: Resolve element (ref preferred over selector)
+    // Step 1: Resolve element (ref preferred over selector, with OOPIF routing)
     const target = params.ref ? { ref: params.ref } : { selector: params.selector };
-    const element = await resolveElement(cdpClient, sessionId!, target);
+    const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
+    const targetSession = element.resolvedSessionId;
 
     // Step 2: Role check — only for ref-resolved elements (CSS path skips check)
     if (element.resolvedVia === "ref" && element.role && !INPUT_ROLES.has(element.role)) {
@@ -94,12 +97,12 @@ export async function typeHandler(
       };
     }
 
-    // Step 3: Focus the element
+    // Step 3: Focus the element (use resolved session for OOPIF)
     try {
       await cdpClient.send(
         "DOM.focus",
         { backendNodeId: element.backendNodeId },
-        sessionId!,
+        targetSession,
       );
     } catch {
       const elapsedMs = Math.round(performance.now() - start);
@@ -115,7 +118,7 @@ export async function typeHandler(
       };
     }
 
-    // Step 4: Clear field if requested
+    // Step 4: Clear field if requested (use resolved session for OOPIF)
     if (params.clear) {
       await cdpClient.send(
         "Runtime.callFunctionOn",
@@ -125,13 +128,13 @@ export async function typeHandler(
             "function() { this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }",
           returnByValue: true,
         },
-        sessionId!,
+        targetSession,
       );
     }
 
-    // Step 5: Insert text (no auto-settle — AC #10)
+    // Step 5: Insert text (use resolved session for OOPIF — no auto-settle)
     if (params.text.length > 0) {
-      await cdpClient.send("Input.insertText", { text: params.text }, sessionId!);
+      await cdpClient.send("Input.insertText", { text: params.text }, targetSession);
     }
 
     // Step 6: Success response

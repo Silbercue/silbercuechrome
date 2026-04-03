@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import type { TabStateCache } from "../cache/tab-state-cache.js";
 import { settle } from "../cdp/settle.js";
@@ -92,6 +93,7 @@ export async function switchTabHandler(
   sessionId: string | undefined,
   tabStateCache: TabStateCache,
   onSessionChange: (newSessionId: string) => void,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
   const method = "switch_tab";
@@ -101,7 +103,7 @@ export async function switchTabHandler(
     try {
       switch (params.action) {
         case "open":
-          return await handleOpen(params, cdpClient, tabStateCache, onSessionChange, start, method);
+          return await handleOpen(params, cdpClient, tabStateCache, onSessionChange, start, method, sessionManager);
         case "switch":
           return await handleSwitch(
             params,
@@ -110,6 +112,7 @@ export async function switchTabHandler(
             onSessionChange,
             start,
             method,
+            sessionManager,
           );
         case "close":
           return await handleClose(
@@ -141,6 +144,7 @@ async function handleOpen(
   onSessionChange: (newSessionId: string) => void,
   start: number,
   method: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const url = params.url ?? "about:blank";
 
@@ -151,6 +155,11 @@ async function handleOpen(
 
   // Activate session on the new tab
   const newSessionId = await activateSession(cdpClient, targetId, tabStateCache, onSessionChange);
+
+  // C1: Re-initialize SessionManager for new tab's OOPIF auto-attach
+  if (sessionManager) {
+    await sessionManager.reinit(cdpClient, newSessionId);
+  }
 
   // If URL was specified (not about:blank), settle after navigation
   if (params.url) {
@@ -185,6 +194,7 @@ async function handleSwitch(
   onSessionChange: (newSessionId: string) => void,
   start: number,
   method: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   if (!params.tab_id) {
     return {
@@ -230,6 +240,11 @@ async function handleSwitch(
       }
     }
     throw attachErr;
+  }
+
+  // C1: Re-initialize SessionManager for new tab's OOPIF auto-attach
+  if (sessionManager) {
+    await sessionManager.reinit(cdpClient, newSessionId);
   }
 
   // Fetch state for response
