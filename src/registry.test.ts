@@ -13,7 +13,7 @@ describe("ToolRegistry", () => {
     expect(typeof registry.registerAll).toBe("function");
   });
 
-  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, tab_status, and switch_tab tools via server.tool()", () => {
+  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, tab_status, switch_tab, and virtual_desk tools via server.tool()", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
     const mockCdpClient = {} as never;
@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(9);
+    expect(toolFn).toHaveBeenCalledTimes(10);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -104,6 +104,12 @@ describe("ToolRegistry", () => {
         url: expect.anything(),
         tab_id: expect.anything(),
       }),
+      expect.any(Function),
+    );
+    expect(toolFn).toHaveBeenCalledWith(
+      "virtual_desk",
+      "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
+      {},
       expect.any(Function),
     );
   });

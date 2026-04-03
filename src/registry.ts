@@ -19,6 +19,8 @@ import { tabStatusHandler } from "./tools/tab-status.js";
 import type { TabStatusParams } from "./tools/tab-status.js";
 import { switchTabSchema, switchTabHandler } from "./tools/switch-tab.js";
 import type { SwitchTabParams } from "./tools/switch-tab.js";
+import { virtualDeskHandler } from "./tools/virtual-desk.js";
+import type { VirtualDeskParams } from "./tools/virtual-desk.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -161,6 +163,20 @@ export class ToolRegistry {
           (newSessionId) => {
             this.updateSession(newSessionId);
           },
+        );
+      },
+    );
+
+    this.server.tool(
+      "virtual_desk",
+      "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
+      {},
+      async (params) => {
+        return virtualDeskHandler(
+          params as unknown as VirtualDeskParams,
+          this.cdpClient,
+          this.sessionId,
+          this._tabStateCache,
         );
       },
     );
