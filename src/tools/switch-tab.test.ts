@@ -339,11 +339,9 @@ describe("switchTabHandler — action: switch", () => {
   });
 
   it("C1: rolls back to previous tab when attachToTarget fails after activateTarget", async () => {
-    let callCount = 0;
     const { cdpClient } = createMockCdp({
       ...defaultCdpResponses,
       "Target.attachToTarget": () => {
-        callCount++;
         throw new Error("attach failed");
       },
     });

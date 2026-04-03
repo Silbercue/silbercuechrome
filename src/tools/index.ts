@@ -20,3 +20,5 @@ export { switchTabSchema, switchTabHandler } from "./switch-tab.js";
 export type { SwitchTabParams } from "./switch-tab.js";
 export { virtualDeskSchema, virtualDeskHandler } from "./virtual-desk.js";
 export type { VirtualDeskParams } from "./virtual-desk.js";
+export { runPlanSchema, runPlanHandler } from "./run-plan.js";
+export type { RunPlanParams } from "./run-plan.js";
