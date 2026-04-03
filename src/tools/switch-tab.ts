@@ -212,8 +212,9 @@ async function handleSwitch(
   await cdpClient.send("Target.activateTarget", { targetId: params.tab_id });
 
   // C1: Activate CDP session — rollback on failure
+  let newSessionId: string;
   try {
-    var newSessionId = await activateSession(
+    newSessionId = await activateSession(
       cdpClient,
       params.tab_id,
       tabStateCache,

@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
+import type { ToolResponse } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -21,9 +22,12 @@ import { switchTabSchema, switchTabHandler } from "./tools/switch-tab.js";
 import type { SwitchTabParams } from "./tools/switch-tab.js";
 import { virtualDeskHandler } from "./tools/virtual-desk.js";
 import type { VirtualDeskParams } from "./tools/virtual-desk.js";
+import { runPlanSchema, runPlanHandler } from "./tools/run-plan.js";
+import type { RunPlanParams } from "./tools/run-plan.js";
 
 export class ToolRegistry {
   private _sessionId: string;
+  private _handlers = new Map<string, (params: Record<string, unknown>) => Promise<ToolResponse>>();
 
   constructor(
     private server: McpServer,
@@ -40,6 +44,18 @@ export class ToolRegistry {
 
   updateSession(sessionId: string): void {
     this._sessionId = sessionId;
+  }
+
+  async executeTool(name: string, params: Record<string, unknown>): Promise<ToolResponse> {
+    const handler = this._handlers.get(name);
+    if (!handler) {
+      return {
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true,
+        _meta: { elapsedMs: 0, method: name },
+      };
+    }
+    return handler(params);
   }
 
   registerAll(): void {
@@ -180,5 +196,67 @@ export class ToolRegistry {
         );
       },
     );
+
+    this.server.tool(
+      "run_plan",
+      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results.",
+      {
+        steps: runPlanSchema.shape.steps,
+      },
+      async (params) => {
+        return runPlanHandler(params as unknown as RunPlanParams, this);
+      },
+    );
+
+    // Register tool handlers for executeTool dispatch
+    // IMPORTANT: run_plan is NOT registered here to prevent recursive invocation
+    this._handlers.set("evaluate", async (params) => {
+      return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("navigate", async (params) => {
+      return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("read_page", async (params) => {
+      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("screenshot", async (params) => {
+      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("wait_for", async (params) => {
+      return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("click", async (params) => {
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("type", async (params) => {
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId);
+    });
+    this._handlers.set("tab_status", async (params) => {
+      return tabStatusHandler(
+        params as unknown as TabStatusParams,
+        this.cdpClient,
+        this.sessionId,
+        this._tabStateCache,
+      );
+    });
+    this._handlers.set("switch_tab", async (params) => {
+      return switchTabHandler(
+        params as unknown as SwitchTabParams,
+        this.cdpClient,
+        this.sessionId,
+        this._tabStateCache,
+        (newSessionId) => {
+          this.updateSession(newSessionId);
+        },
+      );
+    });
+    this._handlers.set("virtual_desk", async (params) => {
+      return virtualDeskHandler(
+        params as unknown as VirtualDeskParams,
+        this.cdpClient,
+        this.sessionId,
+        this._tabStateCache,
+      );
+    });
   }
 }

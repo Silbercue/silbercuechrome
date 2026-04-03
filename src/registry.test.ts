@@ -13,7 +13,7 @@ describe("ToolRegistry", () => {
     expect(typeof registry.registerAll).toBe("function");
   });
 
-  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, tab_status, switch_tab, and virtual_desk tools via server.tool()", () => {
+  it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, tab_status, switch_tab, virtual_desk, and run_plan tools via server.tool()", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
     const mockCdpClient = {} as never;
@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(10);
+    expect(toolFn).toHaveBeenCalledTimes(11);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -112,6 +112,12 @@ describe("ToolRegistry", () => {
       {},
       expect.any(Function),
     );
+    expect(toolFn).toHaveBeenCalledWith(
+      "run_plan",
+      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results.",
+      { steps: expect.anything() },
+      expect.any(Function),
+    );
   });
 
   it("updateSession changes sessionId for subsequent tool calls", () => {
@@ -120,5 +126,54 @@ describe("ToolRegistry", () => {
 
     registry.updateSession("session-2");
     expect(registry.sessionId).toBe("session-2");
+  });
+
+  it("executeTool dispatches to correct handler", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("evaluate", {
+      expression: "21*2",
+      await_promise: true,
+    });
+
+    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]).toHaveProperty("text", "42");
+  });
+
+  it("executeTool returns error for unknown tool", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("nonexistent", {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty("text", "Unknown tool: nonexistent");
+    expect(result._meta).toEqual({ elapsedMs: 0, method: "nonexistent" });
+  });
+
+  it("executeTool does not expose run_plan itself (no recursion)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("run_plan", { steps: [] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty("text", "Unknown tool: run_plan");
   });
 });
