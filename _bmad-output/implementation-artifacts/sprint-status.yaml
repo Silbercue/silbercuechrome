@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-03  # Story 5b-3 done — codex review fixes
+last_updated: 2026-04-03  # Story 5b-4 done
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -85,7 +85,7 @@ development_status:
   5b-1-retina-fix-screenshot-optimierung: done  # NFR25 + Emulation-Konstanten + Size-Guard + Div-by-Zero Guard
   5b-2-domsnapshot-tool: done
   5b-3-read-page-visual-enrichment: done
-  5b-4-set-of-mark-som: backlog
+  5b-4-set-of-mark-som: done
   5b-5-dom-downsampling-token-budget: backlog
   epic-5b-retrospective: optional
 
