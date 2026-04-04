@@ -4,6 +4,8 @@ import type { RunPlanParams, RunPlanDeps } from "./run-plan.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
 import type { OperatorPlanResult } from "../operator/types.js";
+import { PlanStateStore } from "../plan/plan-state-store.js";
+import type { SuspendedPlanResponse } from "../plan/plan-executor.js";
 
 // Mock the Operator module for use_operator tests
 vi.mock("../operator/operator.js", () => {
@@ -357,5 +359,272 @@ describe("runPlanHandler — use_operator:true (M1)", () => {
 
     // One step succeeded → isError should NOT be true
     expect(result.isError).toBeFalsy();
+  });
+});
+
+// ===== Story 6.5: Suspend/Resume in runPlanHandler =====
+
+function isSuspended(result: unknown): result is SuspendedPlanResponse {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "status" in result &&
+    (result as SuspendedPlanResponse).status === "suspended"
+  );
+}
+
+describe("runPlanHandler — Suspend/Resume (Story 6.5)", () => {
+  it("returns error when neither steps nor resume is provided", async () => {
+    const registry = createMockRegistry(new Map());
+    const params = {} as RunPlanParams;
+
+    const result = await runPlanHandler(params, registry, undefined, new PlanStateStore());
+
+    expect(result).toBeDefined();
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Entweder 'steps' oder 'resume' muss angegeben werden");
+  });
+
+  it("returns error when resume has unknown planId", async () => {
+    const registry = createMockRegistry(new Map());
+    const store = new PlanStateStore();
+    const params: RunPlanParams = {
+      resume: { planId: "nonexistent-id", answer: "yes" },
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, store);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Plan abgelaufen oder nicht gefunden");
+  });
+
+  it("returns error when resume called without stateStore", async () => {
+    const registry = createMockRegistry(new Map());
+    const params: RunPlanParams = {
+      resume: { planId: "some-id", answer: "yes" },
+    };
+
+    const result = await runPlanHandler(params, registry);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Resume nicht verfuegbar");
+  });
+
+  it("suspend returns SuspendedPlanResponse through runPlanHandler", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", {
+      content: [{ type: "text", text: "OK" }],
+      _meta: { elapsedMs: 10, method: "navigate" },
+    });
+
+    const registry = createMockRegistry(responses);
+    const store = new PlanStateStore();
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate", params: { url: "https://example.com" } },
+        { tool: "navigate", params: { url: "https://example.com/2" }, suspend: { question: "Continue?" } },
+      ],
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    expect(result.question).toBe("Continue?");
+    expect(result.completedSteps).toHaveLength(1);
+  });
+
+  it("resume continues and completes the plan", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", {
+      content: [{ type: "text", text: "Navigated" }],
+      _meta: { elapsedMs: 10, method: "navigate" },
+    });
+    responses.set("click", {
+      content: [{ type: "text", text: "Clicked" }],
+      _meta: { elapsedMs: 5, method: "click" },
+    });
+
+    const registry = createMockRegistry(responses);
+    const store = new PlanStateStore();
+
+    // First: suspend
+    const suspendParams: RunPlanParams = {
+      steps: [
+        { tool: "navigate", params: { url: "https://example.com" } },
+        { tool: "click", params: { ref: "e5" }, suspend: { question: "Which element?" } },
+        { tool: "navigate", params: { url: "https://example.com/done" } },
+      ],
+    };
+
+    const suspendResult = await runPlanHandler(suspendParams, registry, undefined, store);
+    expect(isSuspended(suspendResult)).toBe(true);
+    if (!isSuspended(suspendResult)) throw new Error("Expected suspended");
+
+    // Resume
+    const resumeParams: RunPlanParams = {
+      resume: { planId: suspendResult.planId, answer: "e15" },
+    };
+
+    const resumeResult = await runPlanHandler(resumeParams, registry, undefined, store);
+    expect(isSuspended(resumeResult)).toBe(false);
+    expect((resumeResult as ToolResponse).isError).toBeFalsy();
+  });
+
+  it("returns error when both steps and resume are provided", async () => {
+    const registry = createMockRegistry(new Map());
+    const store = new PlanStateStore();
+    const params: RunPlanParams = {
+      steps: [{ tool: "navigate", params: { url: "https://example.com" } }],
+      resume: { planId: "some-id", answer: "yes" },
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, store);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Entweder 'steps' oder 'resume' angeben, nicht beides");
+  });
+
+  it("resume with use_operator:true routes through the Operator", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", {
+      content: [{ type: "text", text: "OK" }],
+      _meta: { elapsedMs: 10, method: "navigate" },
+    });
+    responses.set("click", {
+      content: [{ type: "text", text: "Clicked" }],
+      _meta: { elapsedMs: 5, method: "click" },
+    });
+
+    const registry = createMockRegistry(responses);
+    const store = new PlanStateStore();
+
+    // First: suspend a plan (without operator)
+    const suspendParams: RunPlanParams = {
+      steps: [
+        { tool: "navigate", params: { url: "https://example.com" } },
+        { tool: "click", params: { ref: "e5" }, suspend: { question: "Which element?" } },
+        { tool: "navigate", params: { url: "https://example.com/done" } },
+      ],
+    };
+
+    const suspendResult = await runPlanHandler(suspendParams, registry, undefined, store);
+    expect(isSuspended(suspendResult)).toBe(true);
+    if (!isSuspended(suspendResult)) throw new Error("Expected suspended");
+
+    // Setup Operator mock to return a successful OperatorPlanResult
+    const mockOperatorExecutePlan = vi.fn().mockResolvedValue({
+      steps: [
+        {
+          step: 2,
+          tool: "click",
+          result: { content: [{ type: "text", text: "Clicked e15" }], _meta: { elapsedMs: 5, method: "click" } },
+          rulesApplied: [],
+          scrollAttempts: 0,
+          dialogsHandled: 0,
+          microLlmUsed: false,
+          microLlmCalled: false,
+        },
+        {
+          step: 3,
+          tool: "navigate",
+          result: { content: [{ type: "text", text: "OK" }], _meta: { elapsedMs: 10, method: "navigate" } },
+          rulesApplied: [],
+          scrollAttempts: 0,
+          dialogsHandled: 0,
+          microLlmUsed: false,
+          microLlmCalled: false,
+        },
+      ],
+      stepsTotal: 3,
+      stepsCompleted: 2,
+      totalRulesApplied: 0,
+      totalDialogsHandled: 0,
+      totalMicroLlmCalls: 0,
+      totalEscalations: 0,
+      escalations: [],
+      aborted: false,
+      elapsedMs: 50,
+    } as OperatorPlanResult);
+
+    const MockOperator = vi.mocked(Operator);
+    MockOperator.mockImplementation(() => ({
+      executePlan: mockOperatorExecutePlan,
+    }) as unknown as InstanceType<typeof Operator>);
+
+    // Resume with use_operator: true
+    const deps: RunPlanDeps = {
+      cdpClient: {} as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const resumeParams: RunPlanParams = {
+      resume: { planId: suspendResult.planId, answer: "e15" },
+      use_operator: true,
+    };
+
+    const resumeResult = await runPlanHandler(resumeParams, registry, deps, store);
+
+    // Verify the Operator was instantiated and executePlan was called
+    expect(MockOperator).toHaveBeenCalled();
+    expect(mockOperatorExecutePlan).toHaveBeenCalled();
+
+    // Verify it got the resume options with resumeState
+    const callArgs = mockOperatorExecutePlan.mock.calls[0];
+    expect(callArgs[1]).toHaveProperty("resumeState");
+    expect(callArgs[1].resumeState.answer).toBe("e15");
+  });
+});
+
+describe("runPlanSchema — Suspend/Resume (Story 6.5)", () => {
+  it("accepts steps as optional", () => {
+    const result = runPlanSchema.safeParse({
+      resume: { planId: "abc123", answer: "e15" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts suspend in step schema", () => {
+    const result = runPlanSchema.safeParse({
+      steps: [
+        {
+          tool: "click",
+          params: { ref: "e5" },
+          suspend: { question: "Which element?", context: "screenshot" },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts suspend with condition in step schema", () => {
+    const result = runPlanSchema.safeParse({
+      steps: [
+        {
+          tool: "evaluate",
+          params: { expression: "1" },
+          saveAs: "count",
+          suspend: { condition: "$count === 0" },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts resume schema", () => {
+    const result = runPlanSchema.safeParse({
+      resume: { planId: "test-id", answer: "yes" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects resume with missing answer", () => {
+    const result = runPlanSchema.safeParse({
+      resume: { planId: "test-id" },
+    });
+    expect(result.success).toBe(false);
   });
 });

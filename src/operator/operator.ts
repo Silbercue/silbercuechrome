@@ -2,10 +2,12 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
-import type { PlanStep, PlanOptions, ErrorStrategy } from "../plan/plan-executor.js";
+import type { PlanStep, PlanOptions, ErrorStrategy, SuspendedPlanResponse } from "../plan/plan-executor.js";
+import type { StepResult } from "../plan/plan-executor.js";
 import type { VarsMap } from "../plan/plan-variables.js";
 import { substituteVars, extractResultValue } from "../plan/plan-variables.js";
 import { evaluateCondition } from "../plan/plan-conditions.js";
+import type { PlanStateStore } from "../plan/plan-state-store.js";
 import type {
   OperatorPlanResult, OperatorStepResult, StepContext,
   MicroLlmProvider, MicroLlmAction, MicroLlmResponse, EscalationResult,
@@ -20,6 +22,7 @@ import { buildA11ySnippet } from "./micro-llm-prompt.js";
 const MAX_RETRIES_PER_STEP = 3;
 const SCROLL_SETTLE_MS = 200;
 const DEFAULT_MIN_CONFIDENCE = 0.6;
+const DEFAULT_SUSPEND_QUESTION = "Plan pausiert -- Bedingung erfuellt. Wie fortfahren?";
 
 /** Type guard: discriminates EscalationResult from MicroLlmResponse */
 function isEscalation(result: MicroLlmResponse | EscalationResult): result is EscalationResult {
@@ -63,25 +66,42 @@ export class Operator {
    * On step error: consult rule engine for recovery (scroll, dismiss, retry).
    * Max 3 retries per step via rule engine, then abort.
    */
-  async executePlan(steps: PlanStep[], options?: PlanOptions): Promise<OperatorPlanResult> {
+  async executePlan(
+    steps: PlanStep[],
+    options?: PlanOptions,
+    stateStore?: PlanStateStore,
+  ): Promise<OperatorPlanResult | SuspendedPlanResponse> {
     const start = performance.now();
-    const stepResults: OperatorStepResult[] = [];
+    let stepResults: OperatorStepResult[] = [];
+    let planStepResults: StepResult[] = [];
     const escalationRecords: EscalationRecord[] = [];
     let aborted = false;
     const vars: VarsMap = { ...(options?.vars ?? {}) };
     const errorStrategy: ErrorStrategy = options?.errorStrategy ?? "abort";
+    let startIndex = 0;
+    let isResumeFirstStep = false;
+
+    // --- Resume: restore state from previous suspend ---
+    if (options?.resumeState) {
+      const rs = options.resumeState;
+      Object.assign(vars, rs.vars);
+      vars["answer"] = rs.answer;
+      planStepResults = [...rs.completedResults];
+      startIndex = rs.suspendedAtIndex;
+      isResumeFirstStep = true;
+    }
 
     this._setupDialogHandler();
 
     try {
-      for (let i = 0; i < steps.length; i++) {
+      for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
 
         // --- Conditional: evaluate if clause ---
         if (step.if !== undefined && step.if !== "") {
           const conditionResult = evaluateCondition(step.if, vars);
           if (!conditionResult) {
-            stepResults.push({
+            const skipResult: OperatorStepResult = {
               step: i + 1,
               tool: step.tool,
               result: {
@@ -95,10 +115,66 @@ export class Operator {
               microLlmCalled: false,
               skipped: true,
               condition: step.if,
+            };
+            stepResults.push(skipResult);
+            planStepResults.push({
+              step: i + 1,
+              tool: step.tool,
+              result: skipResult.result,
+              skipped: true,
+              condition: step.if,
             });
             continue;
           }
         }
+
+        // --- Pre-Suspend (without condition): pause BEFORE step execution ---
+        // Skip pre-suspend on the first step of a resume (agent already answered)
+        if (step.suspend && !step.suspend.condition && !isResumeFirstStep) {
+          if (!stateStore) {
+            console.warn("[operator] suspend config on step but no stateStore provided — ignoring suspend");
+          } else {
+            const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
+            let screenshot: string | undefined;
+            if (step.suspend.context === "screenshot") {
+              try {
+                const ssResult = await this.registry.executeTool("screenshot", {});
+                if (!ssResult.isError) {
+                  for (const block of ssResult.content) {
+                    if (block.type === "image") {
+                      screenshot = (block as { type: "image"; data: string }).data;
+                      break;
+                    }
+                  }
+                }
+              } catch {
+                // Screenshot is best-effort
+              }
+            }
+            const planId = stateStore.suspend({
+              steps,
+              suspendedAtIndex: i,
+              vars: { ...vars },
+              errorStrategy,
+              completedResults: [...planStepResults],
+              question,
+            });
+            return {
+              status: "suspended",
+              planId,
+              question,
+              completedSteps: [...planStepResults],
+              screenshot,
+              _meta: {
+                elapsedMs: Math.round(performance.now() - start),
+                method: "run_plan",
+              },
+            } satisfies SuspendedPlanResponse;
+          }
+        }
+
+        // Reset resume-first-step flag after pre-suspend check
+        isResumeFirstStep = false;
 
         // --- Variable substitution ---
         const resolvedStep: PlanStep = step.params
@@ -111,6 +187,59 @@ export class Operator {
         // --- saveAs: store result as variable ---
         if (!operatorResult.result.isError && step.saveAs) {
           vars[step.saveAs] = extractResultValue(operatorResult.result);
+        }
+
+        planStepResults.push({
+          step: i + 1,
+          tool: step.tool,
+          result: operatorResult.result,
+        });
+
+        // --- Post-Suspend (with condition): pause AFTER step execution if condition is true ---
+        if (step.suspend?.condition && !operatorResult.result.isError) {
+          const suspendConditionResult = evaluateCondition(step.suspend.condition, vars);
+          if (suspendConditionResult) {
+            if (!stateStore) {
+              console.warn("[operator] suspend condition met but no stateStore provided — ignoring suspend");
+            } else {
+              const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
+              let screenshot: string | undefined;
+              if (step.suspend.context === "screenshot") {
+                try {
+                  const ssResult = await this.registry.executeTool("screenshot", {});
+                  if (!ssResult.isError) {
+                    for (const block of ssResult.content) {
+                      if (block.type === "image") {
+                        screenshot = (block as { type: "image"; data: string }).data;
+                        break;
+                      }
+                    }
+                  }
+                } catch {
+                  // Screenshot is best-effort
+                }
+              }
+              const planId = stateStore.suspend({
+                steps,
+                suspendedAtIndex: i + 1,
+                vars: { ...vars },
+                errorStrategy,
+                completedResults: [...planStepResults],
+                question,
+              });
+              return {
+                status: "suspended",
+                planId,
+                question,
+                completedSteps: [...planStepResults],
+                screenshot,
+                _meta: {
+                  elapsedMs: Math.round(performance.now() - start),
+                  method: "run_plan",
+                },
+              } satisfies SuspendedPlanResponse;
+            }
+          }
         }
 
         if (operatorResult.result.isError) {

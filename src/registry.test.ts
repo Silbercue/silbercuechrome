@@ -140,10 +140,11 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results. Set use_operator=true for adaptive error recovery.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), and suspend/resume for agent decisions mid-plan. Use resume: { planId, answer } to continue a suspended plan.",
       expect.objectContaining({
         steps: expect.anything(),
         use_operator: expect.anything(),
+        resume: expect.anything(),
       }),
       expect.any(Function),
     );

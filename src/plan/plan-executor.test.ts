@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { executePlan } from "./plan-executor.js";
-import type { PlanStep, PlanOptions } from "./plan-executor.js";
+import type { PlanStep, PlanOptions, SuspendedPlanResponse } from "./plan-executor.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
+import { PlanStateStore } from "./plan-state-store.js";
 
 function createMockRegistry(
   toolResponses: Map<string, ToolResponse>,
@@ -738,5 +739,397 @@ describe("executePlan — Combined Features (Story 6.4)", () => {
 
     // Third call should use "original" (not overwritten by skipped step)
     expect(callLog[1].params).toEqual({ url: "original" });
+  });
+});
+
+// ===== Story 6.5 Tests: Suspend/Resume =====
+
+function isSuspended(result: unknown): result is SuspendedPlanResponse {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "status" in result &&
+    (result as SuspendedPlanResponse).status === "suspended"
+  );
+}
+
+describe("executePlan — Pre-Suspend (Story 6.5)", () => {
+  it("suspends plan when step has suspend config without condition", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("click", okResponse("click", "Clicked"));
+    responses.set("type", okResponse("type", "Typed"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e5" }, suspend: { question: "Welches Element?" } },
+      { tool: "type", params: { ref: "e10", text: "hello" } },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    expect(result.status).toBe("suspended");
+    expect(result.question).toBe("Welches Element?");
+    expect(result.completedSteps).toHaveLength(1);
+    expect(result.completedSteps[0].tool).toBe("navigate");
+    expect(typeof result.planId).toBe("string");
+    // executeTool should only have been called once (navigate), NOT for click or type
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].name).toBe("navigate");
+  });
+
+  it("suspend with context: screenshot includes screenshot", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    const screenshotResponse: ToolResponse = {
+      content: [
+        { type: "text", text: "Screenshot taken" },
+        { type: "image", data: "base64screenshotdata", mimeType: "image/webp" },
+      ],
+      _meta: { elapsedMs: 20, method: "screenshot" },
+    };
+    responses.set("screenshot", screenshotResponse);
+
+    const registry = createCallLogRegistry(responses);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "navigate", params: { url: "https://example.com/2" }, suspend: { question: "Continue?", context: "screenshot" } },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    expect(result.screenshot).toBe("base64screenshotdata");
+  });
+
+  it("suspend without question uses default message", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+
+    const registry = createCallLogRegistry(responses);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" }, suspend: {} },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    expect(result.question).toBe("Plan pausiert -- Bedingung erfuellt. Wie fortfahren?");
+  });
+});
+
+describe("executePlan — Post-Suspend / Condition (Story 6.5)", () => {
+  it("suspends after step when suspend.condition evaluates to true", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("evaluate", okResponse("evaluate", "0"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      {
+        tool: "evaluate",
+        params: { expression: "document.querySelectorAll('.item').length" },
+        saveAs: "count",
+        suspend: { condition: "$count === 0" },
+      },
+      { tool: "navigate", params: { url: "https://example.com" } },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    // Step was executed
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].name).toBe("evaluate");
+    // Completed steps includes the executed step
+    expect(result.completedSteps).toHaveLength(1);
+    expect(result.completedSteps[0].tool).toBe("evaluate");
+    expect(result.question).toBe("Plan pausiert -- Bedingung erfuellt. Wie fortfahren?");
+  });
+
+  it("does not suspend when condition is false", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("evaluate", okResponse("evaluate", "5"));
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      {
+        tool: "evaluate",
+        params: { expression: "document.querySelectorAll('.item').length" },
+        saveAs: "count",
+        suspend: { condition: "$count === 0" },
+      },
+      { tool: "navigate", params: { url: "https://example.com" } },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    // Plan ran to completion, no suspend
+    expect(isSuspended(result)).toBe(false);
+    expect(callLog).toHaveLength(2);
+    expect(callLog[0].name).toBe("evaluate");
+    expect(callLog[1].name).toBe("navigate");
+  });
+});
+
+describe("executePlan — Resume (Story 6.5)", () => {
+  it("resume continues plan from suspended step", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("click", okResponse("click", "Clicked"));
+    responses.set("type", okResponse("type", "Typed"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e5" }, suspend: { question: "Which element?" } },
+      { tool: "type", params: { ref: "e10", text: "hello" } },
+    ];
+
+    // First: execute and get suspended
+    const suspendResult = await executePlan(steps, registry, undefined, store);
+    expect(isSuspended(suspendResult)).toBe(true);
+    if (!isSuspended(suspendResult)) throw new Error("Expected suspended");
+
+    callLog.length = 0; // reset call log
+
+    // Resume
+    const resumeOptions: PlanOptions = {
+      resumeState: {
+        suspendedAtIndex: 1,
+        completedResults: suspendResult.completedSteps,
+        vars: {},
+        answer: "e15",
+      },
+    };
+    const resumeResult = await executePlan(steps, registry, resumeOptions, store);
+
+    expect(isSuspended(resumeResult)).toBe(false);
+    // Should have executed click and type (steps 1 and 2)
+    expect(callLog).toHaveLength(2);
+    expect(callLog[0].name).toBe("click");
+    expect(callLog[1].name).toBe("type");
+  });
+
+  it("resume with answer injects $answer variable", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("click", okResponse("click", "Clicked"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "$answer" }, suspend: { question: "Which ref?" } },
+    ];
+
+    // Suspend
+    const suspendResult = await executePlan(steps, registry, undefined, store);
+    expect(isSuspended(suspendResult)).toBe(true);
+    if (!isSuspended(suspendResult)) throw new Error("Expected suspended");
+    callLog.length = 0;
+
+    // Resume with answer
+    const resumeOptions: PlanOptions = {
+      resumeState: {
+        suspendedAtIndex: 1,
+        completedResults: suspendResult.completedSteps,
+        vars: {},
+        answer: "e15",
+      },
+    };
+    const resumeResult = await executePlan(steps, registry, resumeOptions, store);
+
+    expect(isSuspended(resumeResult)).toBe(false);
+    // click should be called with ref: "e15" (from $answer)
+    expect(callLog[0].name).toBe("click");
+    expect(callLog[0].params).toEqual({ ref: "e15" });
+  });
+
+  it("resume with expired plan returns null from stateStore", () => {
+    const store = new PlanStateStore(0); // TTL=0 → immediately expired
+    const planId = store.suspend({
+      steps: [{ tool: "navigate", params: { url: "https://example.com" } }],
+      suspendedAtIndex: 0,
+      vars: {},
+      errorStrategy: "abort",
+      completedResults: [],
+      question: "Continue?",
+    });
+
+    const state = store.resume(planId);
+    expect(state).toBeNull();
+  });
+
+  it("resume preserves vars from before suspend", async () => {
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    let evalCount = 0;
+    const registry = {
+      executeTool: async (name: string, params: Record<string, unknown>) => {
+        callLog.push({ name, params });
+        if (name === "evaluate") {
+          evalCount++;
+          return {
+            content: [{ type: "text" as const, text: `eval-result-${evalCount}` }],
+            _meta: { elapsedMs: 1, method: name },
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: `${name} done` }],
+          _meta: { elapsedMs: 1, method: name },
+        };
+      },
+    } as unknown as ToolRegistry;
+
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "evaluate", params: { expression: "first" }, saveAs: "val1" },
+      { tool: "navigate", params: { url: "pause" }, suspend: { question: "Continue?" } },
+      { tool: "evaluate", params: { expression: "$val1" } },
+    ];
+
+    // Execute — step 0 runs, step 1 suspends (pre-suspend, before execution)
+    const suspendResult = await executePlan(steps, registry, undefined, store);
+    expect(isSuspended(suspendResult)).toBe(true);
+    if (!isSuspended(suspendResult)) throw new Error("Expected suspended");
+
+    // The store holds the vars including val1
+    const planId = suspendResult.planId;
+    // Get saved state directly from the store to check vars
+    // (We need to resume to get the state)
+
+    callLog.length = 0;
+
+    // Resume — the stored state should have val1 set from step 0
+    const storedState = store.resume(planId);
+    expect(storedState).not.toBeNull();
+    expect(storedState!.vars["val1"]).toBe("eval-result-1");
+
+    // Now actually execute resume (we already consumed the state, so re-suspend)
+    const planId2 = store.suspend({
+      steps,
+      suspendedAtIndex: storedState!.suspendedAtIndex,
+      vars: storedState!.vars,
+      errorStrategy: storedState!.errorStrategy,
+      completedResults: storedState!.completedResults,
+      question: storedState!.question,
+    });
+    const storedState2 = store.resume(planId2);
+
+    const resumeOptions: PlanOptions = {
+      resumeState: {
+        suspendedAtIndex: storedState2!.suspendedAtIndex,
+        completedResults: storedState2!.completedResults,
+        vars: storedState2!.vars,
+        answer: "some-answer",
+      },
+    };
+    await executePlan(steps, registry, resumeOptions, store);
+
+    // Step 1 (navigate) executes, then step 2 (evaluate with $val1) should use "eval-result-1"
+    expect(callLog[1].params).toEqual({ expression: "eval-result-1" });
+  });
+});
+
+describe("executePlan — Suspend Edge Cases (Story 6.5)", () => {
+  it("suspend without stateStore logs warning and continues", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("click", okResponse("click", "Clicked"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e5" }, suspend: { question: "Pause?" } },
+    ];
+
+    // No stateStore passed
+    const result = await executePlan(steps, registry);
+
+    // Plan should run through without suspending
+    expect(isSuspended(result)).toBe(false);
+    expect(callLog).toHaveLength(2);
+    expect(callLog[0].name).toBe("navigate");
+    expect(callLog[1].name).toBe("click");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("suspend config on step but no stateStore provided"),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("completedSteps in SuspendedPlanResponse contains only finished steps", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("evaluate", okResponse("evaluate", "42"));
+
+    const registry = createCallLogRegistry(responses);
+    const store = new PlanStateStore();
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "evaluate", params: { expression: "1+1" } },
+      { tool: "navigate", params: { url: "https://example.com/page2" }, suspend: { question: "OK?" } },
+      { tool: "navigate", params: { url: "https://example.com/page3" } },
+    ];
+
+    const result = await executePlan(steps, registry, undefined, store);
+
+    expect(isSuspended(result)).toBe(true);
+    if (!isSuspended(result)) throw new Error("Expected suspended");
+    // Steps 0 and 1 completed, step 2 suspended (pre-suspend)
+    expect(result.completedSteps).toHaveLength(2);
+    expect(result.completedSteps[0].tool).toBe("navigate");
+    expect(result.completedSteps[1].tool).toBe("evaluate");
+  });
+
+  it("post-suspend condition with stateStore warning logs and continues", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const callLog: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("evaluate", okResponse("evaluate", "0"));
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+
+    const registry = createCallLogRegistry(responses, callLog);
+    const steps: PlanStep[] = [
+      {
+        tool: "evaluate",
+        params: { expression: "0" },
+        saveAs: "count",
+        suspend: { condition: "$count === 0" },
+      },
+      { tool: "navigate", params: { url: "https://example.com" } },
+    ];
+
+    // No stateStore → condition met but no store
+    const result = await executePlan(steps, registry);
+
+    expect(isSuspended(result)).toBe(false);
+    expect(callLog).toHaveLength(2);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("suspend condition met but no stateStore provided"),
+    );
+
+    warnSpy.mockRestore();
   });
 });
