@@ -29,3 +29,5 @@ export { consoleLogsSchema, consoleLogsHandler } from "./console-logs.js";
 export type { ConsoleLogsParams } from "./console-logs.js";
 export { networkMonitorSchema, networkMonitorHandler } from "./network-monitor.js";
 export type { NetworkMonitorParams } from "./network-monitor.js";
+export { configureSessionSchema, configureSessionHandler } from "./configure-session.js";
+export type { ConfigureSessionParams } from "./configure-session.js";

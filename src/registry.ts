@@ -40,6 +40,9 @@ import type { ConsoleCollector } from "./cdp/console-collector.js";
 import { networkMonitorSchema, networkMonitorHandler } from "./tools/network-monitor.js";
 import type { NetworkMonitorParams } from "./tools/network-monitor.js";
 import type { NetworkCollector } from "./cdp/network-collector.js";
+import { configureSessionSchema, configureSessionHandler } from "./tools/configure-session.js";
+import type { ConfigureSessionParams } from "./tools/configure-session.js";
+import type { SessionDefaults } from "./cache/session-defaults.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -64,6 +67,7 @@ export class ToolRegistry {
   private _freeTierConfig: FreeTierConfig;
   private _consoleCollector: ConsoleCollector | undefined;
   private _networkCollector: NetworkCollector | undefined;
+  private _sessionDefaults: SessionDefaults | undefined;
 
   constructor(
     private server: McpServer,
@@ -77,6 +81,7 @@ export class ToolRegistry {
     freeTierConfig?: FreeTierConfig,
     consoleCollector?: ConsoleCollector,
     networkCollector?: NetworkCollector,
+    sessionDefaults?: SessionDefaults,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
@@ -86,6 +91,7 @@ export class ToolRegistry {
     this._freeTierConfig = freeTierConfig ?? loadFreeTierConfig();
     this._consoleCollector = consoleCollector;
     this._networkCollector = networkCollector;
+    this._sessionDefaults = sessionDefaults;
   }
 
   get sessionId(): string {
@@ -116,8 +122,26 @@ export class ToolRegistry {
         _meta: { elapsedMs: 0, method: name },
       };
     }
-    const result = await handler(params);
+    // Story 7.3: Track call and resolve session defaults for run_plan path
+    // Skip trackCall/resolveParams for meta-tools (H2 fix)
+    let resolvedParams = params;
+    let suggestionText: string | undefined;
+    if (this._sessionDefaults && name !== "configure_session") {
+      this._sessionDefaults.trackCall(name, params);
+      // H1 fix: Read suggestions immediately after trackCall (atomic with tracking)
+      const suggestions = this._sessionDefaults.getSuggestions();
+      if (suggestions.length > 0) {
+        const s = suggestions[0];
+        suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
+      }
+      resolvedParams = this._sessionDefaults.resolveParams(name, params);
+    }
+    const result = await handler(resolvedParams);
     this._injectDialogNotifications(result);
+    // Story 7.3: Inject auto-promote suggestion into _meta
+    if (suggestionText && result._meta) {
+      result._meta.suggestion = suggestionText;
+    }
     return result;
   }
 
@@ -232,7 +256,36 @@ export class ToolRegistry {
     // Story 6.1 (C1): All server.tool() callbacks are wrapped with dialog notification
     // injection so that pending dialogs reach the LLM regardless of call path
     // (direct MCP call vs executeTool/run_plan).
-    const wrap = <T>(fn: (params: T) => Promise<ToolResponse>) => this._wrapWithDialogInjection(fn);
+    // Story 7.3: Extended wrap to include session defaults tracking, resolution, and suggestion injection.
+    const sessionDefaults = this._sessionDefaults;
+    const wrap = <T>(fn: (params: T) => Promise<ToolResponse>, toolName?: string) => {
+      const dialogWrapped = this._wrapWithDialogInjection(fn);
+      if (!sessionDefaults) return dialogWrapped;
+      return async (params: T): Promise<ToolResponse> => {
+        const name = toolName ?? "unknown";
+        // H2 fix: Skip trackCall/resolveParams for meta-tools
+        if (name === "configure_session") {
+          return dialogWrapped(params);
+        }
+        // Track call for auto-promote analysis
+        sessionDefaults.trackCall(name, params as unknown as Record<string, unknown>);
+        // H1 fix: Read suggestions immediately after trackCall (atomic with tracking)
+        let suggestionText: string | undefined;
+        const suggestions = sessionDefaults.getSuggestions();
+        if (suggestions.length > 0) {
+          const s = suggestions[0];
+          suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
+        }
+        // Resolve defaults into params
+        const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
+        const result = await dialogWrapped(resolvedParams);
+        // Inject auto-promote suggestion into _meta
+        if (suggestionText && result._meta) {
+          result._meta.suggestion = suggestionText;
+        }
+        return result;
+      };
+    };
 
     this.server.tool(
       "evaluate",
@@ -243,7 +296,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
-      }),
+      }, "evaluate"),
     );
 
     this.server.tool(
@@ -256,7 +309,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
-      }),
+      }, "navigate"),
     );
 
     this.server.tool(
@@ -270,7 +323,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
-      }),
+      }, "read_page"),
     );
 
     this.server.tool(
@@ -282,7 +335,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-      }),
+      }, "screenshot"),
     );
 
     this.server.tool(
@@ -296,7 +349,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
-      }),
+      }, "wait_for"),
     );
 
     this.server.tool(
@@ -308,7 +361,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
-      }),
+      }, "click"),
     );
 
     this.server.tool(
@@ -322,7 +375,7 @@ export class ToolRegistry {
       },
       wrap(async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
-      }),
+      }, "type"),
     );
 
     this.server.tool(
@@ -337,7 +390,7 @@ export class ToolRegistry {
           this._tabStateCache,
           this.connectionStatus,
         );
-      }),
+      }, "tab_status"),
     );
 
     this.server.tool(
@@ -359,7 +412,7 @@ export class ToolRegistry {
           },
           this._sessionManager,
         );
-      }),
+      }, "switch_tab"),
     );
 
     this.server.tool(
@@ -374,7 +427,7 @@ export class ToolRegistry {
           this._tabStateCache,
           this.connectionStatus,
         );
-      }),
+      }, "virtual_desk"),
     );
 
     this.server.tool(
@@ -385,10 +438,11 @@ export class ToolRegistry {
       },
       wrap(this.wrapWithGate("dom_snapshot", async (params) => {
         return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-      }, finalHooks)),
+      }, finalHooks), "dom_snapshot"),
     );
 
     // Story 6.1: handle_dialog — configure dialog handling before triggering actions
+    // H3 fix: Route through wrap for default-resolution and suggestion-injection
     if (this._dialogHandler) {
       this.server.tool(
         "handle_dialog",
@@ -397,9 +451,9 @@ export class ToolRegistry {
           action: handleDialogSchema.shape.action,
           text: handleDialogSchema.shape.text,
         },
-        async (params) => {
+        wrap(async (params) => {
           return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
-        },
+        }, "handle_dialog"),
       );
     }
 
@@ -419,7 +473,7 @@ export class ToolRegistry {
           this.sessionId,
           this._sessionManager,
         );
-      }),
+      }, "file_upload"),
     );
 
     // Story 6.3: fill_form — fill complete forms with one call
@@ -437,7 +491,7 @@ export class ToolRegistry {
           this._sessionManager,
           humanTouch,
         );
-      }),
+      }, "fill_form"),
     );
 
     // Story 7.1: console_logs — retrieve and filter console output
@@ -452,7 +506,7 @@ export class ToolRegistry {
         },
         wrap(async (params) => {
           return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._consoleCollector!);
-        }),
+        }, "console_logs"),
       );
     }
 
@@ -468,7 +522,7 @@ export class ToolRegistry {
         },
         wrap(async (params) => {
           return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._networkCollector!);
-        }),
+        }, "network_monitor"),
       );
     }
 
@@ -520,8 +574,23 @@ export class ToolRegistry {
           return { content, _meta: suspended._meta };
         }
         return result as ToolResponse;
-      }),
+      }, "run_plan"),
     );
+
+    // Story 7.3: configure_session — set session defaults and auto-promote
+    if (this._sessionDefaults) {
+      this.server.tool(
+        "configure_session",
+        "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions.",
+        {
+          defaults: configureSessionSchema.shape.defaults,
+          autoPromote: configureSessionSchema.shape.autoPromote,
+        },
+        wrap(async (params) => {
+          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
+        }, "configure_session"),
+      );
+    }
 
     // Register tool handlers for executeTool dispatch
     // IMPORTANT: run_plan is NOT registered here to prevent recursive invocation
@@ -609,6 +678,11 @@ export class ToolRegistry {
     if (this._networkCollector) {
       this._handlers.set("network_monitor", async (params) => {
         return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._networkCollector!);
+      });
+    }
+    if (this._sessionDefaults) {
+      this._handlers.set("configure_session", async (params) => {
+        return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
       });
     }
   }

@@ -3,6 +3,7 @@ import { ToolRegistry } from "./registry.js";
 import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { registerProHooks } from "./hooks/pro-hooks.js";
+import { SessionDefaults } from "./cache/session-defaults.js";
 
 describe("ToolRegistry", () => {
   // Story 9.5: Reset Pro hooks between tests
@@ -700,5 +701,207 @@ describe("ToolRegistry", () => {
     const { getProHooks } = await import("./hooks/pro-hooks.js");
     const hooks = getProHooks();
     expect(hooks.featureGate).toBe(customGate);
+  });
+
+  // --- Story 7.3 M2: wrap-Pipeline Integration Tests with SessionDefaults ---
+
+  it("wrap pipeline resolves session defaults into tool params (MCP path)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Create a CdpClient mock that captures the expression it receives
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "string", value: "ok" },
+      }),
+    } as never;
+
+    const sessionDefaults = new SessionDefaults();
+    sessionDefaults.setDefault("await_promise", true);
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined, // getConnectionStatus
+      undefined, // sessionManager
+      undefined, // dialogHandler
+      undefined, // licenseStatus
+      undefined, // freeTierConfig
+      undefined, // consoleCollector
+      undefined, // networkCollector
+      sessionDefaults,
+    );
+    registry.registerAll();
+
+    // Find the evaluate callback registered via server.tool()
+    const evaluateCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "evaluate",
+    );
+    expect(evaluateCall).toBeDefined();
+
+    const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    // Call evaluate WITHOUT await_promise — the default should be injected
+    const result = await evaluateCallback({ expression: "1+1" });
+
+    expect(result).toBeDefined();
+    expect(result._meta).toBeDefined();
+    // The CdpClient.send should have received the resolved params including await_promise
+    const sendCalls = (mockCdpClient as { send: ReturnType<typeof vi.fn> }).send.mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(0);
+    // Runtime.evaluate should have awaitPromise: true (resolved from session default)
+    const evalCall = sendCalls.find((c: unknown[]) => c[0] === "Runtime.evaluate");
+    expect(evalCall).toBeDefined();
+    expect(evalCall![1].awaitPromise).toBe(true);
+  });
+
+  it("wrap pipeline injects suggestion into _meta after threshold calls (MCP path)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+
+    const sessionDefaults = new SessionDefaults({ promoteThreshold: 3 });
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionDefaults,
+    );
+    registry.registerAll();
+
+    // Find the evaluate callback
+    const evaluateCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "evaluate",
+    );
+    const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    // Call 3 times with the same await_promise value to trigger suggestion
+    await evaluateCallback({ expression: "1", await_promise: true });
+    await evaluateCallback({ expression: "2", await_promise: true });
+    const result = await evaluateCallback({ expression: "3", await_promise: true });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.suggestion).toBeDefined();
+    expect(result._meta!.suggestion).toContain("await_promise");
+    expect(result._meta!.suggestion).toContain("configure_session");
+  });
+
+  it("H2: configure_session does not run through trackCall (no pollution of call history)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const sessionDefaults = new SessionDefaults({ promoteThreshold: 3 });
+
+    const registry = new ToolRegistry(
+      mockServer,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionDefaults,
+    );
+    registry.registerAll();
+
+    // Build up 2 consecutive calls with same param
+    sessionDefaults.trackCall("click", { ref: "e5" });
+    sessionDefaults.trackCall("click", { ref: "e5" });
+
+    // Now call configure_session via executeTool — should NOT pollute call history
+    const configureCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "configure_session",
+    );
+    expect(configureCall).toBeDefined();
+    const configureCallback = configureCall![configureCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    await configureCallback({});
+
+    // Track one more click — if configure_session polluted history,
+    // consecutive count would be broken
+    sessionDefaults.trackCall("click", { ref: "e5" });
+
+    const suggestions = sessionDefaults.getSuggestions();
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].param).toBe("ref");
+    expect(suggestions[0].count).toBe(3);
+  });
+
+  it("H3: handle_dialog goes through wrap pipeline (gets defaults and suggestions)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const sessionDefaults = new SessionDefaults();
+
+    const mockDialogHandler = {
+      consumeNotifications: vi.fn().mockReturnValue([]),
+      pushHandler: vi.fn(),
+      popHandler: vi.fn(),
+      pendingCount: 0,
+      init: vi.fn(),
+      detach: vi.fn(),
+      reinit: vi.fn(),
+      getStatus: vi.fn().mockReturnValue({ mode: "auto", queue: [] }),
+    } as never;
+
+    const registry = new ToolRegistry(
+      mockServer,
+      {} as never,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      mockDialogHandler,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionDefaults,
+    );
+    registry.registerAll();
+
+    // Verify handle_dialog is registered (it should be now via wrap)
+    const handleDialogCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "handle_dialog",
+    );
+    expect(handleDialogCall).toBeDefined();
+
+    const handleDialogCallback = handleDialogCall![handleDialogCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    // Call handle_dialog — it should go through wrap and track the call
+    const result = await handleDialogCallback({ action: "get_status" });
+    expect(result).toBeDefined();
+    // The call should have been tracked in sessionDefaults
+    // (We can't directly inspect call history, but we can verify by calling
+    // getSuggestions — no suggestions expected after 1 call)
+    expect(sessionDefaults.getSuggestions()).toEqual([]);
   });
 });

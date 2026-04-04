@@ -8,6 +8,7 @@ import { NetworkCollector } from "./cdp/network-collector.js";
 import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
+import { SessionDefaults } from "./cache/session-defaults.js";
 import { a11yTree } from "./cache/a11y-tree.js";
 import { LicenseValidator } from "./license/license-validator.js";
 import { loadLicenseConfig } from "./license/license-validator.js";
@@ -82,6 +83,9 @@ export async function startServer(): Promise<void> {
   // NOT started here — on-demand via action: "start"
   const networkCollector = new NetworkCollector(cdpClient, sessionId);
 
+  // 4f. Create SessionDefaults for session parameter defaults (Story 7.3)
+  const sessionDefaults = new SessionDefaults();
+
   // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
@@ -98,7 +102,7 @@ export async function startServer(): Promise<void> {
   }
   const freeTierConfig = loadFreeTierConfig();
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
