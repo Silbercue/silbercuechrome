@@ -2054,4 +2054,42 @@ describe("A11yTreeProcessor", () => {
       expect(processor.hasPrecomputed("s1")).toBe(false);
     });
   });
+
+  // --- refCount (Story 7.5) ---
+
+  describe("refCount", () => {
+    it("refCount returns 0 for empty processor", () => {
+      expect(processor.refCount).toBe(0);
+    });
+
+    it("refCount returns correct count after getTree()", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2", "3"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "OK" },
+          backendDOMNodeId: 101,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "textbox" },
+          name: { type: "computedString", value: "Name" },
+          backendDOMNodeId: 102,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      // WebArea is typically counted as a ref too, plus the 2 interactive elements
+      expect(processor.refCount).toBeGreaterThanOrEqual(2);
+    });
+  });
 });

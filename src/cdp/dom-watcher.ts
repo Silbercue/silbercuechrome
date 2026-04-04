@@ -41,6 +41,7 @@ export class DomWatcher {
     this._onInvalidateCallback = callback;
   }
 
+
   /** Startet DOM-Beobachtung: DOM.enable + Event-Listener registrieren */
   async init(): Promise<void> {
     // DOM.enable ist idempotent — doppeltes Enable schadet nicht
@@ -105,6 +106,10 @@ export class DomWatcher {
 
   /** Debounce-Handler: Wird bei jeder DOM-Mutation aufgerufen */
   private _scheduleMutationRefresh(): void {
+    // H2 fix: Do NOT invalidate selector cache immediately on DOM mutations.
+    // The debounced refresh will compute a new fingerprint, and any stale
+    // cache entries will self-heal via fingerprint mismatch on next access.
+
     // Cancel existing timer
     if (this._debounceTimer) {
       clearTimeout(this._debounceTimer);

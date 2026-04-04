@@ -11,6 +11,7 @@ import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { a11yTree } from "./cache/a11y-tree.js";
+import { selectorCache } from "./cache/selector-cache.js";
 import { LicenseValidator } from "./license/license-validator.js";
 import { loadLicenseConfig } from "./license/license-validator.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
@@ -91,9 +92,20 @@ export async function startServer(): Promise<void> {
   const domWatcher = new DomWatcher(cdpClient, sessionId, { debounceMs: 500 });
   domWatcher.onRefresh(async () => {
     await a11yTree.refreshPrecomputed(cdpClient, sessionId, sessionManager);
+    // Update selector cache fingerprint after tree refresh (Story 7.5)
+    const urlResult = await cdpClient.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression: "document.URL", returnByValue: true },
+      sessionId,
+    );
+    const fp = selectorCache.computeFingerprint(urlResult.result.value, a11yTree.refCount);
+    selectorCache.updateFingerprint(fp);
   });
   domWatcher.onInvalidate(() => {
     a11yTree.invalidatePrecomputed();
+    // H2 fix: Invalidate selector cache on navigation (not on every DOM mutation).
+    // DOM mutations use fingerprint mismatch for self-healing instead.
+    selectorCache.invalidate();
   });
   await domWatcher.init();
 
@@ -164,11 +176,22 @@ export async function startServer(): Promise<void> {
     // H3: Rebind callbacks BEFORE reinit() to avoid race condition where
     // reinit()->init() fires events that invoke stale closures
     a11yTree.invalidatePrecomputed();
+    // 10. Invalidate SelectorCache on reconnect (Story 7.5)
+    selectorCache.invalidate();
     domWatcher.onRefresh(async () => {
       await a11yTree.refreshPrecomputed(newCdpClient, newSessionId, sessionManager);
+      // Update selector cache fingerprint after tree refresh (Story 7.5)
+      const urlResult = await newCdpClient.send<{ result: { value: string } }>(
+        "Runtime.evaluate",
+        { expression: "document.URL", returnByValue: true },
+        newSessionId,
+      );
+      const fp = selectorCache.computeFingerprint(urlResult.result.value, a11yTree.refCount);
+      selectorCache.updateFingerprint(fp);
     });
     domWatcher.onInvalidate(() => {
       a11yTree.invalidatePrecomputed();
+      selectorCache.invalidate();
     });
     await domWatcher.reinit(newCdpClient, newSessionId);
   });

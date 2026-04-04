@@ -341,4 +341,22 @@ describe("DomWatcher", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(refreshFn2).toHaveBeenCalledTimes(1);
   });
+
+  // --- H2 fix: DOM mutations do NOT immediately invalidate selector cache ---
+  // (Selector cache relies on fingerprint mismatch for self-healing after debounced refresh)
+
+  it("DOM mutation does NOT trigger onInvalidate (only navigation does)", async () => {
+    const invalidateFn = vi.fn();
+    watcher.onInvalidate(invalidateFn);
+    await watcher.init();
+
+    mock.fireEvent("DOM.childNodeInserted", {});
+
+    // onInvalidate should NOT be called for DOM mutations — only for navigation
+    expect(invalidateFn).not.toHaveBeenCalled();
+
+    // Even after debounce, onInvalidate should not fire (only onRefresh fires)
+    await vi.advanceTimersByTimeAsync(500);
+    expect(invalidateFn).not.toHaveBeenCalled();
+  });
 });

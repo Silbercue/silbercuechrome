@@ -1,7 +1,9 @@
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import { a11yTree, RefNotFoundError } from "../cache/a11y-tree.js";
+import { selectorCache } from "../cache/selector-cache.js";
 import { wrapCdpError } from "./error-utils.js";
+import { debug } from "../cdp/debug.js";
 
 // --- Public Types ---
 
@@ -35,6 +37,41 @@ export async function resolveElement(
 ): Promise<ResolvedElement> {
   // Ref path (preferred)
   if (target.ref) {
+    // --- Selector-Cache Check (Story 7.5) ---
+    const cached = selectorCache.get(target.ref);
+    if (cached) {
+      // M1 fix: Verify cached sessionId still matches current session
+      const currentSessionForNode = sessionManager?.getSessionForNode(cached.backendNodeId) ?? sessionId;
+      const sessionMatch = cached.sessionId === currentSessionForNode;
+      if (!sessionMatch) {
+        debug("SelectorCache: session mismatch for %s (cached=%s, current=%s), treating as miss", target.ref, cached.sessionId, currentSessionForNode);
+        // Fall through to normal resolution — session changed
+      } else {
+        try {
+          const resolved = await cdpClient.send<{ object: { objectId: string } }>(
+            "DOM.resolveNode",
+            { backendNodeId: cached.backendNodeId },
+            currentSessionForNode,
+          );
+          const info = a11yTree.getNodeInfo(cached.backendNodeId);
+          debug("SelectorCache: hit for %s (backendNodeId=%d)", target.ref, cached.backendNodeId);
+          return {
+            backendNodeId: cached.backendNodeId,
+            objectId: resolved.object.objectId,
+            role: info?.role ?? "",
+            name: info?.name ?? "",
+            resolvedVia: "ref",
+            resolvedSessionId: currentSessionForNode,
+          };
+        } catch {
+          // Stale cache entry — node no longer in DOM. Remove and fall through.
+          debug("SelectorCache: stale entry for %s, invalidating", target.ref);
+          selectorCache.invalidate();
+        }
+      }
+    }
+
+    // --- Normal Ref Resolution ---
     const backendNodeId = a11yTree.resolveRef(target.ref);
     if (backendNodeId === undefined) {
       throw new RefNotFoundError(`Element ${target.ref} not found.`);
@@ -62,6 +99,12 @@ export async function resolveElement(
     }
     // Get role/name directly from nodeInfoMap via backendNodeId
     const info = a11yTree.getNodeInfo(backendNodeId);
+
+    // Cache the resolved ref for future lookups (Story 7.5)
+    // H1 fix: Pass URL + nodeCount so set() can compute on-the-fly fingerprint
+    // when no fingerprint is active yet (first resolution after navigation)
+    selectorCache.set(target.ref, backendNodeId, targetSessionId, a11yTree.currentUrl, a11yTree.refCount);
+
     return {
       backendNodeId,
       objectId: resolved.object.objectId,

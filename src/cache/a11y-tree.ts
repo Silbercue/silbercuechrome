@@ -274,6 +274,16 @@ export class A11yTreeProcessor {
     return this.refMap.size > 0;
   }
 
+  /** Number of currently assigned refs (for DOM fingerprinting, Story 7.5) */
+  get refCount(): number {
+    return this.refMap.size;
+  }
+
+  /** Current page URL (for on-the-fly fingerprint computation, Story 7.5 H1 fix) */
+  get currentUrl(): string {
+    return this.lastUrl;
+  }
+
   getRefForBackendNodeId(backendNodeId: number): string | undefined {
     const refNum = this.refMap.get(backendNodeId);
     return refNum !== undefined ? `e${refNum}` : undefined;
