@@ -1,0 +1,232 @@
+{
+  "timestamp": "2026-04-04T03:50:24.616Z",
+  "passed": 37,
+  "failed": 0,
+  "results": [
+    {
+      "page": "01",
+      "test": "read_page",
+      "pass": true,
+      "ms": 5,
+      "detail": "9 refs"
+    },
+    {
+      "page": "01",
+      "test": "T1-find-shadow",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "01",
+      "test": "T1-click-shadow",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "01",
+      "test": "T1-a11y-shadow",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "01",
+      "test": "T3-closed-shadow",
+      "pass": true,
+      "ms": 1,
+      "detail": "closed shadow is inaccessible (expected)"
+    },
+    {
+      "page": "01",
+      "test": "T6-deep-shadow",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "02",
+      "test": "read_page",
+      "pass": true,
+      "ms": 3,
+      "detail": "10 visible"
+    },
+    {
+      "page": "02",
+      "test": "T1-virtual-scroll",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "02",
+      "test": "T2-infinite-scroll",
+      "pass": true,
+      "ms": 4031
+    },
+    {
+      "page": "03",
+      "test": "T1-tab-click",
+      "pass": true,
+      "ms": 15
+    },
+    {
+      "page": "03",
+      "test": "T1-toggle",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "03",
+      "test": "T2-debounce",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "03",
+      "test": "T4-autocomplete",
+      "pass": true,
+      "ms": 6
+    },
+    {
+      "page": "03",
+      "test": "T5-modal-chain",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "04",
+      "test": "T1-iframe-click",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "04",
+      "test": "T3-cross-frame",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "05",
+      "test": "T3-svg-click",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "05",
+      "test": "T4-svg-overlap",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "05",
+      "test": "screenshot",
+      "pass": true,
+      "ms": 36
+    },
+    {
+      "page": "07",
+      "test": "T1-cookie-banner",
+      "pass": true,
+      "ms": 12
+    },
+    {
+      "page": "07",
+      "test": "T3-dropdown",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "08",
+      "test": "T3-perf-readpage",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "08",
+      "test": "dom_snapshot-perf",
+      "pass": true,
+      "ms": 130
+    },
+    {
+      "page": "08",
+      "test": "screenshot-mega",
+      "pass": true,
+      "ms": 44
+    },
+    {
+      "page": "08",
+      "test": "T1-mega-table",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "10",
+      "test": "T1-ephemeral",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "10",
+      "test": "T4-wait-async",
+      "pass": true,
+      "ms": 1616
+    },
+    {
+      "page": "10",
+      "test": "T4-click-async",
+      "pass": true,
+      "ms": 5
+    },
+    {
+      "page": "11",
+      "test": "T1-css-transform",
+      "pass": true,
+      "ms": 6
+    },
+    {
+      "page": "11",
+      "test": "T2-clip-path",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "11",
+      "test": "T3-z-index",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "11",
+      "test": "T5-grid-reorder",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "12",
+      "test": "step1-validation",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "12",
+      "test": "step2-validation",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "12",
+      "test": "form-submitted",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "13",
+      "test": "T2-responsive-card",
+      "pass": true,
+      "ms": 7
+    },
+    {
+      "page": "13",
+      "test": "T3-scroll-reveal",
+      "pass": true,
+      "ms": 4
+    }
+  ]
+}

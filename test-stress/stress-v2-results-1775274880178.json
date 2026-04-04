@@ -1,0 +1,234 @@
+{
+  "timestamp": "2026-04-04T03:54:40.178Z",
+  "mode": "hardcore",
+  "passed": 35,
+  "failed": 1,
+  "passRate": "97.2%",
+  "results": [
+    {
+      "page": "01",
+      "test": "read_page-refs",
+      "pass": true,
+      "ms": 7,
+      "detail": "48 refs"
+    },
+    {
+      "page": "01",
+      "test": "T1-click-ref",
+      "pass": true,
+      "ms": 13
+    },
+    {
+      "page": "01",
+      "test": "T6-deep-ref",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "01",
+      "test": "T3-closed-a11y",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "01",
+      "test": "T4-slotted-ref",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "01",
+      "test": "T5-shadow-form",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "03",
+      "test": "T1-tab-toggle-ref",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "03",
+      "test": "T2-debounce-ref",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "03",
+      "test": "T5-modal-ref",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "05",
+      "test": "T3-svg-ref",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "05",
+      "test": "som-screenshot",
+      "pass": true,
+      "ms": 47
+    },
+    {
+      "page": "05",
+      "test": "dom_snapshot",
+      "pass": true,
+      "ms": 2,
+      "detail": "3 elements"
+    },
+    {
+      "page": "06",
+      "test": "read_page",
+      "pass": true,
+      "ms": 2,
+      "detail": "50 refs"
+    },
+    {
+      "page": "06",
+      "test": "T3-slider",
+      "pass": true,
+      "ms": 1,
+      "detail": "value=75"
+    },
+    {
+      "page": "06",
+      "test": "T1-drag-drop",
+      "pass": false,
+      "ms": 0,
+      "detail": "MCP cannot dispatch drag events"
+    },
+    {
+      "page": "08",
+      "test": "read_page-d2",
+      "pass": true,
+      "ms": 1,
+      "detail": "1 refs"
+    },
+    {
+      "page": "08",
+      "test": "read_page-d4",
+      "pass": true,
+      "ms": 17,
+      "detail": "1 refs"
+    },
+    {
+      "page": "08",
+      "test": "read_page-d6",
+      "pass": true,
+      "ms": 382,
+      "detail": "1001 refs"
+    },
+    {
+      "page": "08",
+      "test": "dom_snapshot-mega",
+      "pass": true,
+      "ms": 121
+    },
+    {
+      "page": "08",
+      "test": "som-mega",
+      "pass": true,
+      "ms": 174
+    },
+    {
+      "page": "08",
+      "test": "fullpage-mega",
+      "pass": true,
+      "ms": 96
+    },
+    {
+      "page": "08",
+      "test": "read_page-budget",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "09",
+      "test": "T2-form-refs",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "09",
+      "test": "T3-focus-trap",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "11",
+      "test": "T1-transform-ref",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "11",
+      "test": "T4-invisible-a11y",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "11",
+      "test": "T4-invisible-click",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "11",
+      "test": "T5-grid-ref",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "11",
+      "test": "ds-transform-bounds",
+      "pass": true,
+      "ms": 2,
+      "detail": "x=261"
+    },
+    {
+      "page": "12",
+      "test": "form-gauntlet-refs",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "PLAN",
+      "test": "multi-step-plan",
+      "pass": true,
+      "ms": 1223
+    },
+    {
+      "page": "PLAN",
+      "test": "abort-on-error",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "TABS",
+      "test": "open-tab",
+      "pass": true,
+      "ms": 1062
+    },
+    {
+      "page": "TABS",
+      "test": "tab_status",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "TABS",
+      "test": "virtual_desk",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "TABS",
+      "test": "close-tab",
+      "pass": true,
+      "ms": 13
+    }
+  ]
+}
