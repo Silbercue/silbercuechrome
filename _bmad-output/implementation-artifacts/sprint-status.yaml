@@ -118,8 +118,8 @@ development_status:
   # Epic 9: Monetarisierung & Publish-Pipeline (MVP-Infrastruktur)
   epic-9: in-progress
   9-1-free-tier-step-limit-fuer-run-plan: done
-  9-2-license-key-validierung-aktivierung: ready-for-dev
-  9-3-offline-grace-period: backlog
+  9-2-license-key-validierung-aktivierung: done
+  9-3-offline-grace-period: ready-for-dev
   9-4-cli-kommandos-fuer-lizenzverwaltung: backlog
   9-5-dual-repo-code-trennung: backlog
   9-6-dom-snapshot-pro-feature-gate: backlog

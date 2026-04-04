@@ -7,7 +7,8 @@ import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { a11yTree } from "./cache/a11y-tree.js";
-import { FreeTierLicenseStatus } from "./license/license-status.js";
+import { LicenseValidator } from "./license/license-validator.js";
+import { loadLicenseConfig } from "./license/license-validator.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 
 interface TargetInfo {
@@ -77,11 +78,17 @@ export async function startServer(): Promise<void> {
     version: "0.1.0",
   });
 
-  // Story 9.1: License status and free-tier config
-  const licenseStatus = new FreeTierLicenseStatus();
+  // Story 9.2: License-Key Validierung
+  const licenseConfig = loadLicenseConfig();
+  const licenseValidator = new LicenseValidator(licenseConfig);
+  try {
+    await licenseValidator.validate();
+  } catch {
+    // validate() should never throw, but if it does — Free Tier is fine
+  }
   const freeTierConfig = loadFreeTierConfig();
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseStatus, freeTierConfig);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
