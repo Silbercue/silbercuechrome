@@ -7,6 +7,8 @@ import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { a11yTree } from "./cache/a11y-tree.js";
+import { FreeTierLicenseStatus } from "./license/license-status.js";
+import { loadFreeTierConfig } from "./license/free-tier-config.js";
 
 interface TargetInfo {
   targetId: string;
@@ -75,7 +77,11 @@ export async function startServer(): Promise<void> {
     version: "0.1.0",
   });
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler);
+  // Story 9.1: License status and free-tier config
+  const licenseStatus = new FreeTierLicenseStatus();
+  const freeTierConfig = loadFreeTierConfig();
+
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseStatus, freeTierConfig);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)

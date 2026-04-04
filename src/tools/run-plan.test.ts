@@ -628,3 +628,223 @@ describe("runPlanSchema — Suspend/Resume (Story 6.5)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+// ===== Story 9.1: Free-Tier Step-Limit =====
+
+import type { LicenseStatus } from "../license/license-status.js";
+import type { FreeTierConfig } from "../license/free-tier-config.js";
+
+function createMockLicense(isPro: boolean): LicenseStatus {
+  return { isPro: () => isPro };
+}
+
+describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
+  it("truncates steps to freeTierConfig.runPlanLimit when license is free", async () => {
+    const callLog: string[] = [];
+    const registry = {
+      executeTool: vi.fn(async (name: string) => {
+        callLog.push(name);
+        return {
+          content: [{ type: "text" as const, text: `${name} done` }],
+          _meta: { elapsedMs: 5, method: name },
+        };
+      }),
+    } as unknown as ToolRegistry;
+
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate", params: { url: "https://example.com" } },
+        { tool: "click", params: { ref: "e1" } },
+        { tool: "screenshot" },
+        { tool: "evaluate", params: { expression: "1" } },
+        { tool: "type", params: { ref: "e2", text: "hi" } },
+      ],
+    };
+
+    const license = createMockLicense(false);
+    const config: FreeTierConfig = { runPlanLimit: 3 };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license, config);
+
+    expect(callLog).toHaveLength(3);
+    expect(callLog).toEqual(["navigate", "click", "screenshot"]);
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.truncated).toBe(true);
+    expect(result._meta!.limit).toBe(3);
+    expect(result._meta!.total).toBe(5);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("does not limit steps when license is Pro", async () => {
+    const callLog: string[] = [];
+    const registry = {
+      executeTool: vi.fn(async (name: string) => {
+        callLog.push(name);
+        return {
+          content: [{ type: "text" as const, text: `${name} done` }],
+          _meta: { elapsedMs: 5, method: name },
+        };
+      }),
+    } as unknown as ToolRegistry;
+
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate" },
+        { tool: "click" },
+        { tool: "screenshot" },
+        { tool: "evaluate" },
+        { tool: "type" },
+      ],
+    };
+
+    const license = createMockLicense(true);
+    const config: FreeTierConfig = { runPlanLimit: 3 };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license, config);
+
+    expect(callLog).toHaveLength(5);
+    expect(result._meta!.truncated).toBeUndefined();
+  });
+
+  it("uses custom runPlanLimit from config", async () => {
+    const callLog: string[] = [];
+    const registry = {
+      executeTool: vi.fn(async (name: string) => {
+        callLog.push(name);
+        return {
+          content: [{ type: "text" as const, text: `${name} done` }],
+          _meta: { elapsedMs: 5, method: name },
+        };
+      }),
+    } as unknown as ToolRegistry;
+
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate" },
+        { tool: "click" },
+        { tool: "screenshot" },
+        { tool: "evaluate" },
+        { tool: "type" },
+        { tool: "wait_for" },
+        { tool: "read_page" },
+        { tool: "dom_snapshot" },
+      ],
+    };
+
+    const license = createMockLicense(false);
+    const config: FreeTierConfig = { runPlanLimit: 5 };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license, config);
+
+    expect(callLog).toHaveLength(5);
+    expect(result._meta!.truncated).toBe(true);
+    expect(result._meta!.limit).toBe(5);
+    expect(result._meta!.total).toBe(8);
+  });
+
+  it("defaults to free tier (stepLimit applied) when no license provided", async () => {
+    const callLog: string[] = [];
+    const registry = {
+      executeTool: vi.fn(async (name: string) => {
+        callLog.push(name);
+        return {
+          content: [{ type: "text" as const, text: `${name} done` }],
+          _meta: { elapsedMs: 5, method: name },
+        };
+      }),
+    } as unknown as ToolRegistry;
+
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate" },
+        { tool: "click" },
+        { tool: "screenshot" },
+        { tool: "evaluate" },
+        { tool: "type" },
+      ],
+    };
+
+    // No license, no config → defaults: FreeTierLicenseStatus (isPro=false), runPlanLimit=3
+    const result = await runPlanHandler(params, registry);
+
+    expect(callLog).toHaveLength(3);
+    expect(result._meta!.truncated).toBe(true);
+    expect(result._meta!.limit).toBe(3);
+  });
+
+  it("operator path also respects step limit for free tier", async () => {
+    const mockOperatorExecutePlan = vi.fn().mockResolvedValue({
+      steps: [
+        {
+          step: 1,
+          tool: "navigate",
+          result: { content: [{ type: "text", text: "OK" }], _meta: { elapsedMs: 10, method: "navigate" } },
+          rulesApplied: [],
+          scrollAttempts: 0,
+          dialogsHandled: 0,
+          microLlmUsed: false,
+          microLlmCalled: false,
+        },
+        {
+          step: 2,
+          tool: "click",
+          result: { content: [{ type: "text", text: "OK" }], _meta: { elapsedMs: 5, method: "click" } },
+          rulesApplied: [],
+          scrollAttempts: 0,
+          dialogsHandled: 0,
+          microLlmUsed: false,
+          microLlmCalled: false,
+        },
+        {
+          step: 3,
+          tool: "screenshot",
+          result: { content: [{ type: "text", text: "OK" }], _meta: { elapsedMs: 8, method: "screenshot" } },
+          rulesApplied: [],
+          scrollAttempts: 0,
+          dialogsHandled: 0,
+          microLlmUsed: false,
+          microLlmCalled: false,
+        },
+      ],
+      stepsTotal: 3,
+      stepsCompleted: 3,
+      totalRulesApplied: 0,
+      totalDialogsHandled: 0,
+      totalMicroLlmCalls: 0,
+      totalEscalations: 0,
+      escalations: [],
+      aborted: false,
+      elapsedMs: 50,
+    });
+
+    const MockOperator = vi.mocked(Operator);
+    MockOperator.mockImplementation(() => ({
+      executePlan: mockOperatorExecutePlan,
+    }) as unknown as InstanceType<typeof Operator>);
+
+    const deps: RunPlanDeps = {
+      cdpClient: {} as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "navigate" },
+        { tool: "click" },
+        { tool: "screenshot" },
+        { tool: "evaluate" },
+        { tool: "type" },
+      ],
+      use_operator: true,
+    };
+
+    const license = createMockLicense(false);
+    const config: FreeTierConfig = { runPlanLimit: 3 };
+
+    await runPlanHandler(params, {} as ToolRegistry, deps, undefined, license, config);
+
+    // Verify the operator received only 3 steps (truncated from 5)
+    const stepsPassedToOperator = mockOperatorExecutePlan.mock.calls[0][0];
+    expect(stepsPassedToOperator).toHaveLength(3);
+  });
+});

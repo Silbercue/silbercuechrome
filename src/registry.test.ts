@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ToolRegistry } from "./registry.js";
+import type { LicenseStatus } from "./license/license-status.js";
+import type { FreeTierConfig } from "./license/free-tier-config.js";
 
 describe("ToolRegistry", () => {
   it("should be instantiable with McpServer, CdpClient, sessionId, and TabStateCache", () => {
@@ -312,5 +314,112 @@ describe("ToolRegistry", () => {
     // Second content block should be the injected dialog notification
     expect(result.content.length).toBeGreaterThanOrEqual(2);
     expect((result.content[1] as { text: string }).text).toContain('[dialog] alert: "Hello!"');
+  });
+
+  // --- Story 9.1: Registry wiring for licenseStatus and freeTierConfig (C4) ---
+
+  it("constructor accepts licenseStatus and freeTierConfig, wiring them to run_plan handler", async () => {
+    // Create a mock CdpClient that returns results for evaluate calls
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 1 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Free tier license with custom limit of 2
+    const license: LicenseStatus = { isPro: () => false };
+    const config: FreeTierConfig = { runPlanLimit: 2 };
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      license,
+      config,
+    );
+    registry.registerAll();
+
+    // Execute run_plan indirectly: the handler is registered via server.tool,
+    // so we call the callback captured by the mock. The last server.tool call is run_plan.
+    const runPlanCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "run_plan",
+    );
+    expect(runPlanCall).toBeDefined();
+
+    // The handler is the last argument in the server.tool call
+    const runPlanCallback = runPlanCall![runPlanCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    // Run a plan with 4 steps — free tier limit is 2, so only 2 should execute
+    const result = await runPlanCallback({
+      steps: [
+        { tool: "evaluate", params: { expression: "1" } },
+        { tool: "evaluate", params: { expression: "2" } },
+        { tool: "evaluate", params: { expression: "3" } },
+        { tool: "evaluate", params: { expression: "4" } },
+      ],
+      use_operator: false,
+    });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.truncated).toBe(true);
+    expect(result._meta!.limit).toBe(2);
+    expect(result._meta!.total).toBe(4);
+  });
+
+  it("Pro license does not truncate steps in run_plan", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 1 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Pro license — no truncation expected
+    const license: LicenseStatus = { isPro: () => true };
+    const config: FreeTierConfig = { runPlanLimit: 2 };
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      license,
+      config,
+    );
+    registry.registerAll();
+
+    const runPlanCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "run_plan",
+    );
+    const runPlanCallback = runPlanCall![runPlanCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    const result = await runPlanCallback({
+      steps: [
+        { tool: "evaluate", params: { expression: "1" } },
+        { tool: "evaluate", params: { expression: "2" } },
+        { tool: "evaluate", params: { expression: "3" } },
+        { tool: "evaluate", params: { expression: "4" } },
+      ],
+      use_operator: false,
+    });
+
+    // Pro license: all 4 steps executed, no truncation
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.truncated).toBeUndefined();
+    expect(result._meta!.stepsCompleted).toBe(4);
   });
 });

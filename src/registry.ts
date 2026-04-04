@@ -40,6 +40,10 @@ import { Captain } from "./operator/captain.js";
 import type { CaptainProvider } from "./operator/captain.js";
 import type { CaptainEscalationConfig } from "./operator/types.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
+import type { LicenseStatus } from "./license/license-status.js";
+import type { FreeTierConfig } from "./license/free-tier-config.js";
+import { FreeTierLicenseStatus } from "./license/license-status.js";
+import { loadFreeTierConfig } from "./license/free-tier-config.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -49,6 +53,8 @@ export class ToolRegistry {
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
   private _dialogHandler: DialogHandler | undefined;
+  private _licenseStatus: LicenseStatus;
+  private _freeTierConfig: FreeTierConfig;
 
   constructor(
     private server: McpServer,
@@ -58,11 +64,15 @@ export class ToolRegistry {
     getConnectionStatus?: () => ConnectionStatus,
     sessionManager?: SessionManager,
     dialogHandler?: DialogHandler,
+    licenseStatus?: LicenseStatus,
+    freeTierConfig?: FreeTierConfig,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
     this._sessionManager = sessionManager;
     this._dialogHandler = dialogHandler;
+    this._licenseStatus = licenseStatus ?? new FreeTierLicenseStatus();
+    this._freeTierConfig = freeTierConfig ?? loadFreeTierConfig();
   }
 
   get sessionId(): string {
@@ -396,7 +406,7 @@ export class ToolRegistry {
           sessionManager: this._sessionManager,
           captain,
           captainScreenshot,
-        }, this.planStateStore);
+        }, this.planStateStore, this._licenseStatus, this._freeTierConfig);
         // Convert SuspendedPlanResponse to ToolResponse for MCP transport
         if ("status" in result && (result as { status: string }).status === "suspended") {
           const suspended = result as import("./plan/plan-executor.js").SuspendedPlanResponse;

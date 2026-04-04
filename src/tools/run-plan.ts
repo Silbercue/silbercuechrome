@@ -10,6 +10,10 @@ import type { PlanStep, PlanOptions, SuspendedPlanResponse, PlanExecutionResult 
 import type { PlanStateStore } from "../plan/plan-state-store.js";
 import { Operator } from "../operator/operator.js";
 import { RuleEngine } from "../operator/rule-engine.js";
+import type { LicenseStatus } from "../license/license-status.js";
+import type { FreeTierConfig } from "../license/free-tier-config.js";
+import { FreeTierLicenseStatus } from "../license/license-status.js";
+import { DEFAULT_FREE_TIER_CONFIG } from "../license/free-tier-config.js";
 
 const suspendSchema = z.object({
   question: z.string().optional().describe("Question to ask the agent when suspending"),
@@ -68,6 +72,8 @@ export async function runPlanHandler(
   registry: ToolRegistry,
   deps?: RunPlanDeps,
   stateStore?: PlanStateStore,
+  license?: LicenseStatus,
+  freeTierConfig?: FreeTierConfig,
 ): Promise<ToolResponse | SuspendedPlanResponse> {
   // --- Validation: steps and resume are mutually exclusive ---
   if (params.steps && params.resume) {
@@ -85,6 +91,11 @@ export async function runPlanHandler(
       _meta: { elapsedMs: 0, method: "run_plan" },
     };
   }
+
+  // --- Story 9.1: Resolve step limit from license status ---
+  const resolvedLicense = license ?? new FreeTierLicenseStatus();
+  const resolvedConfig = freeTierConfig ?? DEFAULT_FREE_TIER_CONFIG;
+  const stepLimit = resolvedLicense.isPro() ? undefined : resolvedConfig.runPlanLimit;
 
   // --- Resume path ---
   if (params.resume) {
@@ -144,6 +155,14 @@ export async function runPlanHandler(
     errorStrategy: params.errorStrategy,
   };
 
+  // Story 9.1: Apply step limit to steps array before execution
+  let steps = params.steps as PlanStep[];
+  const total = steps.length;
+  const truncated = stepLimit !== undefined && steps.length > stepLimit;
+  if (truncated) {
+    steps = steps.slice(0, stepLimit);
+  }
+
   // C1: When use_operator is true and deps are available, route through the Operator
   if (params.use_operator && deps) {
     const ruleEngine = new RuleEngine();
@@ -158,18 +177,42 @@ export async function runPlanHandler(
       deps.captain,
       deps.captainScreenshot,
     );
-    const operatorRaw = await operator.executePlan(params.steps as PlanStep[], planOptions, stateStore);
+    const operatorRaw = await operator.executePlan(steps, planOptions, stateStore);
 
-    // If the operator returned a SuspendedPlanResponse, pass it through directly
+    // If the operator returned a SuspendedPlanResponse, pass it through
+    // (with truncation info injected if steps were truncated)
     if ("status" in operatorRaw && (operatorRaw as SuspendedPlanResponse).status === "suspended") {
-      return operatorRaw as SuspendedPlanResponse;
+      const suspended = operatorRaw as SuspendedPlanResponse;
+      if (truncated) {
+        suspended._meta = {
+          ...(suspended._meta ?? { elapsedMs: 0, method: "run_plan" }),
+          truncated: true,
+          limit: stepLimit!,
+          total,
+        };
+      }
+      return suspended;
     }
 
-    return convertOperatorResult(operatorRaw as OperatorPlanResult, params.errorStrategy);
+    const result = convertOperatorResult(operatorRaw as OperatorPlanResult, params.errorStrategy);
+    // Story 9.1: Inject truncation info into _meta for operator path
+    if (truncated && result._meta) {
+      result._meta.truncated = true;
+      result._meta.limit = stepLimit!;
+      result._meta.total = total;
+    }
+    return result;
   }
 
   // Default: plain sequential execution without Operator
-  return executePlan(params.steps as PlanStep[], registry, planOptions, stateStore);
+  const result = await executePlan(steps, registry, planOptions, stateStore);
+  // Story 9.1: Inject truncation info into _meta for both standard and suspended paths
+  if (truncated && result._meta) {
+    result._meta.truncated = true;
+    result._meta.limit = stepLimit!;
+    result._meta.total = total;
+  }
+  return result;
 }
 
 /** Convert OperatorPlanResult to ToolResponse format */
