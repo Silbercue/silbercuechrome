@@ -30,6 +30,8 @@ import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
 import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
 import { handleDialogSchema, handleDialogHandler } from "./tools/handle-dialog.js";
 import type { HandleDialogParams } from "./tools/handle-dialog.js";
+import { fileUploadSchema, fileUploadHandler } from "./tools/file-upload.js";
+import type { FileUploadParams } from "./tools/file-upload.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -327,6 +329,25 @@ export class ToolRegistry {
       );
     }
 
+    // Story 6.2: file_upload — upload files to file input elements
+    this.server.tool(
+      "file_upload",
+      "Upload file(s) to a file input element. Provide ref or CSS selector to identify the <input type='file'>, and absolute path(s) to the file(s).",
+      {
+        ref: fileUploadSchema.shape.ref,
+        selector: fileUploadSchema.shape.selector,
+        path: fileUploadSchema.shape.path,
+      },
+      wrap(async (params) => {
+        return fileUploadHandler(
+          params as unknown as FileUploadParams,
+          this.cdpClient,
+          this.sessionId,
+          this._sessionManager,
+        );
+      }),
+    );
+
     // C1: Create Micro-LLM provider from environment for Operator mode
     const microLlm = createMicroLlmFromEnv();
 
@@ -417,5 +438,13 @@ export class ToolRegistry {
         return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
       });
     }
+    this._handlers.set("file_upload", async (params) => {
+      return fileUploadHandler(
+        params as unknown as FileUploadParams,
+        this.cdpClient,
+        this.sessionId,
+        this._sessionManager,
+      );
+    });
   }
 }

@@ -90,8 +90,8 @@ development_status:
   # Epic 6: Extended Workflow Capabilities (Phase 2)
   epic-6: in-progress
   6-1-dialog-handling: done
-  6-2-file-upload: ready-for-dev
-  6-3-komplexe-formulare: backlog
+  6-2-file-upload: done
+  6-3-komplexe-formulare: ready-for-dev
   6-4-erweiterter-run-plan: backlog
   6-5-suspend-resume-fuer-run-plan: backlog
   epic-6-retrospective: optional

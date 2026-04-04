@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(12);
+    expect(toolFn).toHaveBeenCalledTimes(13);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -117,6 +117,16 @@ describe("ToolRegistry", () => {
       "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
       expect.objectContaining({
         ref: expect.anything(),
+      }),
+      expect.any(Function),
+    );
+    expect(toolFn).toHaveBeenCalledWith(
+      "file_upload",
+      "Upload file(s) to a file input element. Provide ref or CSS selector to identify the <input type='file'>, and absolute path(s) to the file(s).",
+      expect.objectContaining({
+        ref: expect.anything(),
+        selector: expect.anything(),
+        path: expect.anything(),
       }),
       expect.any(Function),
     );
