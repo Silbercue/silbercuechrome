@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
 import type { SessionManager } from "./cdp/session-manager.js";
+import type { DialogHandler } from "./cdp/dialog-handler.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
 import type { ToolResponse, ConnectionStatus } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
@@ -27,6 +28,8 @@ import { runPlanSchema, runPlanHandler } from "./tools/run-plan.js";
 import type { RunPlanParams } from "./tools/run-plan.js";
 import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
 import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
+import { handleDialogSchema, handleDialogHandler } from "./tools/handle-dialog.js";
+import type { HandleDialogParams } from "./tools/handle-dialog.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -39,6 +42,7 @@ export class ToolRegistry {
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
+  private _dialogHandler: DialogHandler | undefined;
 
   constructor(
     private server: McpServer,
@@ -47,10 +51,12 @@ export class ToolRegistry {
     private _tabStateCache: TabStateCache,
     getConnectionStatus?: () => ConnectionStatus,
     sessionManager?: SessionManager,
+    dialogHandler?: DialogHandler,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
     this._sessionManager = sessionManager;
+    this._dialogHandler = dialogHandler;
   }
 
   get sessionId(): string {
@@ -81,7 +87,23 @@ export class ToolRegistry {
         _meta: { elapsedMs: 0, method: name },
       };
     }
-    return handler(params);
+    const result = await handler(params);
+    this._injectDialogNotifications(result);
+    return result;
+  }
+
+  /**
+   * Story 6.1: Inject pending dialog notifications into any tool response.
+   * Called from both executeTool() (run_plan path) and server.tool() callbacks (direct MCP path).
+   */
+  private _injectDialogNotifications(result: ToolResponse): void {
+    const dialogs = this._dialogHandler?.consumeNotifications();
+    if (dialogs && dialogs.length > 0) {
+      const dialogText = dialogs
+        .map((d) => `[dialog] ${d.type}: "${d.message}"`)
+        .join("\n");
+      result.content.push({ type: "text", text: dialogText });
+    }
   }
 
   /**
@@ -110,12 +132,32 @@ export class ToolRegistry {
     return { captain: new Captain(lowLevelServer, config), includeScreenshot: config.includeScreenshot };
   }
 
+  /**
+   * Wrap a tool handler so dialog notifications are injected into its response.
+   * This ensures notifications reach the LLM regardless of whether the tool
+   * is called via the direct MCP path (server.tool) or via executeTool (run_plan).
+   */
+  private _wrapWithDialogInjection<T>(
+    handler: (params: T) => Promise<ToolResponse>,
+  ): (params: T) => Promise<ToolResponse> {
+    return async (params: T) => {
+      const result = await handler(params);
+      this._injectDialogNotifications(result);
+      return result;
+    };
+  }
+
   registerAll(): void {
     // Create Human Touch config from environment (once at startup)
     const humanTouch = createHumanTouchFromEnv();
     if (humanTouch.enabled) {
       console.error(`SilbercueChrome human touch enabled (speed: ${humanTouch.speedProfile})`);
     }
+    // Story 6.1 (C1): All server.tool() callbacks are wrapped with dialog notification
+    // injection so that pending dialogs reach the LLM regardless of call path
+    // (direct MCP call vs executeTool/run_plan).
+    const wrap = <T>(fn: (params: T) => Promise<ToolResponse>) => this._wrapWithDialogInjection(fn);
+
     this.server.tool(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -123,9 +165,9 @@ export class ToolRegistry {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,
       },
-      async (params) => {
+      wrap(async (params) => {
         return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
-      },
+      }),
     );
 
     this.server.tool(
@@ -136,9 +178,9 @@ export class ToolRegistry {
         action: navigateSchema.shape.action,
         settle_ms: navigateSchema.shape.settle_ms,
       },
-      async (params) => {
+      wrap(async (params) => {
         return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
-      },
+      }),
     );
 
     this.server.tool(
@@ -150,9 +192,9 @@ export class ToolRegistry {
         filter: readPageSchema.shape.filter,
         max_tokens: readPageSchema.shape.max_tokens,
       },
-      async (params) => {
+      wrap(async (params) => {
         return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
-      },
+      }),
     );
 
     this.server.tool(
@@ -162,9 +204,9 @@ export class ToolRegistry {
         full_page: screenshotSchema.shape.full_page,
         som: screenshotSchema.shape.som,
       },
-      async (params) => {
+      wrap(async (params) => {
         return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-      },
+      }),
     );
 
     this.server.tool(
@@ -176,9 +218,9 @@ export class ToolRegistry {
         expression: waitForSchema.shape.expression,
         timeout: waitForSchema.shape.timeout,
       },
-      async (params) => {
+      wrap(async (params) => {
         return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
-      },
+      }),
     );
 
     this.server.tool(
@@ -188,9 +230,9 @@ export class ToolRegistry {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
       },
-      async (params) => {
+      wrap(async (params) => {
         return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
-      },
+      }),
     );
 
     this.server.tool(
@@ -202,16 +244,16 @@ export class ToolRegistry {
         text: typeSchema.shape.text,
         clear: typeSchema.shape.clear,
       },
-      async (params) => {
+      wrap(async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
-      },
+      }),
     );
 
     this.server.tool(
       "tab_status",
       "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
       {},
-      async (params) => {
+      wrap(async (params) => {
         return tabStatusHandler(
           params as unknown as TabStatusParams,
           this.cdpClient,
@@ -219,7 +261,7 @@ export class ToolRegistry {
           this._tabStateCache,
           this.connectionStatus,
         );
-      },
+      }),
     );
 
     this.server.tool(
@@ -230,7 +272,7 @@ export class ToolRegistry {
         url: switchTabSchema.shape.url,
         tab_id: switchTabSchema.shape.tab_id,
       },
-      async (params) => {
+      wrap(async (params) => {
         return switchTabHandler(
           params as unknown as SwitchTabParams,
           this.cdpClient,
@@ -241,14 +283,14 @@ export class ToolRegistry {
           },
           this._sessionManager,
         );
-      },
+      }),
     );
 
     this.server.tool(
       "virtual_desk",
       "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
       {},
-      async (params) => {
+      wrap(async (params) => {
         return virtualDeskHandler(
           params as unknown as VirtualDeskParams,
           this.cdpClient,
@@ -256,7 +298,7 @@ export class ToolRegistry {
           this._tabStateCache,
           this.connectionStatus,
         );
-      },
+      }),
     );
 
     this.server.tool(
@@ -265,10 +307,25 @@ export class ToolRegistry {
       {
         ref: domSnapshotSchema.shape.ref,
       },
-      async (params) => {
+      wrap(async (params) => {
         return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-      },
+      }),
     );
+
+    // Story 6.1: handle_dialog — configure dialog handling before triggering actions
+    if (this._dialogHandler) {
+      this.server.tool(
+        "handle_dialog",
+        "Configure how the browser handles JavaScript dialogs (alerts, confirms, prompts). Pre-configure before triggering actions, or check dialog status.",
+        {
+          action: handleDialogSchema.shape.action,
+          text: handleDialogSchema.shape.text,
+        },
+        async (params) => {
+          return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
+        },
+      );
+    }
 
     // C1: Create Micro-LLM provider from environment for Operator mode
     const microLlm = createMicroLlmFromEnv();
@@ -287,7 +344,7 @@ export class ToolRegistry {
         steps: runPlanSchema.shape.steps,
         use_operator: runPlanSchema.shape.use_operator,
       },
-      async (params) => {
+      wrap(async (params) => {
         return runPlanHandler(params as unknown as RunPlanParams, this, {
           cdpClient: this.cdpClient,
           sessionId: this._sessionId,
@@ -296,7 +353,7 @@ export class ToolRegistry {
           captain,
           captainScreenshot,
         });
-      },
+      }),
     );
 
     // Register tool handlers for executeTool dispatch
@@ -355,5 +412,10 @@ export class ToolRegistry {
     this._handlers.set("dom_snapshot", async (params) => {
       return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
     });
+    if (this._dialogHandler) {
+      this._handlers.set("handle_dialog", async (params) => {
+        return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
+      });
+    }
   }
 }
