@@ -34,6 +34,9 @@ import { fileUploadSchema, fileUploadHandler } from "./tools/file-upload.js";
 import type { FileUploadParams } from "./tools/file-upload.js";
 import { fillFormSchema, fillFormHandler } from "./tools/fill-form.js";
 import type { FillFormParams } from "./tools/fill-form.js";
+import { consoleLogsSchema, consoleLogsHandler } from "./tools/console-logs.js";
+import type { ConsoleLogsParams } from "./tools/console-logs.js";
+import type { ConsoleCollector } from "./cdp/console-collector.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -56,6 +59,7 @@ export class ToolRegistry {
   private _dialogHandler: DialogHandler | undefined;
   private _licenseStatus: LicenseStatus;
   private _freeTierConfig: FreeTierConfig;
+  private _consoleCollector: ConsoleCollector | undefined;
 
   constructor(
     private server: McpServer,
@@ -67,6 +71,7 @@ export class ToolRegistry {
     dialogHandler?: DialogHandler,
     licenseStatus?: LicenseStatus,
     freeTierConfig?: FreeTierConfig,
+    consoleCollector?: ConsoleCollector,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
@@ -74,6 +79,7 @@ export class ToolRegistry {
     this._dialogHandler = dialogHandler;
     this._licenseStatus = licenseStatus ?? new FreeTierLicenseStatus();
     this._freeTierConfig = freeTierConfig ?? loadFreeTierConfig();
+    this._consoleCollector = consoleCollector;
   }
 
   get sessionId(): string {
@@ -428,6 +434,22 @@ export class ToolRegistry {
       }),
     );
 
+    // Story 7.1: console_logs — retrieve and filter console output
+    if (this._consoleCollector) {
+      this.server.tool(
+        "console_logs",
+        "Retrieve collected browser console logs. Filter by level (info/warning/error/debug) and/or regex pattern. Optionally clear the buffer after reading.",
+        {
+          level: consoleLogsSchema.shape.level,
+          pattern: consoleLogsSchema.shape.pattern,
+          clear: consoleLogsSchema.shape.clear,
+        },
+        wrap(async (params) => {
+          return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._consoleCollector!);
+        }),
+      );
+    }
+
     // C1: Create Micro-LLM provider from environment for Operator mode
     const microLlm = createMicroLlmFromEnv();
 
@@ -557,5 +579,10 @@ export class ToolRegistry {
         humanTouch,
       );
     });
+    if (this._consoleCollector) {
+      this._handlers.set("console_logs", async (params) => {
+        return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._consoleCollector!);
+      });
+    }
   }
 }

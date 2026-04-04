@@ -25,3 +25,5 @@ export type { RunPlanParams } from "./run-plan.js";
 export { domSnapshotSchema, domSnapshotHandler } from "./dom-snapshot.js";
 export type { DomSnapshotParams } from "./dom-snapshot.js";
 export { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "./visual-constants.js";
+export { consoleLogsSchema, consoleLogsHandler } from "./console-logs.js";
+export type { ConsoleLogsParams } from "./console-logs.js";

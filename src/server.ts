@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ChromeLauncher } from "./cdp/chrome-launcher.js";
 import { SessionManager } from "./cdp/session-manager.js";
 import { DialogHandler } from "./cdp/dialog-handler.js";
+import { ConsoleCollector } from "./cdp/console-collector.js";
 import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
@@ -72,6 +73,10 @@ export async function startServer(): Promise<void> {
   const dialogHandler = new DialogHandler(cdpClient, sessionId);
   dialogHandler.init();
 
+  // 4d. Create ConsoleCollector for console log buffering (Story 7.1)
+  const consoleCollector = new ConsoleCollector(cdpClient, sessionId);
+  consoleCollector.init();
+
   // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
@@ -88,7 +93,7 @@ export async function startServer(): Promise<void> {
   }
   const freeTierConfig = loadFreeTierConfig();
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
@@ -128,6 +133,9 @@ export async function startServer(): Promise<void> {
 
     // 6. Re-initialize DialogHandler for dialog handling
     dialogHandler.reinit(newCdpClient, newSessionId);
+
+    // 7. Re-initialize ConsoleCollector for console log buffering
+    consoleCollector.reinit(newCdpClient, newSessionId);
   });
 
   // 7. Start stdio transport
@@ -137,6 +145,7 @@ export async function startServer(): Promise<void> {
 
   // 8. Graceful shutdown
   const shutdown = async () => {
+    consoleCollector.detach();
     dialogHandler.detach();
     sessionManager.detach();
     tabStateCache.detachFromClient();

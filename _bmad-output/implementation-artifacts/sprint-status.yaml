@@ -97,9 +97,9 @@ development_status:
   epic-6-retrospective: optional
 
   # Epic 7: Observability & Session Intelligence (Phase 2)
-  epic-7: backlog
-  7-1-console-logs-tool: backlog
-  7-2-network-monitor-tool: backlog
+  epic-7: in-progress
+  7-1-console-logs-tool: done
+  7-2-network-monitor-tool: ready-for-dev
   7-3-session-defaults-auto-promote: backlog
   7-4-precomputed-a11y-tree: backlog
   7-5-selector-caching-dom-fingerprinting: backlog
