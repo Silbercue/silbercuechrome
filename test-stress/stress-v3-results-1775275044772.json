@@ -1,0 +1,127 @@
+{
+  "timestamp": "2026-04-04T03:57:24.772Z",
+  "mode": "edge-cases",
+  "passed": 19,
+  "failed": 0,
+  "passRate": "100.0%",
+  "results": [
+    {
+      "page": "14",
+      "test": "T1-moving-btn",
+      "pass": true,
+      "ms": 11
+    },
+    {
+      "page": "14",
+      "test": "T2-identical-twins",
+      "pass": true,
+      "ms": 3
+    },
+    {
+      "page": "14",
+      "test": "T3-contenteditable-eval",
+      "pass": true,
+      "ms": 1,
+      "detail": "ref not found, eval fallback"
+    },
+    {
+      "page": "14",
+      "test": "T4-optgroup-select",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "14",
+      "test": "T5-dom-storm",
+      "pass": true,
+      "ms": 4
+    },
+    {
+      "page": "14",
+      "test": "T7-name-collision",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "14",
+      "test": "T8-self-disable",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "NAV",
+      "test": "rapid-6-pages",
+      "pass": true,
+      "ms": 9005,
+      "detail": "avg 1501ms"
+    },
+    {
+      "page": "NAV",
+      "test": "post-rapid-readpage",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "STALE",
+      "test": "stale-ref-handling",
+      "pass": true,
+      "ms": 3,
+      "detail": "gracefully rejected"
+    },
+    {
+      "page": "STALE",
+      "test": "fresh-ref-after-stale",
+      "pass": true,
+      "ms": 2
+    },
+    {
+      "page": "CONC",
+      "test": "parallel-read-screenshot",
+      "pass": true,
+      "ms": 201
+    },
+    {
+      "page": "CONC",
+      "test": "read_page-cache",
+      "pass": true,
+      "ms": 2,
+      "detail": "33% speedup"
+    },
+    {
+      "page": "ERR",
+      "test": "bad-ref-click",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "ERR",
+      "test": "bad-selector-click",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "ERR",
+      "test": "type-non-input",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "ERR",
+      "test": "bad-url-navigate",
+      "pass": true,
+      "ms": 1
+    },
+    {
+      "page": "ERR",
+      "test": "bad-eval",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "ERR",
+      "test": "short-timeout",
+      "pass": true,
+      "ms": 102
+    }
+  ]
+}

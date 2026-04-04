@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stress Test 14: Edge Cases & Killer Scenarios</title>
+  <style>
+    body { font-family: system-ui; background: #1a1a2e; color: #e0e0e8; padding: 32px; }
+    h1 { color: #6c5ce7; }
+    .test-section { background: #16213e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 20px; margin: 16px 0; }
+    .result { font-family: monospace; margin-top: 8px; padding: 8px; border-radius: 4px; }
+    .pass { background: rgba(0,184,148,0.15); color: #00b894; }
+    .fail { background: rgba(225,112,85,0.15); color: #e17055; }
+    .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .btn-primary { background: #6c5ce7; color: white; }
+  </style>
+</head>
+<body>
+  <h1>14 — Edge Cases & Killer Scenarios</h1>
+
+  <!-- T1: Element that moves during click (CSS animation) -->
+  <div class="test-section">
+    <h3>T1: Moving Target — Button animates left/right</h3>
+    <div style="height: 60px; position: relative; overflow: hidden;">
+      <button id="moving-btn" class="btn btn-primary" style="position: absolute; animation: moveBtn 2s ease-in-out infinite alternate;">Moving Button</button>
+    </div>
+    <style>
+      @keyframes moveBtn { from { left: 0; } to { left: 400px; } }
+    </style>
+    <div id="result-t1" class="result"></div>
+  </div>
+
+  <!-- T2: Identical buttons — only one is correct -->
+  <div class="test-section">
+    <h3>T2: Identical Twins — 5 identical buttons, click the 3rd one</h3>
+    <div style="display:flex;gap:8px;">
+      <button class="twin-btn btn btn-primary">Submit</button>
+      <button class="twin-btn btn btn-primary">Submit</button>
+      <button class="twin-btn btn btn-primary" id="correct-twin">Submit</button>
+      <button class="twin-btn btn btn-primary">Submit</button>
+      <button class="twin-btn btn btn-primary">Submit</button>
+    </div>
+    <div id="result-t2" class="result"></div>
+  </div>
+
+  <!-- T3: contenteditable div (not an input) -->
+  <div class="test-section">
+    <h3>T3: ContentEditable — Type into a div, not an input</h3>
+    <div id="editable-div" contenteditable="true" style="min-height:60px;background:#0a0a1a;border:1px solid #4a4a6a;border-radius:4px;padding:12px;outline:none;" data-placeholder="Type here..."></div>
+    <div id="result-t3" class="result"></div>
+  </div>
+
+  <!-- T4: Select with optgroup -->
+  <div class="test-section">
+    <h3>T4: Complex Select — Choose "Espresso" from nested optgroup</h3>
+    <select id="complex-select" style="padding:8px;background:#0a0a1a;color:#e0e0e8;border:1px solid #4a4a6a;border-radius:4px;min-width:200px;">
+      <option value="">Choose a drink...</option>
+      <optgroup label="Tea">
+        <option value="green">Green Tea</option>
+        <option value="black">Black Tea</option>
+        <option value="oolong">Oolong</option>
+      </optgroup>
+      <optgroup label="Coffee">
+        <option value="espresso">Espresso</option>
+        <option value="latte">Latte</option>
+        <option value="cappuccino">Cappuccino</option>
+      </optgroup>
+    </select>
+    <div id="result-t4" class="result"></div>
+  </div>
+
+  <!-- T5: Rapid DOM mutations during interaction -->
+  <div class="test-section">
+    <h3>T5: DOM Mutation Storm — 100 mutations/sec while you try to click</h3>
+    <button id="start-storm" class="btn btn-primary" style="margin-bottom:12px;">Start Storm</button>
+    <div id="storm-container" style="min-height:60px;border:1px solid #2a2a4a;border-radius:8px;padding:12px;overflow:hidden;"></div>
+    <div id="result-t5" class="result"></div>
+  </div>
+
+  <!-- T6: Right-click context menu simulation -->
+  <div class="test-section">
+    <h3>T6: Right-Click — Trigger custom context menu and select option</h3>
+    <div id="context-area" style="min-height:100px;background:#0f0f2a;border:1px solid #2a2a4a;border-radius:8px;padding:16px;position:relative;cursor:context-menu;">
+      Right-click here for options
+      <div id="context-menu" style="display:none;position:absolute;background:#16213e;border:1px solid #4a4a6a;border-radius:6px;min-width:150px;z-index:100;">
+        <div class="ctx-item" data-action="copy" style="padding:8px 16px;cursor:pointer;">Copy</div>
+        <div class="ctx-item" data-action="paste" style="padding:8px 16px;cursor:pointer;">Paste</div>
+        <div class="ctx-item" data-action="delete" style="padding:8px 16px;cursor:pointer;color:#e17055;">Delete</div>
+      </div>
+    </div>
+    <div id="result-t6" class="result"></div>
+  </div>
+
+  <!-- T7: Multiple same-name elements in different forms -->
+  <div class="test-section">
+    <h3>T7: Name Collision — Two forms with same field names, fill the second</h3>
+    <div style="display:flex;gap:24px;">
+      <form id="form-a" style="flex:1;">
+        <label style="color:#888;">Form A</label>
+        <input type="text" name="username" placeholder="Username" style="display:block;margin:8px 0;padding:8px;background:#0a0a1a;color:#e0e0e8;border:1px solid #4a4a6a;border-radius:4px;" />
+      </form>
+      <form id="form-b" style="flex:1;">
+        <label style="color:#888;">Form B</label>
+        <input type="text" name="username" id="form-b-username" placeholder="Username" style="display:block;margin:8px 0;padding:8px;background:#0a0a1a;color:#e0e0e8;border:1px solid #4a4a6a;border-radius:4px;" />
+      </form>
+    </div>
+    <div id="result-t7" class="result"></div>
+  </div>
+
+  <!-- T8: Button that disables itself after click -->
+  <div class="test-section">
+    <h3>T8: Self-Disabling — Button disables after first click, enable again</h3>
+    <button id="self-disable-btn" class="btn btn-primary">Click Once</button>
+    <button id="re-enable-btn" class="btn" style="background:#2a2a4a;color:#888;margin-left:8px;">Re-enable</button>
+    <div id="result-t8" class="result"></div>
+  </div>
+
+  <script>
+    window.__test_results = {};
+    function setResult(id, pass, msg) {
+      window.__test_results[id] = { pass, msg };
+      var el = document.getElementById('result-' + id);
+      if (el) { el.textContent = (pass ? 'PASS' : 'FAIL') + ': ' + msg; el.className = 'result ' + (pass ? 'pass' : 'fail'); }
+    }
+
+    // T1: Moving button
+    document.getElementById('moving-btn').addEventListener('click', function() {
+      window.__t1_clicked = true;
+      setResult('t1', true, 'Clicked moving button!');
+    });
+
+    // T2: Identical twins
+    document.querySelectorAll('.twin-btn').forEach(function(btn, idx) {
+      btn.addEventListener('click', function() {
+        window.__t2_clicked = idx;
+        if (idx === 2) setResult('t2', true, 'Clicked the 3rd (correct) twin');
+        else setResult('t2', false, 'Clicked twin #' + (idx + 1) + ', expected #3');
+      });
+    });
+
+    // T3: ContentEditable
+    var editable = document.getElementById('editable-div');
+    var editObserver = new MutationObserver(function() {
+      var text = editable.textContent.trim();
+      if (text === 'hello-editable') {
+        window.__t3_typed = true;
+        setResult('t3', true, 'Typed "hello-editable" into contenteditable');
+      }
+    });
+    editObserver.observe(editable, { childList: true, characterData: true, subtree: true });
+
+    // T4: Complex select
+    document.getElementById('complex-select').addEventListener('change', function(e) {
+      window.__t4_selected = e.target.value;
+      if (e.target.value === 'espresso') setResult('t4', true, 'Selected Espresso from optgroup');
+      else setResult('t4', false, 'Selected ' + e.target.value + ', expected espresso');
+    });
+
+    // T5: DOM Mutation Storm
+    (function() {
+      var container = document.getElementById('storm-container');
+      var interval = null;
+      var targetBtn = null;
+
+      document.getElementById('start-storm').addEventListener('click', function() {
+        if (interval) return;
+        // Create target button
+        targetBtn = document.createElement('button');
+        targetBtn.className = 'btn btn-primary';
+        targetBtn.textContent = 'CLICK ME IN STORM';
+        targetBtn.id = 'storm-target';
+        targetBtn.addEventListener('click', function() {
+          window.__t5_clicked = true;
+          clearInterval(interval);
+          interval = null;
+          setResult('t5', true, 'Clicked target during DOM mutation storm');
+        });
+        container.appendChild(targetBtn);
+
+        // Start mutations (insert/remove random elements)
+        var count = 0;
+        interval = setInterval(function() {
+          if (count++ > 500) { clearInterval(interval); interval = null; return; }
+          // Add random element
+          var el = document.createElement('span');
+          el.textContent = 'noise-' + Math.random().toString(36).slice(2, 6) + ' ';
+          el.style.color = '#333';
+          el.style.fontSize = '10px';
+          container.insertBefore(el, targetBtn);
+          // Remove old elements to prevent bloat
+          if (container.children.length > 20) {
+            var first = container.firstChild;
+            if (first !== targetBtn) container.removeChild(first);
+          }
+        }, 10); // 100 mutations/sec
+      });
+    })();
+
+    // T6: Context menu
+    (function() {
+      var area = document.getElementById('context-area');
+      var menu = document.getElementById('context-menu');
+      area.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        menu.style.display = 'block';
+        menu.style.left = (e.offsetX) + 'px';
+        menu.style.top = (e.offsetY) + 'px';
+      });
+      document.addEventListener('click', function() { menu.style.display = 'none'; });
+      document.querySelectorAll('.ctx-item').forEach(function(item) {
+        item.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var action = item.getAttribute('data-action');
+          window.__t6_action = action;
+          menu.style.display = 'none';
+          if (action === 'copy') setResult('t6', true, 'Selected "Copy" from context menu');
+        });
+      });
+    })();
+
+    // T7: Name collision
+    document.getElementById('form-b-username').addEventListener('input', function(e) {
+      if (e.target.value === 'form-b-user') {
+        window.__t7_typed = true;
+        setResult('t7', true, 'Typed into correct (Form B) username field');
+      }
+    });
+
+    // T8: Self-disabling button
+    (function() {
+      var btn = document.getElementById('self-disable-btn');
+      var clicks = 0;
+      btn.addEventListener('click', function() {
+        clicks++;
+        btn.disabled = true;
+        btn.textContent = 'Disabled (' + clicks + ')';
+      });
+      document.getElementById('re-enable-btn').addEventListener('click', function() {
+        btn.disabled = false;
+        btn.textContent = 'Click Again';
+      });
+      // T8 requires: click → re-enable → click again
+      var checkInterval = setInterval(function() {
+        if (clicks >= 2) {
+          clearInterval(checkInterval);
+          window.__t8_done = true;
+          setResult('t8', true, 'Button clicked ' + clicks + ' times with re-enable');
+        }
+      }, 200);
+    })();
+
+    window.getTestResults = function() { return JSON.stringify(window.__test_results); };
+  </script>
+</body>
+</html>
