@@ -23,10 +23,14 @@ export interface ChromeConnectionOptions {
   autoLaunch?: boolean;
   /** Launch Chrome in headless mode (default: true) */
   headless?: boolean;
+  /** Pfad zu einem echten Chrome-Profil (user-data-dir). Opt-in: nur gesetzt = aktiv. */
+  profilePath?: string;
 }
 
 export interface LaunchOptions {
   headless?: boolean;
+  /** Wenn gesetzt: Chrome nutzt dieses Verzeichnis als user-data-dir statt eines Temp-Verzeichnisses */
+  profilePath?: string;
 }
 
 interface LaunchResult {
@@ -115,13 +119,29 @@ export async function launchChrome(
     );
   }
 
-  const tmpDir = join(
-    tmpdir(),
-    `silbercuechrome-${randomBytes(4).toString("hex")}`,
-  );
-  await mkdir(tmpDir, { recursive: true });
+  let userDataDir: string;
+  let tmpDir: string | undefined;
 
-  const flags = [...CHROME_FLAGS, `--user-data-dir=${tmpDir}`];
+  if (options?.profilePath) {
+    // Validate that the profile path exists
+    if (!existsSync(options.profilePath)) {
+      throw new Error(
+        `Chrome profile path does not exist: ${options.profilePath}`,
+      );
+    }
+    userDataDir = options.profilePath;
+    // No tmpDir — profile directory must NEVER be deleted
+  } else {
+    // Default: isolated temp profile
+    tmpDir = join(
+      tmpdir(),
+      `silbercuechrome-${randomBytes(4).toString("hex")}`,
+    );
+    await mkdir(tmpDir, { recursive: true });
+    userDataDir = tmpDir;
+  }
+
+  const flags = [...CHROME_FLAGS, `--user-data-dir=${userDataDir}`];
   if (options?.headless !== false) {
     flags.unshift("--headless");
   }
@@ -152,9 +172,11 @@ export async function launchChrome(
 
     return { cdpClient, transport, process: child, transportType: "pipe" };
   } catch (err) {
-    // Cleanup on failure
+    // Cleanup on failure — only delete temp directories, NEVER profile directories
     child.kill();
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    if (tmpDir) {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
     throw err;
   }
 }
@@ -253,6 +275,7 @@ export class ChromeConnection {
   private _onReconnect: ((connection: ChromeConnection) => Promise<void>) | null = null;
   private readonly _headless: boolean;
   private readonly _port: number;
+  private readonly _profilePath: string | undefined;
 
   constructor(
     cdpClient: CdpClient,
@@ -263,6 +286,7 @@ export class ChromeConnection {
     _launcher?: ChromeLauncher,
     port?: number,
     headless?: boolean,
+    profilePath?: string,
   ) {
     this._cdpClient = cdpClient;
     this._transport = transport;
@@ -270,6 +294,7 @@ export class ChromeConnection {
     this._tmpDir = tmpDir;
     this._port = port ?? 9222;
     this._headless = headless ?? true;
+    this._profilePath = profilePath;
 
     // C1 fix: Passive status tracking via CdpClient.onClose —
     // detects unexpected transport close (WebSocket drop, pipe break)
@@ -347,7 +372,7 @@ export class ChromeConnection {
           this._cdpClient = newClient;
         } else {
           // Pipe reconnect: Chrome process is dead, relaunch
-          const result = await launchChrome({ headless: this._headless });
+          const result = await launchChrome({ headless: this._headless, profilePath: this._profilePath });
           this._transport = result.transport;
           this._cdpClient = result.cdpClient;
 
@@ -358,10 +383,16 @@ export class ChromeConnection {
           }
 
           this._childProcess = result.process;
-          const tmpDirFlag = result.process.spawnargs.find((a) =>
-            a.startsWith("--user-data-dir="),
-          );
-          this._tmpDir = tmpDirFlag?.split("=")[1];
+
+          if (this._profilePath) {
+            // Profile path: no tmpDir — profile directory must NEVER be deleted
+            this._tmpDir = undefined;
+          } else {
+            const tmpDirFlag = result.process.spawnargs.find((a) =>
+              a.startsWith("--user-data-dir="),
+            );
+            this._tmpDir = tmpDirFlag?.split("=")[1];
+          }
 
           // Setup handlers for new child process
           this._setupChildProcessHandlers(this._childProcess);
@@ -476,11 +507,13 @@ export class ChromeLauncher {
   private readonly _port: number;
   private readonly _autoLaunch: boolean;
   private readonly _headless: boolean;
+  private readonly _profilePath: string | undefined;
 
   constructor(options?: ChromeConnectionOptions) {
     this._port = options?.port ?? 9222;
     this._autoLaunch = options?.autoLaunch ?? true;
     this._headless = options?.headless ?? true;
+    this._profilePath = options?.profilePath;
   }
 
   async connect(): Promise<ChromeConnection> {
@@ -501,13 +534,16 @@ export class ChromeLauncher {
     }
 
     debug("Launching Chrome...");
-    const result = await launchChrome({ headless: this._headless });
+    const result = await launchChrome({ headless: this._headless, profilePath: this._profilePath });
 
-    // Extract tmpDir from the spawn args
-    const tmpDirFlag = result.process.spawnargs.find((a) =>
-      a.startsWith("--user-data-dir="),
-    );
-    const tmpDir = tmpDirFlag?.split("=")[1];
+    // Extract tmpDir from the spawn args — only for temp profiles (no profilePath)
+    let tmpDir: string | undefined;
+    if (!this._profilePath) {
+      const tmpDirFlag = result.process.spawnargs.find((a) =>
+        a.startsWith("--user-data-dir="),
+      );
+      tmpDir = tmpDirFlag?.split("=")[1];
+    }
 
     const connection = new ChromeConnection(
       result.cdpClient,
@@ -518,6 +554,7 @@ export class ChromeLauncher {
       this,
       this._port,
       this._headless,
+      this._profilePath,
     );
 
     debug("Connected via pipe");
@@ -544,7 +581,11 @@ export class ChromeLauncher {
     // Verify connection
     await cdpClient.send("Browser.getVersion");
 
-    debug("Connected via WebSocket");
+    if (this._profilePath) {
+      debug("Connected via WebSocket to existing Chrome — profilePath ignored (only affects Auto-Launch)");
+    } else {
+      debug("Connected via WebSocket");
+    }
     return new ChromeConnection(
       cdpClient,
       transport,

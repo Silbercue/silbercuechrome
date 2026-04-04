@@ -12,8 +12,23 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...original,
+    rm: vi.fn(async () => {}),
+    mkdir: vi.fn(async () => undefined),
+  };
+});
+
+const mockDebug = vi.fn();
+vi.mock("./debug.js", () => ({
+  debug: (...args: unknown[]) => mockDebug(...args),
+}));
+
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { rm, mkdir } from "node:fs/promises";
 import {
   findChromePath,
   launchChrome,
@@ -997,5 +1012,327 @@ describe("ChromeConnection.reconnect", () => {
     expect(conn.status).toBe("reconnecting");
 
     await conn.close();
+  });
+});
+
+// ── Chrome Profile Support tests (Story 8.4) ────────────────────────────
+
+describe("Chrome Profile Support", () => {
+  describe("launchChrome with profilePath", () => {
+    it("uses profilePath as --user-data-dir and does NOT create temp directory", async () => {
+      process.env.CHROME_PATH = "/bin/sh";
+
+      const mockChild = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockChild as never);
+
+      // /tmp exists on all platforms
+      const profileDir = "/tmp";
+      const launchPromise = launchChrome({ headless: true, profilePath: profileDir });
+
+      await new Promise((r) => setTimeout(r, 10));
+      simulateCdpResponse(mockChild, 1, { product: "Chrome/136.0" });
+
+      const result = await launchPromise;
+
+      // Verify --user-data-dir points to profile, not temp
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const userDataDirArg = args.find((a) => a.startsWith("--user-data-dir="));
+      expect(userDataDirArg).toBe(`--user-data-dir=${profileDir}`);
+
+      // mkdir should NOT have been called (no temp dir creation)
+      expect(vi.mocked(mkdir)).not.toHaveBeenCalled();
+
+      await result.cdpClient.close();
+    });
+
+    it("without profilePath creates temp directory (regression guard)", async () => {
+      process.env.CHROME_PATH = "/bin/sh";
+
+      const mockChild = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockChild as never);
+
+      const launchPromise = launchChrome({ headless: true });
+
+      await new Promise((r) => setTimeout(r, 10));
+      simulateCdpResponse(mockChild, 1, { product: "Chrome/136.0" });
+
+      const result = await launchPromise;
+
+      // Verify --user-data-dir points to a temp directory
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const userDataDirArg = args.find((a) => a.startsWith("--user-data-dir="));
+      expect(userDataDirArg).toBeDefined();
+      expect(userDataDirArg).toMatch(/silbercuechrome-/);
+
+      // mkdir SHOULD have been called for temp dir
+      expect(vi.mocked(mkdir)).toHaveBeenCalled();
+
+      await result.cdpClient.close();
+    });
+
+    it("throws error when profilePath does not exist", async () => {
+      process.env.CHROME_PATH = "/bin/sh";
+
+      await expect(
+        launchChrome({ profilePath: "/nonexistent/chrome-profile-99999" }),
+      ).rejects.toThrow("Chrome profile path does not exist: /nonexistent/chrome-profile-99999");
+    });
+  });
+
+  describe("ChromeLauncher with profilePath", () => {
+    it("passes profilePath to launchChrome on auto-launch", async () => {
+      process.env.CHROME_PATH = "/bin/sh";
+
+      const mockChild = createMockChildProcess();
+      (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
+        "/bin/sh",
+        "--headless",
+        "--remote-debugging-pipe",
+        "--user-data-dir=/tmp",
+      ];
+      vi.mocked(spawn).mockReturnValue(mockChild as never);
+
+      // Use a port that fast-fails for WebSocket
+      const srv = (await import("node:http")).createServer();
+      await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+      const autoPort = (srv.address() as { port: number }).port;
+      srv.close();
+
+      const launcher = new ChromeLauncher({
+        port: autoPort,
+        autoLaunch: true,
+        profilePath: "/tmp",
+      });
+
+      const connectPromise = launcher.connect();
+
+      // Wait for spawn, then respond
+      const waitForSpawn = async () => {
+        for (let i = 0; i < 100; i++) {
+          if (vi.mocked(spawn).mock.calls.length > 0) return;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      };
+      await waitForSpawn();
+      simulateCdpResponse(mockChild, 1, { product: "Chrome/136.0" });
+
+      const connection = await connectPromise;
+
+      // Verify spawn was called with --user-data-dir=/tmp (the profile path)
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const userDataDirArg = args.find((a) => a.startsWith("--user-data-dir="));
+      expect(userDataDirArg).toBe("--user-data-dir=/tmp");
+
+      await connection.close();
+    }, 15_000);
+
+    it("connects via WebSocket and ignores profilePath", async () => {
+      const port = await new Promise<number>((resolve) => {
+        wsServer = createServer((req, res) => {
+          if (req.url === "/json/version") {
+            const addr = wsServer!.address() as { port: number };
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/profile-test-uuid`,
+              }),
+            );
+            return;
+          }
+          res.writeHead(404);
+          res.end();
+        });
+
+        wsServer.on("upgrade", (req, socket) => {
+          const key = req.headers["sec-websocket-key"] as string;
+          const accept = createHash("sha1")
+            .update(key + "258EAFA5-E914-47DA-95CA-5AB0DC85B411")
+            .digest("base64");
+
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n` +
+              "\r\n",
+          );
+
+          wsSockets.push(socket as Socket);
+
+          socket.on("data", (data: Buffer) => {
+            const cdpMsg = decodeWsFrame(data);
+            if (cdpMsg) {
+              try {
+                const parsed = JSON.parse(cdpMsg);
+                if (parsed.method === "Browser.getVersion") {
+                  const response = JSON.stringify({
+                    id: parsed.id,
+                    result: { product: "Chrome/136.0" },
+                  });
+                  socket.write(encodeServerFrame(0x1, response));
+                }
+              } catch {
+                // ignore
+              }
+            }
+          });
+        });
+
+        wsServer.listen(0, "127.0.0.1", () => {
+          const addr = wsServer!.address() as { port: number };
+          resolve(addr.port);
+        });
+      });
+
+      const launcher = new ChromeLauncher({
+        port,
+        autoLaunch: false,
+        profilePath: "/tmp",
+      });
+      const connection = await launcher.connect();
+
+      // Connected via WebSocket — profilePath is ignored
+      expect(connection.transportType).toBe("websocket");
+      expect(connection.status).toBe("connected");
+      // spawn should NOT have been called (no auto-launch)
+      expect(spawn).not.toHaveBeenCalled();
+      // M1: Verify debug warning about profilePath being ignored
+      expect(mockDebug).toHaveBeenCalledWith(
+        expect.stringContaining("profilePath ignored"),
+      );
+
+      await connection.close();
+    });
+  });
+
+  describe("ChromeConnection close() with profile", () => {
+    it("does NOT delete profile directory on close()", async () => {
+      vi.mocked(rm).mockClear();
+
+      const transport = {
+        send: vi.fn(() => true),
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+        onClose: vi.fn(),
+        close: vi.fn(async () => {}),
+        connected: true,
+      };
+      const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+
+      // ChromeConnection with profilePath but NO tmpDir
+      const conn = new ChromeConnection(
+        cdpClient,
+        transport,
+        "pipe",
+        undefined,
+        undefined, // tmpDir is undefined when using profile
+        undefined,
+        9222,
+        true,
+        "/tmp/my-chrome-profile",
+      );
+
+      await conn.close();
+
+      // rm should NOT have been called — profile directory must NEVER be deleted
+      expect(rm).not.toHaveBeenCalled();
+    });
+
+    it("deletes temp directory on close() without profile (regression guard)", async () => {
+      vi.mocked(rm).mockClear();
+
+      const transport = {
+        send: vi.fn(() => true),
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+        onClose: vi.fn(),
+        close: vi.fn(async () => {}),
+        connected: true,
+      };
+      const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+
+      const tmpDir = "/tmp/silbercuechrome-test1234";
+      const conn = new ChromeConnection(
+        cdpClient,
+        transport,
+        "pipe",
+        undefined,
+        tmpDir, // tmpDir set for temp profile
+      );
+
+      await conn.close();
+
+      // rm SHOULD have been called to clean up temp dir
+      expect(rm).toHaveBeenCalledWith(tmpDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("ChromeConnection.reconnect() with profilePath", () => {
+    it("relaunches Chrome with the same profilePath on pipe reconnect", async () => {
+      process.env.CHROME_PATH = "/bin/sh";
+
+      const transport = {
+        send: vi.fn(() => true),
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+        onClose: vi.fn(),
+        close: vi.fn(async () => {}),
+        connected: true,
+      };
+      const cdpClient = new (await import("./cdp-client.js")).CdpClient(transport);
+
+      const mockChild = createMockChildProcess();
+      // Kill should not actually emit exit in this test
+      mockChild.kill = vi.fn(() => {
+        (mockChild as unknown as { killed: boolean }).killed = true;
+        return true;
+      });
+
+      const conn = new ChromeConnection(
+        cdpClient,
+        transport,
+        "pipe",
+        mockChild,
+        undefined, // no tmpDir (using profile)
+        undefined,
+        9222,
+        true,
+        "/tmp", // profilePath
+      );
+
+      // Setup mock for the reconnect spawn
+      const reconnectChild = createMockChildProcess();
+      (reconnectChild as unknown as { spawnargs: string[] }).spawnargs = [
+        "/bin/sh",
+        "--headless",
+        "--remote-debugging-pipe",
+        "--user-data-dir=/tmp",
+      ];
+      vi.mocked(spawn).mockReturnValue(reconnectChild as never);
+
+      const reconnectPromise = conn.reconnect();
+
+      // Wait for spawn, then respond
+      const waitForSpawn = async () => {
+        for (let i = 0; i < 100; i++) {
+          if (vi.mocked(spawn).mock.calls.length > 0) return;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      };
+      await waitForSpawn();
+      simulateCdpResponse(reconnectChild, 1, { product: "Chrome/136.0" });
+
+      const result = await reconnectPromise;
+
+      expect(result).toBe(true);
+      expect(conn.status).toBe("connected");
+
+      // Verify spawn was called with --user-data-dir=/tmp (the profile path)
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const userDataDirArg = args.find((a) => a.startsWith("--user-data-dir="));
+      expect(userDataDirArg).toBe("--user-data-dir=/tmp");
+
+      await conn.close();
+    }, 15_000);
   });
 });

@@ -15,9 +15,18 @@ interface TargetInfo {
 
 export async function startServer(): Promise<void> {
   // 1. Connect to Chrome (Story 1.3: WebSocket first, then Auto-Launch)
-  const launcher = new ChromeLauncher();
+  const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
+  const launcher = new ChromeLauncher({ profilePath });
   const connection = await launcher.connect();
   const { cdpClient } = connection;
+
+  if (profilePath) {
+    if (connection.transportType === "pipe") {
+      console.error(`SilbercueChrome using Chrome profile: ${profilePath}`);
+    } else {
+      console.error(`SilbercueChrome warning: profilePath "${profilePath}" ignored — connected via WebSocket to existing Chrome`);
+    }
+  }
 
   // 2. Attach to a page target (browser-level connection needs a page session)
   const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
