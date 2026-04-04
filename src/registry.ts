@@ -28,6 +28,7 @@ import type { RunPlanParams } from "./tools/run-plan.js";
 import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
 import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
+import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
 import type { CaptainProvider } from "./operator/captain.js";
 import type { CaptainEscalationConfig } from "./operator/types.js";
@@ -110,6 +111,11 @@ export class ToolRegistry {
   }
 
   registerAll(): void {
+    // Create Human Touch config from environment (once at startup)
+    const humanTouch = createHumanTouchFromEnv();
+    if (humanTouch.enabled) {
+      console.error(`SilbercueChrome human touch enabled (speed: ${humanTouch.speedProfile})`);
+    }
     this.server.tool(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -183,7 +189,7 @@ export class ToolRegistry {
         selector: clickSchema.shape.selector,
       },
       async (params) => {
-        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
       },
     );
 
@@ -197,7 +203,7 @@ export class ToolRegistry {
         clear: typeSchema.shape.clear,
       },
       async (params) => {
-        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
       },
     );
 
@@ -311,10 +317,10 @@ export class ToolRegistry {
       return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
     });
     this._handlers.set("click", async (params) => {
-      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
     });
     this._handlers.set("type", async (params) => {
-      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
     });
     this._handlers.set("tab_status", async (params) => {
       return tabStatusHandler(

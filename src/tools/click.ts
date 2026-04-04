@@ -3,6 +3,8 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
+import type { HumanTouchConfig } from "../operator/human-touch.js";
+import { humanMouseMove } from "../operator/human-touch.js";
 
 // --- Schema (Task 2) ---
 
@@ -25,6 +27,7 @@ async function dispatchClick(
   cdpClient: CdpClient,
   sessionId: string,
   backendNodeId: number,
+  humanTouch?: HumanTouchConfig,
 ): Promise<void> {
   // Step 1: Reset scroll to origin before clicking.
   // When Emulation.setDeviceMetricsOverride is active, Input.dispatchMouseEvent
@@ -57,7 +60,12 @@ async function dispatchClick(
   const x = (q[0] + q[2] + q[4] + q[6]) / 4;
   const y = (q[1] + q[3] + q[5] + q[7]) / 4;
 
-  // Step 3: Dispatch mouse events at viewport coordinates
+  // Step 3b: Human touch — Bezier mouse movement before click
+  if (humanTouch?.enabled) {
+    await humanMouseMove(cdpClient, sessionId, 0, 0, x, y, humanTouch);
+  }
+
+  // Step 4: Dispatch mouse events at viewport coordinates
   await cdpClient.send(
     "Input.dispatchMouseEvent",
     {
@@ -89,6 +97,7 @@ export async function clickHandler(
   cdpClient: CdpClient,
   sessionId?: string,
   sessionManager?: SessionManager,
+  humanTouch?: HumanTouchConfig,
 ): Promise<ToolResponse> {
   const start = performance.now();
 
@@ -112,7 +121,7 @@ export async function clickHandler(
     const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
 
     // Dispatch click using the resolved session (may be OOPIF or main)
-    await dispatchClick(cdpClient, element.resolvedSessionId, element.backendNodeId);
+    await dispatchClick(cdpClient, element.resolvedSessionId, element.backendNodeId, humanTouch);
 
     // Success response — no settle, click returns immediately.
     // If the click triggers navigation, use wait_for or navigate to wait for the page to load.

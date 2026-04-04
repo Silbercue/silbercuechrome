@@ -455,4 +455,82 @@ describe("clickHandler", () => {
       mockSessionManager,
     );
   });
+
+  // --- Human Touch integration tests (Story 8.5) ---
+
+  it("clickHandler with humanTouch disabled behaves identically to default (9.1)", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient, sendFn } = createMockCdp();
+
+    const result = await clickHandler(
+      { ref: "e5" },
+      cdpClient,
+      "s1",
+      undefined,
+      { enabled: false, speedProfile: "normal" },
+    );
+
+    expect(result.isError).toBeUndefined();
+    // Exactly 5 CDP calls — no extra mouseMoved events
+    expect(sendFn).toHaveBeenCalledTimes(5);
+    const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
+    expect(callMethods).toEqual([
+      "Runtime.evaluate",
+      "DOM.scrollIntoViewIfNeeded",
+      "DOM.getContentQuads",
+      "Input.dispatchMouseEvent",
+      "Input.dispatchMouseEvent",
+    ]);
+  });
+
+  it("clickHandler with humanTouch enabled dispatches mouseMoved events before mousePressed (9.2)", async () => {
+    vi.useFakeTimers();
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient, sendFn } = createMockCdp();
+
+    const promise = clickHandler(
+      { ref: "e5" },
+      cdpClient,
+      "s1",
+      undefined,
+      { enabled: true, speedProfile: "fast" },
+    );
+    await vi.advanceTimersByTimeAsync(10000);
+    const result = await promise;
+
+    expect(result.isError).toBeUndefined();
+
+    // Should have mouseMoved events before mousePressed
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+
+    // At least 10 mouseMoved + 1 mousePressed + 1 mouseReleased = 12+
+    expect(mouseEvents.length).toBeGreaterThanOrEqual(12);
+
+    // Find the indices of mousePressed and first mouseMoved
+    const firstMoveIdx = mouseEvents.findIndex(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).type === "mouseMoved",
+    );
+    const pressedIdx = mouseEvents.findIndex(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).type === "mousePressed",
+    );
+    expect(firstMoveIdx).toBeLessThan(pressedIdx);
+
+    vi.useRealTimers();
+  });
 });
