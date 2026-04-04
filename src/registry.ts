@@ -57,7 +57,7 @@ import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hook
 
 export class ToolRegistry {
   private _sessionId: string;
-  private _handlers = new Map<string, (params: Record<string, unknown>) => Promise<ToolResponse>>();
+  private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
@@ -113,7 +113,7 @@ export class ToolRegistry {
     return this._getConnectionStatus?.() ?? "connected";
   }
 
-  async executeTool(name: string, params: Record<string, unknown>): Promise<ToolResponse> {
+  async executeTool(name: string, params: Record<string, unknown>, sessionIdOverride?: string): Promise<ToolResponse> {
     const handler = this._handlers.get(name);
     if (!handler) {
       return {
@@ -136,7 +136,7 @@ export class ToolRegistry {
       }
       resolvedParams = this._sessionDefaults.resolveParams(name, params);
     }
-    const result = await handler(resolvedParams);
+    const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
@@ -538,9 +538,10 @@ export class ToolRegistry {
 
     this.server.tool(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), and suspend/resume for agent decisions mid-plan. Use resume: { planId, answer } to continue a suspended plan.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume, and parallel tab execution (Pro). Use parallel: [{ tab, steps }] for multi-tab workflows.",
       {
         steps: runPlanSchema.shape.steps,
+        parallel: runPlanSchema.shape.parallel,
         use_operator: runPlanSchema.shape.use_operator,
         resume: runPlanSchema.shape.resume,
       },
@@ -594,37 +595,48 @@ export class ToolRegistry {
 
     // Register tool handlers for executeTool dispatch
     // IMPORTANT: run_plan is NOT registered here to prevent recursive invocation
-    this._handlers.set("evaluate", async (params) => {
-      return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
+    // Story 7.6: All session-aware handlers accept sessionIdOverride for parallel tab execution.
+    // When sessionIdOverride is provided, it is used INSTEAD of this.sessionId.
+    // This avoids Race-Conditions when multiple tab groups run in parallel.
+    this._handlers.set("evaluate", async (params, sessionIdOverride?) => {
+      return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
-    this._handlers.set("navigate", async (params) => {
-      return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
+    this._handlers.set("navigate", async (params, sessionIdOverride?) => {
+      return navigateHandler(params as unknown as NavigateParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
-    this._handlers.set("read_page", async (params) => {
-      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
+    this._handlers.set("read_page", async (params, sessionIdOverride?) => {
+      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
-    this._handlers.set("screenshot", async (params) => {
-      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+    this._handlers.set("screenshot", async (params, sessionIdOverride?) => {
+      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
-    this._handlers.set("wait_for", async (params) => {
-      return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
+    this._handlers.set("wait_for", async (params, sessionIdOverride?) => {
+      return waitForHandler(params as unknown as WaitForParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
-    this._handlers.set("click", async (params) => {
-      return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
+    this._handlers.set("click", async (params, sessionIdOverride?) => {
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
     });
-    this._handlers.set("type", async (params) => {
-      return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
+    this._handlers.set("type", async (params, sessionIdOverride?) => {
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
     });
-    this._handlers.set("tab_status", async (params) => {
+    this._handlers.set("tab_status", async (params, sessionIdOverride?) => {
       return tabStatusHandler(
         params as unknown as TabStatusParams,
         this.cdpClient,
-        this.sessionId,
+        sessionIdOverride ?? this.sessionId,
         this._tabStateCache,
         this.connectionStatus,
       );
     });
-    this._handlers.set("switch_tab", async (params) => {
+    this._handlers.set("switch_tab", async (params, sessionIdOverride?) => {
+      // H3 fix: switch_tab in parallel context would mutate the global session — block it
+      if (sessionIdOverride) {
+        return {
+          content: [{ type: "text", text: "switch_tab ist in parallelen Plan-Gruppen nicht erlaubt — jede Gruppe operiert auf ihrem eigenen Tab" }],
+          isError: true,
+          _meta: { elapsedMs: 0, method: "switch_tab" },
+        };
+      }
       return switchTabHandler(
         params as unknown as SwitchTabParams,
         this.cdpClient,
@@ -636,36 +648,45 @@ export class ToolRegistry {
         this._sessionManager,
       );
     });
-    this._handlers.set("virtual_desk", async (params) => {
+    this._handlers.set("virtual_desk", async (params, sessionIdOverride?) => {
       return virtualDeskHandler(
         params as unknown as VirtualDeskParams,
         this.cdpClient,
-        this.sessionId,
+        sessionIdOverride ?? this.sessionId,
         this._tabStateCache,
         this.connectionStatus,
       );
     });
-    this._handlers.set("dom_snapshot", this.wrapWithGate("dom_snapshot", async (params) => {
-      return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-    }, finalHooks));
+    this._handlers.set("dom_snapshot", async (params, sessionIdOverride?) => {
+      // C1 fix: dom_snapshot must use sessionIdOverride for parallel tab execution
+      const gate = finalHooks.featureGate?.("dom_snapshot");
+      if (gate && !gate.allowed) {
+        if (gate.message) {
+          return { content: [{ type: "text", text: gate.message }], isError: true, _meta: { elapsedMs: 0, method: "dom_snapshot" } };
+        }
+        return proFeatureError("dom_snapshot");
+      }
+      return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+    });
     if (this._dialogHandler) {
-      this._handlers.set("handle_dialog", async (params) => {
+      this._handlers.set("handle_dialog", async (params, _sessionIdOverride?) => {
+        // C2 fix: accept sessionIdOverride for parallel-context compatibility
         return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
       });
     }
-    this._handlers.set("file_upload", async (params) => {
+    this._handlers.set("file_upload", async (params, sessionIdOverride?) => {
       return fileUploadHandler(
         params as unknown as FileUploadParams,
         this.cdpClient,
-        this.sessionId,
+        sessionIdOverride ?? this.sessionId,
         this._sessionManager,
       );
     });
-    this._handlers.set("fill_form", async (params) => {
+    this._handlers.set("fill_form", async (params, sessionIdOverride?) => {
       return fillFormHandler(
         params as unknown as FillFormParams,
         this.cdpClient,
-        this.sessionId,
+        sessionIdOverride ?? this.sessionId,
         this._sessionManager,
         humanTouch,
       );

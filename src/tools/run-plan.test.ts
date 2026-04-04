@@ -383,7 +383,7 @@ describe("runPlanHandler — Suspend/Resume (Story 6.5)", () => {
     expect(result).toBeDefined();
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("Entweder 'steps' oder 'resume' muss angegeben werden");
+    expect(text).toContain("Eines von 'steps', 'parallel' oder 'resume' muss angegeben werden");
   });
 
   it("returns error when resume has unknown planId", async () => {
@@ -486,7 +486,7 @@ describe("runPlanHandler — Suspend/Resume (Story 6.5)", () => {
 
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("Entweder 'steps' oder 'resume' angeben, nicht beides");
+    expect(text).toContain("Nur eines von 'steps', 'parallel' oder 'resume' angeben");
   });
 
   it("resume with use_operator:true routes through the Operator", async () => {
@@ -846,5 +846,139 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
     // Verify the operator received only 3 steps (truncated from 5)
     const stepsPassedToOperator = mockOperatorExecutePlan.mock.calls[0][0];
     expect(stepsPassedToOperator).toHaveLength(3);
+  });
+});
+
+// ===== Story 7.6: Parallel Tab Control =====
+
+describe("runPlanHandler — parallel (Story 7.6)", () => {
+  it("parallel and steps simultaneously returns error", async () => {
+    const registry = createMockRegistry(new Map());
+    const params: RunPlanParams = {
+      steps: [{ tool: "navigate", params: { url: "https://example.com" } }],
+      parallel: [{ tab: "tab-a", steps: [{ tool: "click", params: { ref: "e1" } }] }],
+    };
+
+    const result = await runPlanHandler(params, registry);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Nur eines von 'steps', 'parallel' oder 'resume' angeben");
+  });
+
+  it("parallel and resume simultaneously returns error", async () => {
+    const registry = createMockRegistry(new Map());
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "click", params: { ref: "e1" } }] }],
+      resume: { planId: "some-id", answer: "yes" },
+    };
+
+    const result = await runPlanHandler(params, registry);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Nur eines von 'steps', 'parallel' oder 'resume' angeben");
+  });
+
+  it("parallel without Pro license returns feature-gate error", async () => {
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(false);
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("parallel ist ein Pro-Feature");
+  });
+
+  it("parallel with use_operator returns unsupported error", async () => {
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate" }] }],
+      use_operator: true,
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("use_operator wird fuer parallele Ausfuehrung nicht unterstuetzt");
+  });
+
+  it("parallel with empty groups list returns error", async () => {
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const deps: RunPlanDeps = {
+      cdpClient: {} as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("parallel darf nicht leer sein");
+  });
+
+  it("parallel without deps returns error", async () => {
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate" }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, undefined, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("Parallel-Ausfuehrung benoetigt CDP-Verbindung");
+  });
+});
+
+describe("runPlanSchema — parallel (Story 7.6)", () => {
+  it("accepts parallel in schema", () => {
+    const result = runPlanSchema.safeParse({
+      parallel: [
+        { tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+        { tab: "tab-b", steps: [{ tool: "click", params: { ref: "e1" } }] },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects parallel with invalid group (missing tab)", () => {
+    const result = runPlanSchema.safeParse({
+      parallel: [
+        { steps: [{ tool: "navigate" }] },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects parallel with invalid group (missing steps)", () => {
+    const result = runPlanSchema.safeParse({
+      parallel: [
+        { tab: "tab-a" },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts parallel with vars and errorStrategy", () => {
+    const result = runPlanSchema.safeParse({
+      parallel: [
+        { tab: "tab-a", steps: [{ tool: "navigate", params: { url: "$url" } }] },
+      ],
+      vars: { url: "https://a.com" },
+      errorStrategy: "continue",
+    });
+    expect(result.success).toBe(true);
   });
 });

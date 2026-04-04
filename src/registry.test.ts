@@ -149,9 +149,10 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), and suspend/resume for agent decisions mid-plan. Use resume: { planId, answer } to continue a suspended plan.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume, and parallel tab execution (Pro). Use parallel: [{ tab, steps }] for multi-tab workflows.",
       expect.objectContaining({
         steps: expect.anything(),
+        parallel: expect.anything(),
         use_operator: expect.anything(),
         resume: expect.anything(),
       }),
@@ -903,5 +904,188 @@ describe("ToolRegistry", () => {
     // (We can't directly inspect call history, but we can verify by calling
     // getSuggestions — no suggestions expected after 1 call)
     expect(sessionDefaults.getSuggestions()).toEqual([]);
+  });
+
+  // --- Story 7.6: sessionIdOverride in executeTool ---
+
+  it("executeTool with sessionIdOverride passes override to handler", async () => {
+    const sendCalls: Array<{ method: string; sessionId?: string }> = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        sendCalls.push({ method, sessionId });
+        return { result: { type: "number", value: 42 } };
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    // Call with sessionIdOverride
+    const result = await registry.executeTool("evaluate", {
+      expression: "1+1",
+      await_promise: false,
+    }, "override-session");
+
+    expect(result).toBeDefined();
+    // The CDP send call should use the override session, not the global one
+    const evalCall = sendCalls.find((c) => c.method === "Runtime.evaluate");
+    expect(evalCall).toBeDefined();
+    expect(evalCall!.sessionId).toBe("override-session");
+  });
+
+  it("executeTool without override uses global session", async () => {
+    const sendCalls: Array<{ method: string; sessionId?: string }> = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        sendCalls.push({ method, sessionId });
+        return { result: { type: "number", value: 42 } };
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    // Call without override
+    await registry.executeTool("evaluate", {
+      expression: "1+1",
+      await_promise: false,
+    });
+
+    const evalCall = sendCalls.find((c) => c.method === "Runtime.evaluate");
+    expect(evalCall).toBeDefined();
+    expect(evalCall!.sessionId).toBe("global-session");
+  });
+
+  it("parallel executeTool calls with different overrides do not interfere", async () => {
+    const sessionIdLog: string[] = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        if (method === "Runtime.evaluate") {
+          sessionIdLog.push(sessionId ?? "none");
+          // Simulate async work
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        return { result: { type: "number", value: 42 } };
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    // Run two executeTool calls in parallel with different overrides
+    await Promise.all([
+      registry.executeTool("evaluate", { expression: "1", await_promise: false }, "session-A"),
+      registry.executeTool("evaluate", { expression: "2", await_promise: false }, "session-B"),
+    ]);
+
+    // Both sessions should appear without interference
+    expect(sessionIdLog).toContain("session-A");
+    expect(sessionIdLog).toContain("session-B");
+    expect(sessionIdLog).not.toContain("global-session");
+  });
+
+  // --- Story 7.6 Review Fixes: C1, C2, H3 ---
+
+  it("C1: dom_snapshot with sessionIdOverride uses the override (not the global session)", async () => {
+    // Reset hooks so the default featureGate is registered fresh based on the license
+    registerProHooks({});
+
+    const sendCalls: Array<{ method: string; sessionId?: string }> = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        sendCalls.push({ method, sessionId });
+        // Return a URL for Runtime.evaluate (a11y tree navigation detection)
+        if (method === "Runtime.evaluate") {
+          return { result: { value: "https://c1-test.com" } };
+        }
+        // Return empty snapshot for DOMSnapshot.captureSnapshot
+        if (method === "DOMSnapshot.captureSnapshot") {
+          return { documents: [], strings: [] };
+        }
+        // Return empty a11y tree
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [] };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Pro license to bypass the feature gate
+    const license: LicenseStatus = { isPro: () => true };
+
+    const registry = new ToolRegistry(
+      mockServer, mockCdpClient, "global-session", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("dom_snapshot", {}, "tab-session-override");
+
+    // Verify we were not blocked by a feature gate
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("Pro-Feature");
+
+    // The DOMSnapshot.captureSnapshot call should use the override session
+    const snapshotCall = sendCalls.find((c) => c.method === "DOMSnapshot.captureSnapshot");
+    expect(snapshotCall).toBeDefined();
+    expect(snapshotCall!.sessionId).toBe("tab-session-override");
+  });
+
+  it("C2: handle_dialog with sessionIdOverride accepts the override parameter", async () => {
+    const mockDialogHandler = {
+      consumeNotifications: vi.fn().mockReturnValue([]),
+      pushHandler: vi.fn(),
+      popHandler: vi.fn(),
+      pendingCount: 0,
+      init: vi.fn(),
+      detach: vi.fn(),
+      reinit: vi.fn(),
+      getStatus: vi.fn().mockReturnValue({ mode: "auto", queue: [] }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(
+      mockServer,
+      {} as never,
+      "global-session",
+      {} as never,
+      undefined,
+      undefined,
+      mockDialogHandler,
+    );
+    registry.registerAll();
+
+    // handle_dialog should execute without error when sessionIdOverride is provided
+    const result = await registry.executeTool("handle_dialog", { action: "get_status" }, "tab-session-override");
+
+    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("No dialogs"));
+  });
+
+  it("H3: switch_tab in parallel context (sessionIdOverride set) is blocked", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({}),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    // switch_tab with sessionIdOverride should be blocked
+    const result = await registry.executeTool("switch_tab", { action: "list" }, "tab-session-override");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("parallelen Plan-Gruppen nicht erlaubt"));
   });
 });

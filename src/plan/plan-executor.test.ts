@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { executePlan } from "./plan-executor.js";
-import type { PlanStep, PlanOptions, SuspendedPlanResponse } from "./plan-executor.js";
+import { executePlan, executeParallel, createSemaphore } from "./plan-executor.js";
+import type { PlanStep, PlanOptions, SuspendedPlanResponse, ParallelGroup } from "./plan-executor.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
 import { PlanStateStore } from "./plan-state-store.js";
@@ -1134,3 +1134,305 @@ describe("executePlan — Suspend Edge Cases (Story 6.5)", () => {
   });
 });
 
+// ===== Story 7.6 Tests: Multi-Tab Parallel Control =====
+
+function createParallelRegistryFactory(
+  toolResponses: Map<string, ToolResponse>,
+): (tabTargetId: string) => Promise<{ executeTool: (name: string, params: Record<string, unknown>) => Promise<ToolResponse> }> {
+  return async (_tabTargetId: string) => ({
+    executeTool: async (name: string, _params: Record<string, unknown>) => {
+      const response = toolResponses.get(name);
+      if (!response) {
+        return {
+          content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+          isError: true,
+          _meta: { elapsedMs: 0, method: name },
+        };
+      }
+      return response;
+    },
+  });
+}
+
+describe("executeParallel (Story 7.6)", () => {
+  it("executes two tab groups in parallel and returns results per tab", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+    responses.set("click", okResponse("click", "Clicked"));
+
+    const factory = createParallelRegistryFactory(responses);
+    const groups: ParallelGroup[] = [
+      { tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+      { tab: "tab-b", steps: [{ tool: "click", params: { ref: "e1" } }] },
+    ];
+
+    const result = await executeParallel(groups, factory);
+
+    expect(result.isError).toBeFalsy();
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.parallel).toBe(true);
+    expect(result._meta!.tabGroups).toBe(2);
+    expect(result._meta!.stepsTotal).toBe(2);
+    expect(result._meta!.stepsCompleted).toBe(2);
+
+    // Response should contain tab headers
+    const textBlocks = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text);
+    expect(textBlocks.some((t) => t.includes("Tab tab-a"))).toBe(true);
+    expect(textBlocks.some((t) => t.includes("Tab tab-b"))).toBe(true);
+  });
+
+  it("error in one group aborts only that group (errorStrategy: abort)", async () => {
+    const callLog: string[] = [];
+    const factory = async (_tabId: string) => ({
+      executeTool: async (name: string, _params: Record<string, unknown>): Promise<ToolResponse> => {
+        callLog.push(`${_tabId}:${name}`);
+        if (_tabId === "tab-fail" && name === "click") {
+          return errorResponse("click", "Element not found");
+        }
+        return okResponse(name, `${name} done`);
+      },
+    });
+
+    const groups: ParallelGroup[] = [
+      { tab: "tab-fail", steps: [
+        { tool: "navigate", params: { url: "https://fail.com" } },
+        { tool: "click", params: { ref: "e99" } },
+        { tool: "screenshot" }, // should not be reached due to abort
+      ] },
+      { tab: "tab-ok", steps: [
+        { tool: "navigate", params: { url: "https://ok.com" } },
+        { tool: "click", params: { ref: "e1" } },
+      ] },
+    ];
+
+    const result = await executeParallel(groups, factory);
+
+    // Overall result should NOT be isError because tab-ok succeeded
+    expect(result.isError).toBeFalsy();
+    // tab-ok should have completed both steps
+    const textBlocks = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text);
+    expect(textBlocks.some((t) => t.includes("Tab tab-ok"))).toBe(true);
+    expect(textBlocks.some((t) => t.includes("Tab tab-fail"))).toBe(true);
+    // tab-fail should have an error indicator
+    expect(textBlocks.some((t) => t.includes("error") && t.includes("tab-fail"))).toBe(true);
+  });
+
+  it("errorStrategy continue runs all steps in all groups despite errors", async () => {
+    const callLog: string[] = [];
+    const factory = async (tabId: string) => ({
+      executeTool: async (name: string, _params: Record<string, unknown>): Promise<ToolResponse> => {
+        callLog.push(`${tabId}:${name}`);
+        if (tabId === "tab-errors" && name === "click") {
+          return errorResponse("click", "Not found");
+        }
+        return okResponse(name, `${name} done`);
+      },
+    });
+
+    const groups: ParallelGroup[] = [
+      { tab: "tab-errors", steps: [
+        { tool: "navigate", params: { url: "https://a.com" } },
+        { tool: "click", params: { ref: "e99" } },
+        { tool: "screenshot" },
+      ] },
+    ];
+
+    const result = await executeParallel(groups, factory, { errorStrategy: "continue" });
+
+    // With continue, all 3 steps should have been called
+    const tabCalls = callLog.filter((c) => c.startsWith("tab-errors:"));
+    expect(tabCalls).toHaveLength(3);
+    // Should not be fully errored since navigate and screenshot succeeded
+    expect(result.isError).toBeFalsy();
+  });
+
+  it("concurrency limit: 6 groups with limit 5 queues the 6th", async () => {
+    let maxConcurrent = 0;
+    let currentConcurrent = 0;
+
+    const factory = async (_tabId: string) => ({
+      executeTool: async (name: string, _params: Record<string, unknown>): Promise<ToolResponse> => {
+        currentConcurrent++;
+        if (currentConcurrent > maxConcurrent) {
+          maxConcurrent = currentConcurrent;
+        }
+        // Simulate async work
+        await new Promise((r) => setTimeout(r, 10));
+        currentConcurrent--;
+        return okResponse(name, `${name} done`);
+      },
+    });
+
+    const groups: ParallelGroup[] = Array.from({ length: 6 }, (_, i) => ({
+      tab: `tab-${i}`,
+      steps: [{ tool: "evaluate", params: { expression: `${i}` } }],
+    }));
+
+    const result = await executeParallel(groups, factory, { concurrencyLimit: 5 });
+
+    // Max concurrent should never exceed 5
+    expect(maxConcurrent).toBeLessThanOrEqual(5);
+    // All 6 groups should have completed
+    expect(result._meta!.tabGroups).toBe(6);
+    expect(result._meta!.stepsTotal).toBe(6);
+    expect(result._meta!.stepsCompleted).toBe(6);
+  });
+
+  it("empty groups list returns empty result", async () => {
+    const factory = async () => ({
+      executeTool: async (): Promise<ToolResponse> => okResponse("x", "x"),
+    });
+
+    const result = await executeParallel([], factory);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toHaveLength(0);
+    expect(result._meta!.parallel).toBe(true);
+    expect(result._meta!.tabGroups).toBe(0);
+    expect(result._meta!.stepsTotal).toBe(0);
+  });
+
+  it("group with no steps is skipped", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", okResponse("navigate", "Navigated"));
+
+    const factory = createParallelRegistryFactory(responses);
+    const groups: ParallelGroup[] = [
+      { tab: "tab-empty", steps: [] },
+      { tab: "tab-ok", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+    ];
+
+    const result = await executeParallel(groups, factory);
+
+    expect(result._meta!.tabGroups).toBe(2);
+    // tab-ok has 1 step, tab-empty has 0
+    expect(result._meta!.stepsTotal).toBe(1);
+    expect(result._meta!.stepsCompleted).toBe(1);
+  });
+
+  it("variables are isolated per group", async () => {
+    const callLogs: Record<string, Array<{ name: string; params: Record<string, unknown> }>> = {
+      "tab-a": [],
+      "tab-b": [],
+    };
+
+    const factory = async (tabId: string) => {
+      let callCount = 0;
+      return {
+        executeTool: async (name: string, params: Record<string, unknown>): Promise<ToolResponse> => {
+          callLogs[tabId]?.push({ name, params });
+          callCount++;
+          if (name === "evaluate") {
+            return {
+              content: [{ type: "text" as const, text: `result-${tabId}` }],
+              _meta: { elapsedMs: 1, method: name },
+            };
+          }
+          return okResponse(name, `${name} done`);
+        },
+      };
+    };
+
+    const groups: ParallelGroup[] = [
+      { tab: "tab-a", steps: [
+        { tool: "evaluate", params: { expression: "1" }, saveAs: "val" },
+        { tool: "navigate", params: { url: "$val" } },
+      ] },
+      { tab: "tab-b", steps: [
+        { tool: "evaluate", params: { expression: "2" }, saveAs: "val" },
+        { tool: "navigate", params: { url: "$val" } },
+      ] },
+    ];
+
+    await executeParallel(groups, factory);
+
+    // tab-a's navigate should use tab-a's val
+    expect(callLogs["tab-a"][1].params).toEqual({ url: "result-tab-a" });
+    // tab-b's navigate should use tab-b's val
+    expect(callLogs["tab-b"][1].params).toEqual({ url: "result-tab-b" });
+  });
+
+  it("exception in registryFactory is caught and reported", async () => {
+    const factory = async (tabId: string) => {
+      if (tabId === "tab-broken") {
+        throw new Error("CDP connection failed");
+      }
+      return {
+        executeTool: async (name: string): Promise<ToolResponse> => okResponse(name, "ok"),
+      };
+    };
+
+    const groups: ParallelGroup[] = [
+      { tab: "tab-broken", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+      { tab: "tab-ok", steps: [{ tool: "navigate", params: { url: "https://b.com" } }] },
+    ];
+
+    const result = await executeParallel(groups, factory);
+
+    // Overall should not be isError since tab-ok succeeded
+    expect(result.isError).toBeFalsy();
+    const textBlocks = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text);
+    expect(textBlocks.some((t) => t.includes("tab-broken") && t.includes("CDP connection failed"))).toBe(true);
+  });
+
+  it("all groups failing sets isError to true", async () => {
+    const factory = async () => ({
+      executeTool: async (name: string): Promise<ToolResponse> => errorResponse(name, "Failed"),
+    });
+
+    const groups: ParallelGroup[] = [
+      { tab: "tab-a", steps: [{ tool: "click", params: { ref: "e1" } }] },
+      { tab: "tab-b", steps: [{ tool: "click", params: { ref: "e2" } }] },
+    ];
+
+    const result = await executeParallel(groups, factory);
+
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("createSemaphore (Story 7.6)", () => {
+  it("allows up to limit concurrent acquisitions", async () => {
+    const sem = createSemaphore(2);
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    const tasks = Array.from({ length: 5 }, () => async () => {
+      await sem.acquire();
+      concurrent++;
+      if (concurrent > maxConcurrent) maxConcurrent = concurrent;
+      await new Promise((r) => setTimeout(r, 10));
+      concurrent--;
+      sem.release();
+    });
+
+    await Promise.all(tasks.map((t) => t()));
+
+    expect(maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it("queues acquisitions beyond the limit", async () => {
+    const sem = createSemaphore(1);
+    const order: number[] = [];
+
+    const task = (id: number) => async () => {
+      await sem.acquire();
+      order.push(id);
+      await new Promise((r) => setTimeout(r, 5));
+      sem.release();
+    };
+
+    await Promise.all([task(1)(), task(2)(), task(3)()]);
+
+    // All 3 tasks should complete
+    expect(order).toHaveLength(3);
+    // First task should start first
+    expect(order[0]).toBe(1);
+  });
+});

@@ -5,8 +5,8 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { MicroLlmProvider, OperatorPlanResult } from "../operator/types.js";
 import type { CaptainProvider } from "../operator/captain.js";
-import { executePlan } from "../plan/plan-executor.js";
-import type { PlanStep, PlanOptions, SuspendedPlanResponse, PlanExecutionResult } from "../plan/plan-executor.js";
+import { executePlan, executeParallel } from "../plan/plan-executor.js";
+import type { PlanStep, PlanOptions, SuspendedPlanResponse, PlanExecutionResult, ParallelGroup } from "../plan/plan-executor.js";
 import type { PlanStateStore } from "../plan/plan-state-store.js";
 import { Operator } from "../operator/operator.js";
 import { RuleEngine } from "../operator/rule-engine.js";
@@ -14,6 +14,7 @@ import type { LicenseStatus } from "../license/license-status.js";
 import type { FreeTierConfig } from "../license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "../license/license-status.js";
 import { DEFAULT_FREE_TIER_CONFIG } from "../license/free-tier-config.js";
+import { createTabScopedRegistry } from "../plan/tab-scoped-registry.js";
 
 const suspendSchema = z.object({
   question: z.string().optional().describe("Question to ask the agent when suspending"),
@@ -34,11 +35,21 @@ const resumeSchema = z.object({
   answer: z.string().describe("Agent's answer to the suspend question"),
 });
 
+// Story 7.6: Schema for parallel tab groups
+const parallelGroupSchema = z.object({
+  tab: z.string().describe("Tab ID (targetId) to execute steps on"),
+  steps: z.array(stepSchema).describe("Steps to execute on this tab"),
+});
+
 export const runPlanSchema = z.object({
   steps: z
     .array(stepSchema)
     .optional()
     .describe("Array of tool steps to execute sequentially."),
+  parallel: z
+    .array(parallelGroupSchema)
+    .optional()
+    .describe("Array of tab groups to execute in parallel. Pro-Feature."),
   vars: z
     .record(z.unknown())
     .optional()
@@ -75,18 +86,28 @@ export async function runPlanHandler(
   license?: LicenseStatus,
   freeTierConfig?: FreeTierConfig,
 ): Promise<ToolResponse | SuspendedPlanResponse> {
-  // --- Validation: steps and resume are mutually exclusive ---
-  if (params.steps && params.resume) {
+  // --- Validation: steps, parallel, and resume are mutually exclusive ---
+  const modeCount = [params.steps, params.parallel, params.resume].filter(Boolean).length;
+  if (modeCount > 1) {
     return {
-      content: [{ type: "text", text: "Entweder 'steps' oder 'resume' angeben, nicht beides" }],
+      content: [{ type: "text", text: "Nur eines von 'steps', 'parallel' oder 'resume' angeben" }],
       isError: true,
       _meta: { elapsedMs: 0, method: "run_plan" },
     };
   }
 
-  if (!params.steps && !params.resume) {
+  if (modeCount === 0) {
     return {
-      content: [{ type: "text", text: "Entweder 'steps' oder 'resume' muss angegeben werden" }],
+      content: [{ type: "text", text: "Eines von 'steps', 'parallel' oder 'resume' muss angegeben werden" }],
+      isError: true,
+      _meta: { elapsedMs: 0, method: "run_plan" },
+    };
+  }
+
+  // Story 7.6: parallel + use_operator is not supported
+  if (params.parallel && params.use_operator) {
+    return {
+      content: [{ type: "text", text: "use_operator wird fuer parallele Ausfuehrung nicht unterstuetzt" }],
       isError: true,
       _meta: { elapsedMs: 0, method: "run_plan" },
     };
@@ -96,6 +117,44 @@ export async function runPlanHandler(
   const resolvedLicense = license ?? new FreeTierLicenseStatus();
   const resolvedConfig = freeTierConfig ?? DEFAULT_FREE_TIER_CONFIG;
   const stepLimit = resolvedLicense.isPro() ? undefined : resolvedConfig.runPlanLimit;
+
+  // --- Story 7.6: Parallel path ---
+  if (params.parallel) {
+    // Pro-Feature-Gate: parallel requires Pro license
+    if (!resolvedLicense.isPro()) {
+      return {
+        content: [{ type: "text", text: "parallel ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'" }],
+        isError: true,
+        _meta: { elapsedMs: 0, method: "run_plan" },
+      };
+    }
+
+    if (params.parallel.length === 0) {
+      return {
+        content: [{ type: "text", text: "parallel darf nicht leer sein" }],
+        isError: true,
+        _meta: { elapsedMs: 0, method: "run_plan" },
+      };
+    }
+
+    if (!deps) {
+      return {
+        content: [{ type: "text", text: "Parallel-Ausfuehrung benoetigt CDP-Verbindung" }],
+        isError: true,
+        _meta: { elapsedMs: 0, method: "run_plan" },
+      };
+    }
+
+    const registryFactory = async (tabTargetId: string) => {
+      return createTabScopedRegistry(registry, deps.cdpClient, tabTargetId);
+    };
+
+    return executeParallel(params.parallel as ParallelGroup[], registryFactory, {
+      vars: params.vars,
+      errorStrategy: params.errorStrategy,
+      concurrencyLimit: 5,
+    });
+  }
 
   // --- Resume path ---
   if (params.resume) {

@@ -97,13 +97,13 @@ development_status:
   epic-6-retrospective: optional
 
   # Epic 7: Observability & Session Intelligence (Phase 2)
-  epic-7: in-progress
+  epic-7: done
   7-1-console-logs-tool: done
   7-2-network-monitor-tool: done
   7-3-session-defaults-auto-promote: done
   7-4-precomputed-a11y-tree: done
   7-5-selector-caching-dom-fingerprinting: done
-  7-6-multi-tab-parallel-control: ready-for-dev
+  7-6-multi-tab-parallel-control: done
   epic-7-retrospective: optional
 
   # Epic 8: Operator Architecture & Human Touch (Phase 3)

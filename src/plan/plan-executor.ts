@@ -4,6 +4,7 @@ import type { VarsMap } from "./plan-variables.js";
 import { substituteVars, extractResultValue } from "./plan-variables.js";
 import { evaluateCondition } from "./plan-conditions.js";
 import type { PlanStateStore } from "./plan-state-store.js";
+import { debug } from "../cdp/debug.js";
 
 export type ErrorStrategy = "abort" | "continue" | "screenshot";
 
@@ -340,6 +341,236 @@ function buildPlanResponse(
       method: "run_plan",
       stepsTotal,
       stepsCompleted: okCount,
+    },
+  };
+}
+
+// ===== Story 7.6: Multi-Tab Parallel Control =====
+
+export interface ParallelGroup {
+  tab: string;          // Tab-ID (targetId)
+  steps: PlanStep[];    // Steps fuer diesen Tab
+}
+
+export interface ParallelOptions {
+  vars?: VarsMap;
+  errorStrategy?: ErrorStrategy;
+  concurrencyLimit?: number;  // Default: 5
+}
+
+export interface ParallelGroupResult {
+  tab: string;
+  response: ToolResponse;
+  stepsCount: number;
+  aborted: boolean;
+  error?: string;
+}
+
+/**
+ * Simple semaphore for concurrency limiting. No external package needed.
+ */
+export function createSemaphore(limit: number) {
+  let running = 0;
+  const queue: Array<() => void> = [];
+  return {
+    async acquire(): Promise<void> {
+      if (running < limit) { running++; return; }
+      return new Promise<void>((resolve) => queue.push(() => { running++; resolve(); }));
+    },
+    release(): void {
+      running--;
+      const next = queue.shift();
+      if (next) next();
+    },
+  };
+}
+
+/**
+ * Story 7.6: Execute multiple tab-groups in parallel.
+ * Each group runs its steps on a separate CDP session via the registryFactory.
+ * Error isolation: a failure in one group does NOT abort other groups.
+ * Returns a ToolResponse ready for MCP transport.
+ */
+export async function executeParallel(
+  groups: ParallelGroup[],
+  registryFactory: (tabTargetId: string) => Promise<{ executeTool: (name: string, params: Record<string, unknown>) => Promise<ToolResponse> }>,
+  options?: ParallelOptions,
+): Promise<ToolResponse> {
+  const start = performance.now();
+  const limit = options?.concurrencyLimit ?? 5;
+  const errorStrategy: ErrorStrategy = options?.errorStrategy ?? "abort";
+  const vars: VarsMap = options?.vars ?? {};
+
+  debug("executeParallel: starting %d groups (limit=%d)", groups.length, limit);
+
+  if (groups.length === 0) {
+    return {
+      content: [],
+      _meta: {
+        elapsedMs: 0,
+        method: "run_plan",
+        parallel: true,
+        tabGroups: 0,
+        stepsTotal: 0,
+        stepsCompleted: 0,
+      },
+    };
+  }
+
+  const semaphore = createSemaphore(limit);
+
+  const settled = await Promise.allSettled(
+    groups.map(async (group): Promise<ParallelGroupResult> => {
+      await semaphore.acquire();
+      try {
+        debug("executeParallel: group tab=%s started", group.tab);
+
+        if (group.steps.length === 0) {
+          debug("executeParallel: group tab=%s has no steps, skipping", group.tab);
+          return {
+            tab: group.tab,
+            response: { content: [], _meta: { elapsedMs: 0, method: "run_plan" } },
+            stepsCount: 0,
+            aborted: false,
+          };
+        }
+
+        // Create a tab-scoped registry via the factory
+        const tabRegistry = await registryFactory(group.tab);
+
+        // Execute the group's steps sequentially using executePlan
+        // Each group gets its own COPY of vars for isolation
+        const planResult = await executePlan(
+          group.steps,
+          tabRegistry as unknown as ToolRegistry,
+          { vars: { ...vars }, errorStrategy },
+        );
+
+        // executePlan returns ToolResponse or SuspendedPlanResponse
+        // For parallel, suspend is not supported (Phase 1 limitation)
+        if ("status" in planResult && (planResult as SuspendedPlanResponse).status === "suspended") {
+          debug("executeParallel: group tab=%s encountered suspend — not supported in parallel", group.tab);
+          const suspended = planResult as SuspendedPlanResponse;
+          return {
+            tab: group.tab,
+            response: {
+              content: [{ type: "text", text: "suspend is not supported in parallel groups" }],
+              isError: true,
+              _meta: suspended._meta ?? { elapsedMs: 0, method: "run_plan" },
+            },
+            stepsCount: group.steps.length,
+            aborted: true,
+            error: "suspend is not supported in parallel groups",
+          };
+        }
+
+        const toolResponse = planResult as ToolResponse;
+        const aborted = toolResponse.isError === true;
+
+        debug("executeParallel: group tab=%s completed (%d steps)", group.tab, group.steps.length);
+
+        return {
+          tab: group.tab,
+          response: toolResponse,
+          stepsCount: group.steps.length,
+          aborted,
+          error: aborted ? "Group aborted due to step failure" : undefined,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        debug("executeParallel: group tab=%s failed: %s", group.tab, message);
+        return {
+          tab: group.tab,
+          response: {
+            content: [{ type: "text", text: `Exception: ${message}` }],
+            isError: true,
+            _meta: { elapsedMs: 0, method: "run_plan" },
+          },
+          stepsCount: group.steps.length,
+          aborted: true,
+          error: message,
+        };
+      } finally {
+        semaphore.release();
+      }
+    }),
+  );
+
+  // Collect results from allSettled
+  const groupResults: ParallelGroupResult[] = [];
+  for (const outcome of settled) {
+    if (outcome.status === "fulfilled") {
+      groupResults.push(outcome.value);
+    } else {
+      // Shouldn't happen since we catch inside, but be safe
+      groupResults.push({
+        tab: "unknown",
+        response: {
+          content: [{ type: "text", text: `Unexpected rejection: ${outcome.reason}` }],
+          isError: true,
+          _meta: { elapsedMs: 0, method: "run_plan" },
+        },
+        stepsCount: 0,
+        aborted: true,
+        error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+      });
+    }
+  }
+
+  const elapsedMs = Math.round(performance.now() - start);
+  debug("executeParallel: all groups completed in %dms", elapsedMs);
+
+  return buildParallelResponse(groupResults, elapsedMs);
+}
+
+/**
+ * Story 7.6: Build a ToolResponse from parallel group results.
+ * Each group's executePlan response is prefixed with a tab header.
+ */
+export function buildParallelResponse(
+  groupResults: ParallelGroupResult[],
+  elapsedMs: number,
+): ToolResponse {
+  const contentBlocks: ToolContentBlock[] = [];
+
+  for (const group of groupResults) {
+    contentBlocks.push({
+      type: "text",
+      text: `--- Tab ${group.tab} ---`,
+    });
+    // Include all content blocks from the group's executePlan response
+    for (const block of group.response.content) {
+      if (block.type === "text") {
+        contentBlocks.push({ type: "text", text: `  ${block.text}` });
+      } else {
+        contentBlocks.push(block);
+      }
+    }
+    if (group.error) {
+      contentBlocks.push({ type: "text", text: `  Tab ${group.tab}: error — ${group.error}` });
+    }
+  }
+
+  const totalSteps = groupResults.reduce(
+    (sum, g) => sum + (Number(g.response._meta?.stepsTotal) || g.stepsCount),
+    0,
+  );
+  const okSteps = groupResults.reduce(
+    (sum, g) => sum + (Number(g.response._meta?.stepsCompleted) || 0),
+    0,
+  );
+  const failedGroups = groupResults.filter((g) => g.aborted || g.error).length;
+
+  return {
+    content: contentBlocks,
+    isError: failedGroups === groupResults.length && groupResults.length > 0 ? true : undefined,
+    _meta: {
+      elapsedMs,
+      method: "run_plan",
+      parallel: true,
+      tabGroups: groupResults.length,
+      stepsTotal: totalSteps,
+      stepsCompleted: okSteps,
     },
   };
 }
