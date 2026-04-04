@@ -27,6 +27,7 @@ import { runPlanSchema, runPlanHandler } from "./tools/run-plan.js";
 import type { RunPlanParams } from "./tools/run-plan.js";
 import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
 import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
+import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -234,14 +235,23 @@ export class ToolRegistry {
       },
     );
 
+    // C1: Create Micro-LLM provider from environment for Operator mode
+    const microLlm = createMicroLlmFromEnv();
+
     this.server.tool(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results.",
+      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results. Set use_operator=true for adaptive error recovery.",
       {
         steps: runPlanSchema.shape.steps,
+        use_operator: runPlanSchema.shape.use_operator,
       },
       async (params) => {
-        return runPlanHandler(params as unknown as RunPlanParams, this);
+        return runPlanHandler(params as unknown as RunPlanParams, this, {
+          cdpClient: this.cdpClient,
+          sessionId: this._sessionId,
+          microLlm,
+          sessionManager: this._sessionManager,
+        });
       },
     );
 

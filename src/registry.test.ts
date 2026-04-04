@@ -122,8 +122,11 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results.",
-      { steps: expect.anything() },
+      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results. Set use_operator=true for adaptive error recovery.",
+      expect.objectContaining({
+        steps: expect.anything(),
+        use_operator: expect.anything(),
+      }),
       expect.any(Function),
     );
   });
