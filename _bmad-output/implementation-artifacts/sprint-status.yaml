@@ -88,12 +88,12 @@ development_status:
   epic-5b-retrospective: optional
 
   # Epic 6: Extended Workflow Capabilities (Phase 2)
-  epic-6: in-progress
+  epic-6: done
   6-1-dialog-handling: done
   6-2-file-upload: done
   6-3-komplexe-formulare: done
   6-4-erweiterter-run-plan: done
-  6-5-suspend-resume-fuer-run-plan: ready-for-dev
+  6-5-suspend-resume-fuer-run-plan: done
   epic-6-retrospective: optional
 
   # Epic 7: Observability & Session Intelligence (Phase 2)

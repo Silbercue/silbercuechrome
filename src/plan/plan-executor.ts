@@ -1,16 +1,27 @@
 import type { ToolRegistry } from "../registry.js";
-import type { ToolResponse, ToolContentBlock } from "../types.js";
+import type { ToolResponse, ToolContentBlock, ToolMeta } from "../types.js";
 import type { VarsMap } from "./plan-variables.js";
 import { substituteVars, extractResultValue } from "./plan-variables.js";
 import { evaluateCondition } from "./plan-conditions.js";
+import type { PlanStateStore } from "./plan-state-store.js";
 
 export type ErrorStrategy = "abort" | "continue" | "screenshot";
+
+export interface SuspendConfig {
+  /** Frage an den Agent */
+  question?: string;
+  /** Context-Typ: "screenshot" erzeugt automatisch einen Screenshot */
+  context?: "screenshot";
+  /** Bedingung: Plan pausiert NACH Step-Ausfuehrung wenn Bedingung true */
+  condition?: string;
+}
 
 export interface PlanStep {
   tool: string;
   params?: Record<string, unknown>;
   saveAs?: string;
   if?: string;
+  suspend?: SuspendConfig;
 }
 
 export interface StepResult {
@@ -24,19 +35,53 @@ export interface StepResult {
 export interface PlanOptions {
   vars?: VarsMap;
   errorStrategy?: ErrorStrategy;
+  /** Fuer Resume: der gespeicherte Plan-State */
+  resumeState?: {
+    suspendedAtIndex: number;
+    completedResults: StepResult[];
+    vars: VarsMap;
+    answer: string;
+  };
 }
+
+export interface SuspendedPlanResponse {
+  status: "suspended";
+  planId: string;
+  question: string;
+  completedSteps: StepResult[];
+  screenshot?: string;
+  _meta?: ToolMeta;
+}
+
+/** executePlan kann jetzt entweder ToolResponse oder SuspendedPlanResponse zurueckgeben */
+export type PlanExecutionResult = ToolResponse | SuspendedPlanResponse;
+
+const DEFAULT_SUSPEND_QUESTION = "Plan pausiert -- Bedingung erfuellt. Wie fortfahren?";
 
 export async function executePlan(
   steps: PlanStep[],
   registry: ToolRegistry,
   options?: PlanOptions,
-): Promise<ToolResponse> {
+  stateStore?: PlanStateStore,
+): Promise<PlanExecutionResult> {
   const start = performance.now();
-  const results: StepResult[] = [];
+  let results: StepResult[] = [];
   const vars: VarsMap = { ...(options?.vars ?? {}) };
   const errorStrategy: ErrorStrategy = options?.errorStrategy ?? "abort";
+  let startIndex = 0;
+  let isResumeFirstStep = false;
 
-  for (let i = 0; i < steps.length; i++) {
+  // --- Resume: restore state from previous suspend ---
+  if (options?.resumeState) {
+    const rs = options.resumeState;
+    Object.assign(vars, rs.vars);
+    vars["answer"] = rs.answer;
+    results = [...rs.completedResults];
+    startIndex = rs.suspendedAtIndex;
+    isResumeFirstStep = true;
+  }
+
+  for (let i = startIndex; i < steps.length; i++) {
     const step = steps[i];
 
     // --- Conditional: evaluate if clause ---
@@ -56,6 +101,54 @@ export async function executePlan(
         continue;
       }
     }
+
+    // --- Pre-Suspend (without condition): pause BEFORE step execution ---
+    // Skip pre-suspend on the first step of a resume (agent already answered)
+    if (step.suspend && !step.suspend.condition && !isResumeFirstStep) {
+      if (!stateStore) {
+        console.warn("[plan-executor] suspend config on step but no stateStore provided — ignoring suspend");
+      } else {
+        const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
+        let screenshot: string | undefined;
+        if (step.suspend.context === "screenshot") {
+          try {
+            const ssResult = await registry.executeTool("screenshot", {});
+            if (!ssResult.isError) {
+              for (const block of ssResult.content) {
+                if (block.type === "image") {
+                  screenshot = (block as { type: "image"; data: string }).data;
+                  break;
+                }
+              }
+            }
+          } catch {
+            // Screenshot is best-effort
+          }
+        }
+        const planId = stateStore.suspend({
+          steps,
+          suspendedAtIndex: i,
+          vars: { ...vars },
+          errorStrategy,
+          completedResults: [...results],
+          question,
+        });
+        return {
+          status: "suspended",
+          planId,
+          question,
+          completedSteps: [...results],
+          screenshot,
+          _meta: {
+            elapsedMs: Math.round(performance.now() - start),
+            method: "run_plan",
+          },
+        } satisfies SuspendedPlanResponse;
+      }
+    }
+
+    // Reset resume-first-step flag after pre-suspend check
+    isResumeFirstStep = false;
 
     // --- Variable substitution ---
     const resolvedParams = step.params
@@ -81,6 +174,53 @@ export async function executePlan(
     }
 
     results.push({ step: i + 1, tool: step.tool, result: stepResult });
+
+    // --- Post-Suspend (with condition): pause AFTER step execution if condition is true ---
+    if (step.suspend?.condition && !stepResult.isError) {
+      const suspendConditionResult = evaluateCondition(step.suspend.condition, vars);
+      if (suspendConditionResult) {
+        if (!stateStore) {
+          console.warn("[plan-executor] suspend condition met but no stateStore provided — ignoring suspend");
+        } else {
+          const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
+          let screenshot: string | undefined;
+          if (step.suspend.context === "screenshot") {
+            try {
+              const ssResult = await registry.executeTool("screenshot", {});
+              if (!ssResult.isError) {
+                for (const block of ssResult.content) {
+                  if (block.type === "image") {
+                    screenshot = (block as { type: "image"; data: string }).data;
+                    break;
+                  }
+                }
+              }
+            } catch {
+              // Screenshot is best-effort
+            }
+          }
+          const planId = stateStore.suspend({
+            steps,
+            suspendedAtIndex: i + 1,
+            vars: { ...vars },
+            errorStrategy,
+            completedResults: [...results],
+            question,
+          });
+          return {
+            status: "suspended",
+            planId,
+            question,
+            completedSteps: [...results],
+            screenshot,
+            _meta: {
+              elapsedMs: Math.round(performance.now() - start),
+              method: "run_plan",
+            },
+          } satisfies SuspendedPlanResponse;
+        }
+      }
+    }
 
     // --- Error handling based on strategy ---
     if (stepResult.isError) {

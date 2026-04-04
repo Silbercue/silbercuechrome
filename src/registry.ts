@@ -3,7 +3,7 @@ import type { CdpClient } from "./cdp/cdp-client.js";
 import type { SessionManager } from "./cdp/session-manager.js";
 import type { DialogHandler } from "./cdp/dialog-handler.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
-import type { ToolResponse, ConnectionStatus } from "./types.js";
+import type { ToolResponse, ToolContentBlock, ConnectionStatus } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -39,10 +39,12 @@ import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
 import type { CaptainProvider } from "./operator/captain.js";
 import type { CaptainEscalationConfig } from "./operator/types.js";
+import { PlanStateStore } from "./plan/plan-state-store.js";
 
 export class ToolRegistry {
   private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>) => Promise<ToolResponse>>();
+  readonly planStateStore = new PlanStateStore();
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
@@ -380,20 +382,42 @@ export class ToolRegistry {
 
     this.server.tool(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results. Set use_operator=true for adaptive error recovery.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), and suspend/resume for agent decisions mid-plan. Use resume: { planId, answer } to continue a suspended plan.",
       {
         steps: runPlanSchema.shape.steps,
         use_operator: runPlanSchema.shape.use_operator,
+        resume: runPlanSchema.shape.resume,
       },
       wrap(async (params) => {
-        return runPlanHandler(params as unknown as RunPlanParams, this, {
+        const result = await runPlanHandler(params as unknown as RunPlanParams, this, {
           cdpClient: this.cdpClient,
           sessionId: this._sessionId,
           microLlm,
           sessionManager: this._sessionManager,
           captain,
           captainScreenshot,
-        });
+        }, this.planStateStore);
+        // Convert SuspendedPlanResponse to ToolResponse for MCP transport
+        if ("status" in result && (result as { status: string }).status === "suspended") {
+          const suspended = result as import("./plan/plan-executor.js").SuspendedPlanResponse;
+          const content: Array<ToolContentBlock> = [
+            { type: "text", text: JSON.stringify({
+              status: suspended.status,
+              planId: suspended.planId,
+              question: suspended.question,
+              completedSteps: suspended.completedSteps,
+            }) },
+          ];
+          if (suspended.screenshot) {
+            content.push({
+              type: "image",
+              data: suspended.screenshot,
+              mimeType: "image/webp",
+            } as ToolContentBlock);
+          }
+          return { content, _meta: suspended._meta };
+        }
+        return result as ToolResponse;
       }),
     );
 
