@@ -5,7 +5,8 @@ import type { ToolRegistry } from "../registry.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { ToolResponse } from "../types.js";
 import type { PlanStep } from "../plan/plan-executor.js";
-import type { MicroLlmProvider, MicroLlmRequest, MicroLlmResponse } from "./types.js";
+import type { MicroLlmProvider, MicroLlmRequest, MicroLlmResponse, CaptainDecision, EscalationResult } from "./types.js";
+import type { CaptainProvider } from "./captain.js";
 import { RefNotFoundError } from "../tools/element-utils.js";
 import { NullMicroLlm, MicroLlmTimeoutError, MicroLlmUnavailableError } from "./micro-llm.js";
 
@@ -1020,6 +1021,506 @@ describe("Operator", () => {
       expect(result.aborted).toBe(false);
       expect(result.steps[0].microLlmUsed).toBe(true);
       expect(result.steps[0].result.content[0]).toHaveProperty("text", "Typed into e20");
+    });
+  });
+
+  // --- Captain Escalation Integration Tests (Story 8.3) ---
+
+  describe("Captain escalation", () => {
+    function createMockMicroLlm(overrides?: {
+      isAvailable?: boolean;
+      decideResult?: MicroLlmResponse;
+      decideError?: Error;
+    }): MicroLlmProvider {
+      return {
+        isAvailable: vi.fn().mockResolvedValue(overrides?.isAvailable ?? true),
+        decide: overrides?.decideError
+          ? vi.fn().mockRejectedValue(overrides.decideError)
+          : vi.fn().mockResolvedValue(
+              overrides?.decideResult ?? {
+                action: { type: "click-alternative" as const, description: "Click alternative" },
+                alternativeRef: "e10",
+                confidence: 0.85,
+                latencyMs: 120,
+              },
+            ),
+      };
+    }
+
+    function createMockCaptain(decision: CaptainDecision | null = null): CaptainProvider {
+      return {
+        escalate: vi.fn().mockResolvedValue(decision),
+      };
+    }
+
+    it("consults Captain when escalation is needed and Captain provides use-alternative-ref", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          alternativeRef: "e10",
+          confidence: 0.3, // Below threshold → escalation
+          latencyMs: 150,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "use-alternative-ref", ref: "e12" });
+
+      let clickCount = 0;
+      const registry = createMockRegistry({
+        handler: (name, params) => {
+          if (name === "click") {
+            clickCount++;
+            if (clickCount === 1) {
+              return errorResponse("click", "Element blocked by overlay");
+            }
+            return okResponse("click", `Clicked ${(params as Record<string, unknown>).ref}`);
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e12]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      // Captain resolved the step — no abort
+      expect(result.aborted).toBe(false);
+      expect(result.stepsCompleted).toBe(1);
+      expect(result.steps[0].escalationNeeded).toBe(true);
+      expect(result.steps[0].captainDecision).toEqual({ type: "use-alternative-ref", ref: "e12" });
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Clicked e12");
+      expect(captain.escalate).toHaveBeenCalled();
+    });
+
+    it("Captain skip-step decision skips step without error", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "skip-step" });
+
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+        { tool: "navigate", params: { url: "https://example.com" } },
+      ]);
+
+      // Skip should not abort — plan continues
+      expect(result.aborted).toBe(false);
+      expect(result.stepsCompleted).toBe(2);
+      expect(result.steps[0].captainDecision).toEqual({ type: "skip-step" });
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Step skipped by Captain");
+    });
+
+    it("Captain abort-plan decision aborts the plan", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "abort-plan", reason: "Page is broken" });
+
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+        { tool: "navigate", params: { url: "https://example.com" } },
+      ]);
+
+      expect(result.aborted).toBe(true);
+      expect(result.stepsCompleted).toBe(0);
+      expect(result.steps[0].captainDecision).toEqual({ type: "abort-plan", reason: "Page is broken" });
+      expect(result.steps[0].result.isError).toBe(true);
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Plan aborted by Captain: Page is broken");
+    });
+
+    it("Captain timeout (null) falls through to error (current behavior)", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      // Captain returns null = timeout/decline
+      const captain = createMockCaptain(null);
+
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      // Captain returned null → same as no captain: error
+      expect(result.aborted).toBe(true);
+      expect(result.steps[0].escalationNeeded).toBe(true);
+      expect(captain.escalate).toHaveBeenCalled();
+    });
+
+    it("without Captain, escalation remains as error (backward-compatible)", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      // No captain parameter
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      // Same behavior as before Story 8.3
+      expect(result.aborted).toBe(true);
+      expect(result.steps[0].escalationNeeded).toBe(true);
+      expect(result.totalEscalations).toBe(1);
+    });
+
+    it("tracks escalations array in OperatorPlanResult", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "skip-step" });
+
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      expect(result.escalations).toHaveLength(1);
+      expect(result.escalations[0].stepNumber).toBe(1);
+      expect(result.escalations[0].decision).toEqual({ type: "skip-step" });
+      expect(result.escalations[0].escalation.type).toBe("escalation-needed");
+      expect(typeof result.escalations[0].elapsedMs).toBe("number");
+    });
+
+    it("escalations array is empty when no escalations occur", async () => {
+      const registry = createMockRegistry({
+        toolResponses: new Map([
+          ["navigate", okResponse("navigate", "OK")],
+        ]),
+      });
+
+      const operator = new Operator(registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine);
+      const result = await operator.executePlan([
+        { tool: "navigate", params: { url: "https://example.com" } },
+      ]);
+
+      expect(result.escalations).toHaveLength(0);
+    });
+
+    it("Captain retry-step decision retries the original step", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "retry-step" });
+
+      let clickCount = 0;
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            clickCount++;
+            if (clickCount <= 1) {
+              return errorResponse("click", "Element blocked by overlay");
+            }
+            // Captain's retry succeeds
+            return okResponse("click", "Clicked e5");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      expect(result.aborted).toBe(false);
+      expect(result.steps[0].captainDecision).toEqual({ type: "retry-step" });
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Clicked e5");
+    });
+
+    it("Captain use-selector decision executes step with CSS selector", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2,
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "use-selector", selector: "#submit-btn" });
+
+      const registry = createMockRegistry({
+        handler: (name, params) => {
+          if (name === "click") {
+            if ((params as Record<string, unknown>).selector === "#submit-btn") {
+              return okResponse("click", "Clicked #submit-btn");
+            }
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      expect(result.aborted).toBe(false);
+      expect(result.steps[0].captainDecision).toEqual({ type: "use-selector", selector: "#submit-btn" });
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Clicked #submit-btn");
+    });
+
+    it("takes screenshot before escalation when captainScreenshot=true (H1)", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2, // Below threshold → escalation
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "skip-step" });
+
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          if (name === "screenshot") {
+            return {
+              content: [{ type: "image" as const, data: "base64-screenshot-data", mimeType: "image/webp" }],
+              _meta: { elapsedMs: 50, method: "screenshot" },
+            } as ToolResponse;
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain, true, // captainScreenshot = true
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      // Captain was called with screenshot
+      expect(captain.escalate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "escalation-needed" }),
+        "base64-screenshot-data",
+      );
+      expect(result.aborted).toBe(false);
+      expect(result.steps[0].captainDecision).toEqual({ type: "skip-step" });
+    });
+
+    it("does NOT take screenshot when captainScreenshot=false", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2, // Below threshold → escalation
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "skip-step" });
+
+      let screenshotCalled = false;
+      const registry = createMockRegistry({
+        handler: (name) => {
+          if (name === "click") {
+            return errorResponse("click", "Element blocked by overlay");
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'OK' [e1]");
+          }
+          if (name === "screenshot") {
+            screenshotCalled = true;
+            return {
+              content: [{ type: "image" as const, data: "should-not-be-used", mimeType: "image/webp" }],
+              _meta: { elapsedMs: 50, method: "screenshot" },
+            } as ToolResponse;
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain, false, // captainScreenshot = false
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e5" } },
+      ]);
+
+      // Screenshot should NOT have been called
+      expect(screenshotCalled).toBe(false);
+      // Captain was called WITHOUT screenshot (undefined)
+      expect(captain.escalate).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "escalation-needed" }),
+        undefined,
+      );
+      expect(result.aborted).toBe(false);
+    });
+
+    it("Captain escalation for ref-not-found path (after scroll exhaustion + Micro-LLM)", async () => {
+      const microLlm = createMockMicroLlm({
+        decideResult: {
+          action: { type: "click-alternative", description: "Click alternative" },
+          confidence: 0.2, // Below threshold
+          latencyMs: 100,
+        },
+      });
+
+      const captain = createMockCaptain({ type: "use-alternative-ref", ref: "e42" });
+
+      let clickCount = 0;
+      const registry = createMockRegistry({
+        handler: (name, params) => {
+          if (name === "click") {
+            clickCount++;
+            if ((params as Record<string, unknown>).ref === "e99") {
+              return errorResponse("click", "Element e99 not found.");
+            }
+            return okResponse("click", `Clicked ${(params as Record<string, unknown>).ref}`);
+          }
+          if (name === "read_page") {
+            return okResponse("read_page", "button 'Submit' [e42]");
+          }
+          return okResponse(name, `${name} done`);
+        },
+      });
+
+      const operator = new Operator(
+        registry, cdpClient as unknown as CdpClient, sessionId, ruleEngine, microLlm,
+        undefined, undefined, captain,
+      );
+      const result = await operator.executePlan([
+        { tool: "click", params: { ref: "e99" } },
+      ]);
+
+      // Captain should have been consulted after scroll + Micro-LLM escalation
+      expect(result.aborted).toBe(false);
+      expect(result.steps[0].escalationNeeded).toBe(true);
+      expect(result.steps[0].captainDecision).toEqual({ type: "use-alternative-ref", ref: "e42" });
+      expect(result.steps[0].result.content[0]).toHaveProperty("text", "Clicked e42");
+      expect(captain.escalate).toHaveBeenCalled();
     });
   });
 });

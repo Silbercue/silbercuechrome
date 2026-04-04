@@ -60,6 +60,8 @@ export interface OperatorStepResult {
   escalationNeeded?: boolean;
   /** Structured escalation data for the Captain (Story 8.3) */
   escalation?: EscalationResult;
+  /** Captain decision if escalation was resolved by Captain */
+  captainDecision?: CaptainDecision;
 }
 
 export interface OperatorPlanResult {
@@ -71,6 +73,8 @@ export interface OperatorPlanResult {
   /** Count of ALL Micro-LLM invocations (including timeout, low-confidence) */
   totalMicroLlmCalls: number;
   totalEscalations: number;
+  /** Detailed escalation records (Story 8.3) */
+  escalations: EscalationRecord[];
   aborted: boolean;
   elapsedMs: number;
 }
@@ -129,4 +133,27 @@ export interface EscalationResult {
   a11ySnippet?: string;
   /** Alles was der Captain braeuchte um eine Entscheidung zu treffen */
   diagnosticContext: Record<string, unknown>;
+}
+
+// --- Captain Definitions (Story 8.3) ---
+
+export type CaptainDecision =
+  | { type: "use-alternative-ref"; ref: string }
+  | { type: "use-selector"; selector: string }
+  | { type: "skip-step" }
+  | { type: "retry-step" }
+  | { type: "retry-with-params"; params: Record<string, unknown> }
+  | { type: "abort-plan"; reason: string };
+
+export interface EscalationRecord {
+  stepNumber: number;
+  escalation: EscalationResult;
+  decision: CaptainDecision | null; // null = Timeout or Decline
+  elapsedMs: number;
+}
+
+export interface CaptainEscalationConfig {
+  enabled: boolean;          // Default: true wenn MCP Elicitation verfuegbar
+  timeoutMs: number;         // Default: 30000
+  includeScreenshot: boolean; // Default: false (Token-schwergewichtig)
 }

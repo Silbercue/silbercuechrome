@@ -4,6 +4,7 @@ import type { ToolRegistry } from "../registry.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { MicroLlmProvider } from "../operator/types.js";
+import type { CaptainProvider } from "../operator/captain.js";
 import { executePlan } from "../plan/plan-executor.js";
 import type { PlanStep } from "../plan/plan-executor.js";
 import { Operator } from "../operator/operator.js";
@@ -32,6 +33,8 @@ export interface RunPlanDeps {
   microLlm?: MicroLlmProvider;
   minConfidence?: number;
   sessionManager?: SessionManager;
+  captain?: CaptainProvider;
+  captainScreenshot?: boolean;
 }
 
 export async function runPlanHandler(
@@ -50,6 +53,8 @@ export async function runPlanHandler(
       deps.microLlm,
       deps.sessionManager,
       deps.minConfidence,
+      deps.captain,
+      deps.captainScreenshot,
     );
     const operatorResult = await operator.executePlan(params.steps as PlanStep[]);
 
@@ -77,6 +82,17 @@ export async function runPlanHandler(
         }
       }
     }
+    // Add escalation content blocks (Story 8.3)
+    for (const esc of operatorResult.escalations) {
+      const decisionStr = esc.decision
+        ? `Captain: ${esc.decision.type}${"ref" in esc.decision ? ` ${esc.decision.ref}` : ""}${"selector" in esc.decision ? ` ${esc.decision.selector}` : ""}`
+        : "Captain: timeout/declined";
+      contentBlocks.push({
+        type: "text",
+        text: `[ESCALATION Step ${esc.stepNumber}/${operatorResult.stepsTotal}] ${esc.escalation.reason} → ${decisionStr} (${esc.elapsedMs}ms)`,
+      });
+    }
+
     if (operatorResult.aborted) {
       contentBlocks.push({
         type: "text",
@@ -87,6 +103,11 @@ export async function runPlanHandler(
       type: "text",
       text: `\nOperator: ${operatorResult.totalRulesApplied} rules, ${operatorResult.totalMicroLlmCalls} LLM calls, ${operatorResult.totalEscalations} escalations, ${operatorResult.elapsedMs}ms`,
     });
+
+    // Captain escalation metrics (Story 8.3)
+    const captainEscalations = operatorResult.escalations.length;
+    const captainDecisions = operatorResult.escalations.filter((e) => e.decision !== null).length;
+    const captainTimeouts = operatorResult.escalations.filter((e) => e.decision === null).length;
 
     return {
       content: contentBlocks,
@@ -101,6 +122,9 @@ export async function runPlanHandler(
           totalDialogsHandled: operatorResult.totalDialogsHandled,
           totalMicroLlmCalls: operatorResult.totalMicroLlmCalls,
           totalEscalations: operatorResult.totalEscalations,
+          captainEscalations,
+          captainDecisions,
+          captainTimeouts,
         },
       },
     };

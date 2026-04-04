@@ -28,6 +28,9 @@ import type { RunPlanParams } from "./tools/run-plan.js";
 import { domSnapshotSchema, domSnapshotHandler } from "./tools/dom-snapshot.js";
 import type { DomSnapshotParams } from "./tools/dom-snapshot.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
+import { Captain } from "./operator/captain.js";
+import type { CaptainProvider } from "./operator/captain.js";
+import type { CaptainEscalationConfig } from "./operator/types.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -78,6 +81,32 @@ export class ToolRegistry {
       };
     }
     return handler(params);
+  }
+
+  /**
+   * Create a Captain instance if MCP Elicitation is available.
+   * Reads config from environment variables.
+   * Returns undefined if Elicitation is not supported.
+   */
+  private _createCaptain(): { captain: CaptainProvider; includeScreenshot: boolean } | undefined {
+    // The low-level Server exposes elicitInput — check if it exists
+    const lowLevelServer = this.server.server;
+    if (!lowLevelServer || typeof lowLevelServer.elicitInput !== "function") {
+      return undefined;
+    }
+
+    const rawTimeout = process.env.SILBERCUE_CAPTAIN_TIMEOUT;
+    const rawScreenshot = process.env.SILBERCUE_CAPTAIN_SCREENSHOT;
+
+    const parsedTimeout = rawTimeout !== undefined ? parseInt(rawTimeout, 10) : NaN;
+
+    const config: CaptainEscalationConfig = {
+      enabled: true,
+      timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 30000,
+      includeScreenshot: rawScreenshot === "true" || rawScreenshot === "1",
+    };
+
+    return { captain: new Captain(lowLevelServer, config), includeScreenshot: config.includeScreenshot };
   }
 
   registerAll(): void {
@@ -238,6 +267,13 @@ export class ToolRegistry {
     // C1: Create Micro-LLM provider from environment for Operator mode
     const microLlm = createMicroLlmFromEnv();
 
+    // Story 8.3: Create Captain for escalation protocol
+    // Captain is only available when MCP Elicitation is supported by the client.
+    // Feature detection happens once at setup — no runtime checks per escalation.
+    const captainResult = this._createCaptain();
+    const captain = captainResult?.captain;
+    const captainScreenshot = captainResult?.includeScreenshot ?? false;
+
     this.server.tool(
       "run_plan",
       "Execute a sequential plan of tool steps server-side. N steps = 1 LLM round-trip. Aborts on first error and returns partial results. Set use_operator=true for adaptive error recovery.",
@@ -251,6 +287,8 @@ export class ToolRegistry {
           sessionId: this._sessionId,
           microLlm,
           sessionManager: this._sessionManager,
+          captain,
+          captainScreenshot,
         });
       },
     );

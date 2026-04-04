@@ -6,7 +6,9 @@ import type { PlanStep } from "../plan/plan-executor.js";
 import type {
   OperatorPlanResult, OperatorStepResult, StepContext,
   MicroLlmProvider, MicroLlmAction, MicroLlmResponse, EscalationResult,
+  CaptainDecision, EscalationRecord,
 } from "./types.js";
+import type { CaptainProvider } from "./captain.js";
 import { RuleEngine } from "./rule-engine.js";
 import { RefNotFoundError } from "../tools/element-utils.js";
 import { NullMicroLlm, MicroLlmTimeoutError, MicroLlmUnavailableError } from "./micro-llm.js";
@@ -46,6 +48,8 @@ export class Operator {
     private microLlm: MicroLlmProvider = new NullMicroLlm(),
     private sessionManager?: SessionManager,
     minConfidence: number = DEFAULT_MIN_CONFIDENCE,
+    private captain?: CaptainProvider,
+    private captainScreenshot = false,
   ) {
     this._minConfidence = minConfidence;
   }
@@ -59,6 +63,7 @@ export class Operator {
   async executePlan(steps: PlanStep[]): Promise<OperatorPlanResult> {
     const start = performance.now();
     const stepResults: OperatorStepResult[] = [];
+    const escalationRecords: EscalationRecord[] = [];
     let aborted = false;
 
     this._setupDialogHandler();
@@ -78,6 +83,18 @@ export class Operator {
       this._cleanupDialogHandler();
     }
 
+    // Collect escalation records from step results
+    for (const s of stepResults) {
+      if (s.escalation && s.escalationNeeded) {
+        escalationRecords.push({
+          stepNumber: s.step,
+          escalation: s.escalation,
+          decision: s.captainDecision ?? null,
+          elapsedMs: s.result._meta?.elapsedMs ?? 0,
+        });
+      }
+    }
+
     const elapsedMs = Math.round(performance.now() - start);
 
     return {
@@ -90,6 +107,7 @@ export class Operator {
       totalDialogsHandled: stepResults.reduce((sum, s) => sum + s.dialogsHandled, 0),
       totalMicroLlmCalls: stepResults.filter((s) => s.microLlmCalled).length,
       totalEscalations: stepResults.filter((s) => s.escalationNeeded).length,
+      escalations: escalationRecords,
       aborted,
       elapsedMs,
     };
@@ -110,6 +128,7 @@ export class Operator {
     let microLlmConfidence: number | undefined;
     let escalationNeeded: boolean | undefined;
     let escalation: EscalationResult | undefined;
+    let captainDecision: CaptainDecision | undefined;
 
     while (retryCount <= MAX_RETRIES_PER_STEP) {
       // --- Pre-step: check for dialogs ---
@@ -305,6 +324,46 @@ export class Operator {
         }
       }
 
+      // --- Captain escalation: consult Captain before giving up ---
+      if (escalationNeeded && escalation && this.captain) {
+        // H1: Capture screenshot before escalation if configured
+        let screenshotBase64: string | undefined;
+        if (this.captainScreenshot) {
+          try {
+            const ssResult = await this.registry.executeTool("screenshot", {});
+            if (!ssResult.isError && ssResult.content?.[0]?.type === "image") {
+              screenshotBase64 = (ssResult.content[0] as { type: "image"; data: string }).data;
+            }
+          } catch {
+            // Screenshot is best-effort — proceed without it
+          }
+        }
+        const decision = await this.captain.escalate(escalation, screenshotBase64);
+
+        if (decision) {
+          captainDecision = decision;
+          const decisionResult = await this._executeCaptainDecision(decision, step);
+
+          // Captain resolved the step
+          return {
+            step: stepNumber,
+            tool: step.tool,
+            result: decisionResult,
+            rulesApplied,
+            scrollAttempts,
+            dialogsHandled,
+            microLlmUsed,
+            microLlmCalled,
+            microLlmLatencyMs,
+            microLlmConfidence,
+            escalationNeeded,
+            escalation,
+            captainDecision,
+          };
+        }
+        // Captain returned null (timeout/decline) — fall through to error
+      }
+
       // No recovery possible or step succeeded
       return {
         step: stepNumber,
@@ -319,6 +378,7 @@ export class Operator {
         microLlmConfidence,
         escalationNeeded,
         escalation,
+        captainDecision,
       };
     }
 
@@ -340,6 +400,7 @@ export class Operator {
       microLlmConfidence,
       escalationNeeded,
       escalation,
+      captainDecision,
     };
   }
 
@@ -659,6 +720,38 @@ export class Operator {
           _meta: { elapsedMs: 0, method: step.tool },
         };
       }
+    }
+  }
+
+  // --- Captain decision execution ---
+
+  /**
+   * Execute a decision made by the Captain.
+   */
+  private async _executeCaptainDecision(
+    decision: CaptainDecision,
+    step: PlanStep,
+  ): Promise<ToolResponse> {
+    switch (decision.type) {
+      case "use-alternative-ref":
+        return this.registry.executeTool(step.tool, { ...step.params, ref: decision.ref });
+      case "use-selector":
+        return this.registry.executeTool(step.tool, { ...step.params, selector: decision.selector });
+      case "skip-step":
+        return {
+          content: [{ type: "text", text: "Step skipped by Captain" }],
+          _meta: { elapsedMs: 0, method: step.tool },
+        };
+      case "retry-step":
+        return this.registry.executeTool(step.tool, step.params ?? {});
+      case "retry-with-params":
+        return this.registry.executeTool(step.tool, decision.params);
+      case "abort-plan":
+        return {
+          content: [{ type: "text", text: `Plan aborted by Captain: ${decision.reason}` }],
+          isError: true,
+          _meta: { elapsedMs: 0, method: step.tool },
+        };
     }
   }
 
