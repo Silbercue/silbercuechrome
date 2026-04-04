@@ -531,6 +531,121 @@ describe("ToolRegistry", () => {
     const result = await gated({});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty("text", "my_tool is a Pro feature");
+    expect(result.content[0]).toHaveProperty("text", "my_tool ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'");
+  });
+
+  // --- Story 9.6: dom_snapshot Pro-Feature-Gate ---
+
+  it("dom_snapshot is registered in server.tool() regardless of license tier (discoverability)", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Free tier — dom_snapshot should still be registered
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const domSnapshotCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "dom_snapshot",
+    );
+    expect(domSnapshotCall).toBeDefined();
+    expect(domSnapshotCall![1]).toBe(
+      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+    );
+  });
+
+  it("Free-Tier: dom_snapshot via MCP returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // Find the dom_snapshot callback registered via server.tool()
+    const domSnapshotCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "dom_snapshot",
+    );
+    expect(domSnapshotCall).toBeDefined();
+
+    const domSnapshotCallback = domSnapshotCall![domSnapshotCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean; _meta?: Record<string, unknown> }>;
+
+    const result = await domSnapshotCallback({ ref: "e1" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Free-Tier: dom_snapshot via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("dom_snapshot", { ref: "e1" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Pro-Tier: dom_snapshot via executeTool is NOT blocked by feature gate", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => true };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // Verify the gate allows the call by checking that the response is NOT the
+    // Pro-Feature error message. The handler itself may fail due to missing CDP mock,
+    // but that's a handler error — not a gate block.
+    const result = await registry.executeTool("dom_snapshot", {});
+
+    // The gate-blocked message is very specific — verify it's NOT that
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("ist ein Pro-Feature");
+  });
+
+  it("featureGate is NOT registered when a featureGate hook already exists (Pro-Repo override)", async () => {
+    // Simulate Pro-Repo registering its own featureGate before registerAll()
+    const customGate = vi.fn().mockReturnValue({ allowed: true });
+    registerProHooks({ featureGate: customGate });
+
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // The custom gate should still be the active one (not overwritten)
+    const { getProHooks } = await import("./hooks/pro-hooks.js");
+    const hooks = getProHooks();
+    expect(hooks.featureGate).toBe(customGate);
   });
 });

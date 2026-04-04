@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { registerProHooks, getProHooks } from "./pro-hooks.js";
+import { registerProHooks, getProHooks, proFeatureError } from "./pro-hooks.js";
 import type { ProHooks } from "./pro-hooks.js";
 
 describe("ProHooks", () => {
@@ -112,5 +112,27 @@ describe("ProHooks", () => {
     const modified = getProHooks().onToolResult!("evaluate", original);
     expect(modified.content).toHaveLength(2);
     expect((modified.content[1] as { text: string }).text).toBe("enhanced");
+  });
+
+  // --- Story 9.6: proFeatureError ---
+
+  it("proFeatureError returns isError response with correct format", () => {
+    const result = proFeatureError("dom_snapshot");
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    });
+    expect(result._meta).toEqual({ elapsedMs: 0, method: "dom_snapshot" });
+  });
+
+  it("proFeatureError uses the provided tool name in message and meta", () => {
+    const result = proFeatureError("some_future_tool");
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("some_future_tool ist ein Pro-Feature");
+    expect(result._meta!.method).toBe("some_future_tool");
   });
 });
