@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-04-04T04:00:05.882Z",
+  "mode": "torture",
+  "passed": 8,
+  "failed": 0,
+  "results": [
+    {
+      "page": "RAPID",
+      "test": "50x-read_page",
+      "pass": true,
+      "ms": 72,
+      "detail": "avg=1ms max=3ms"
+    },
+    {
+      "page": "CYCLE",
+      "test": "20x-nav-read-ss",
+      "pass": true,
+      "ms": 27113,
+      "detail": "0 errors, avg=1356ms"
+    },
+    {
+      "page": "CLICK",
+      "test": "30x-click-barrage",
+      "pass": true,
+      "ms": 21,
+      "detail": "0/5 errors"
+    },
+    {
+      "page": "TABS",
+      "test": "open-5-tabs",
+      "pass": true,
+      "ms": 5406
+    },
+    {
+      "page": "TABS",
+      "test": "desk-5-tabs",
+      "pass": true,
+      "ms": 1,
+      "detail": "6 tabs"
+    },
+    {
+      "page": "TABS",
+      "test": "close-all",
+      "pass": true,
+      "ms": 0
+    },
+    {
+      "page": "ENDUR",
+      "test": "5x-form",
+      "pass": true,
+      "ms": 10042,
+      "detail": "5/5"
+    },
+    {
+      "page": "PLAN",
+      "test": "10-step-plan",
+      "pass": true,
+      "ms": 1371,
+      "detail": "10/10 steps"
+    }
+  ]
+}
