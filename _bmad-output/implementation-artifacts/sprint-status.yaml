@@ -120,8 +120,8 @@ development_status:
   9-1-free-tier-step-limit-fuer-run-plan: done
   9-2-license-key-validierung-aktivierung: done
   9-3-offline-grace-period: done
-  9-4-cli-kommandos-fuer-lizenzverwaltung: ready-for-dev
-  9-5-dual-repo-code-trennung: backlog
+  9-4-cli-kommandos-fuer-lizenzverwaltung: done
+  9-5-dual-repo-code-trennung: ready-for-dev
   9-6-dom-snapshot-pro-feature-gate: backlog
   9-7-publish-pipeline: backlog
   epic-9-retrospective: optional
