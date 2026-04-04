@@ -2,7 +2,10 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
-import type { PlanStep } from "../plan/plan-executor.js";
+import type { PlanStep, PlanOptions, ErrorStrategy } from "../plan/plan-executor.js";
+import type { VarsMap } from "../plan/plan-variables.js";
+import { substituteVars, extractResultValue } from "../plan/plan-variables.js";
+import { evaluateCondition } from "../plan/plan-conditions.js";
 import type {
   OperatorPlanResult, OperatorStepResult, StepContext,
   MicroLlmProvider, MicroLlmAction, MicroLlmResponse, EscalationResult,
@@ -60,23 +63,84 @@ export class Operator {
    * On step error: consult rule engine for recovery (scroll, dismiss, retry).
    * Max 3 retries per step via rule engine, then abort.
    */
-  async executePlan(steps: PlanStep[]): Promise<OperatorPlanResult> {
+  async executePlan(steps: PlanStep[], options?: PlanOptions): Promise<OperatorPlanResult> {
     const start = performance.now();
     const stepResults: OperatorStepResult[] = [];
     const escalationRecords: EscalationRecord[] = [];
     let aborted = false;
+    const vars: VarsMap = { ...(options?.vars ?? {}) };
+    const errorStrategy: ErrorStrategy = options?.errorStrategy ?? "abort";
 
     this._setupDialogHandler();
 
     try {
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
-        const operatorResult = await this._executeStepWithRules(step, i + 1, steps.length);
+
+        // --- Conditional: evaluate if clause ---
+        if (step.if !== undefined && step.if !== "") {
+          const conditionResult = evaluateCondition(step.if, vars);
+          if (!conditionResult) {
+            stepResults.push({
+              step: i + 1,
+              tool: step.tool,
+              result: {
+                content: [{ type: "text", text: `Skipped: condition "${step.if}" was false` }],
+                _meta: { elapsedMs: 0, method: step.tool },
+              },
+              rulesApplied: [],
+              scrollAttempts: 0,
+              dialogsHandled: 0,
+              microLlmUsed: false,
+              microLlmCalled: false,
+              skipped: true,
+              condition: step.if,
+            });
+            continue;
+          }
+        }
+
+        // --- Variable substitution ---
+        const resolvedStep: PlanStep = step.params
+          ? { ...step, params: substituteVars(step.params, vars) }
+          : step;
+
+        const operatorResult = await this._executeStepWithRules(resolvedStep, i + 1, steps.length);
         stepResults.push(operatorResult);
 
+        // --- saveAs: store result as variable ---
+        if (!operatorResult.result.isError && step.saveAs) {
+          vars[step.saveAs] = extractResultValue(operatorResult.result);
+        }
+
         if (operatorResult.result.isError) {
-          aborted = true;
-          break;
+          // Operator recovery already tried (rules + micro-LLM).
+          // Now apply error strategy as fallback.
+          if (errorStrategy === "abort") {
+            aborted = true;
+            break;
+          }
+          if (errorStrategy === "screenshot") {
+            // Take screenshot and append to failed step
+            try {
+              const ssResult = await this.registry.executeTool("screenshot", {});
+              if (!ssResult.isError) {
+                for (const block of ssResult.content) {
+                  if (block.type === "image") {
+                    operatorResult.result = {
+                      ...operatorResult.result,
+                      content: [...operatorResult.result.content, block],
+                    };
+                  }
+                }
+              }
+            } catch {
+              // Screenshot is best-effort
+            }
+            aborted = true;
+            break;
+          }
+          // errorStrategy === "continue": keep going
         }
       }
     } finally {
@@ -100,9 +164,7 @@ export class Operator {
     return {
       steps: stepResults,
       stepsTotal: steps.length,
-      stepsCompleted: aborted
-        ? stepResults.filter((s) => !s.result.isError).length
-        : stepResults.length,
+      stepsCompleted: stepResults.filter((s) => !s.result.isError && !s.skipped).length,
       totalRulesApplied: stepResults.reduce((sum, s) => sum + s.rulesApplied.length, 0),
       totalDialogsHandled: stepResults.reduce((sum, s) => sum + s.dialogsHandled, 0),
       totalMicroLlmCalls: stepResults.filter((s) => s.microLlmCalled).length,

@@ -62,6 +62,10 @@ export interface OperatorStepResult {
   escalation?: EscalationResult;
   /** Captain decision if escalation was resolved by Captain */
   captainDecision?: CaptainDecision;
+  /** Step was skipped due to a conditional (Story 6.4) */
+  skipped?: boolean;
+  /** The condition expression that caused the skip (Story 6.4) */
+  condition?: string;
 }
 
 export interface OperatorPlanResult {

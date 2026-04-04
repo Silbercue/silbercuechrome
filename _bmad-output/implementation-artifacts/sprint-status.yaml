@@ -92,8 +92,8 @@ development_status:
   6-1-dialog-handling: done
   6-2-file-upload: done
   6-3-komplexe-formulare: done
-  6-4-erweiterter-run-plan: ready-for-dev
-  6-5-suspend-resume-fuer-run-plan: backlog
+  6-4-erweiterter-run-plan: done
+  6-5-suspend-resume-fuer-run-plan: ready-for-dev
   epic-6-retrospective: optional
 
   # Epic 7: Observability & Session Intelligence (Phase 2)

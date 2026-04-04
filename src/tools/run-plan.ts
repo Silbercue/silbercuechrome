@@ -6,19 +6,30 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { MicroLlmProvider } from "../operator/types.js";
 import type { CaptainProvider } from "../operator/captain.js";
 import { executePlan } from "../plan/plan-executor.js";
-import type { PlanStep } from "../plan/plan-executor.js";
+import type { PlanStep, PlanOptions } from "../plan/plan-executor.js";
 import { Operator } from "../operator/operator.js";
 import { RuleEngine } from "../operator/rule-engine.js";
 
 const stepSchema = z.object({
   tool: z.string().describe("Tool name to execute (e.g. 'navigate', 'click', 'type')"),
-  params: z.record(z.unknown()).optional().describe("Parameters for the tool"),
+  params: z.record(z.unknown()).optional().describe("Parameters for the tool. Use $varName for variable substitution."),
+  saveAs: z.string().optional().describe("Save step result as variable (accessible via $name in later steps)"),
+  if: z.string().optional().describe("Condition expression — step runs only if true. Use $varName for variables. Example: \"$pageTitle === 'Login'\""),
 });
 
 export const runPlanSchema = z.object({
   steps: z
     .array(stepSchema)
-    .describe("Array of tool steps to execute sequentially. Aborts on first error."),
+    .describe("Array of tool steps to execute sequentially."),
+  vars: z
+    .record(z.unknown())
+    .optional()
+    .describe("Initial variables for the plan. Accessible via $varName in step params and conditions."),
+  errorStrategy: z
+    .enum(["abort", "continue", "screenshot"])
+    .optional()
+    .default("abort")
+    .describe("Error handling: 'abort' (default) stops on first error, 'continue' runs all steps, 'screenshot' captures page on error then aborts."),
   use_operator: z.boolean().optional().default(false).describe(
     "When true, execute steps through the Operator (rule engine + Micro-LLM fallback) for adaptive error recovery."
   ),
@@ -42,6 +53,11 @@ export async function runPlanHandler(
   registry: ToolRegistry,
   deps?: RunPlanDeps,
 ): Promise<ToolResponse> {
+  const planOptions: PlanOptions = {
+    vars: params.vars,
+    errorStrategy: params.errorStrategy,
+  };
+
   // C1: When use_operator is true and deps are available, route through the Operator
   if (params.use_operator && deps) {
     const ruleEngine = new RuleEngine();
@@ -56,12 +72,27 @@ export async function runPlanHandler(
       deps.captain,
       deps.captainScreenshot,
     );
-    const operatorResult = await operator.executePlan(params.steps as PlanStep[]);
+    const operatorResult = await operator.executePlan(params.steps as PlanStep[], planOptions);
 
     // Convert OperatorPlanResult to ToolResponse format
     const contentBlocks: Array<ToolContentBlock> = [];
+    let okCount = 0;
+    let failCount = 0;
+    let skipCount = 0;
     for (const s of operatorResult.steps) {
+      // H1: Skipped steps (conditional) must show SKIP, not OK
+      if (s.skipped) {
+        skipCount++;
+        contentBlocks.push({
+          type: "text",
+          text: `[${s.step}/${operatorResult.stepsTotal}] SKIP ${s.tool} (condition: ${s.condition})`,
+        });
+        continue;
+      }
+
       const status = s.result.isError ? "FAIL" : "OK";
+      if (s.result.isError) failCount++;
+      else okCount++;
       const stepMs = s.result._meta?.elapsedMs ?? 0;
       const textParts = s.result.content
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -109,9 +140,18 @@ export async function runPlanHandler(
     const captainDecisions = operatorResult.escalations.filter((e) => e.decision !== null).length;
     const captainTimeouts = operatorResult.escalations.filter((e) => e.decision === null).length;
 
+    // H2: Determine isError analogous to executePlan:
+    // - abort/screenshot: aborted flag
+    // - continue: only if ALL executed (non-skipped) steps failed
+    const executedCount = okCount + failCount;
+    const isError =
+      params.errorStrategy === "continue" && !operatorResult.aborted
+        ? executedCount > 0 && failCount === executedCount
+        : operatorResult.aborted;
+
     return {
       content: contentBlocks,
-      isError: operatorResult.aborted,
+      isError: isError || undefined,
       _meta: {
         elapsedMs: operatorResult.elapsedMs,
         method: "run_plan",
@@ -131,5 +171,5 @@ export async function runPlanHandler(
   }
 
   // Default: plain sequential execution without Operator
-  return executePlan(params.steps as PlanStep[], registry);
+  return executePlan(params.steps as PlanStep[], registry, planOptions);
 }
