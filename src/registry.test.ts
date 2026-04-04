@@ -21,7 +21,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(13);
+    expect(toolFn).toHaveBeenCalledTimes(14);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result",
@@ -127,6 +127,14 @@ describe("ToolRegistry", () => {
         ref: expect.anything(),
         selector: expect.anything(),
         path: expect.anything(),
+      }),
+      expect.any(Function),
+    );
+    expect(toolFn).toHaveBeenCalledWith(
+      "fill_form",
+      "Fill a complete form with one call. Each field needs ref or CSS selector plus value. Supports text inputs, selects, checkboxes, and radio buttons. Partial errors do not abort — each field reports its own status.",
+      expect.objectContaining({
+        fields: expect.anything(),
       }),
       expect.any(Function),
     );

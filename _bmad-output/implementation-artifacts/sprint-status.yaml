@@ -91,8 +91,8 @@ development_status:
   epic-6: in-progress
   6-1-dialog-handling: done
   6-2-file-upload: done
-  6-3-komplexe-formulare: ready-for-dev
-  6-4-erweiterter-run-plan: backlog
+  6-3-komplexe-formulare: done
+  6-4-erweiterter-run-plan: ready-for-dev
   6-5-suspend-resume-fuer-run-plan: backlog
   epic-6-retrospective: optional
 

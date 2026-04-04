@@ -32,6 +32,8 @@ import { handleDialogSchema, handleDialogHandler } from "./tools/handle-dialog.j
 import type { HandleDialogParams } from "./tools/handle-dialog.js";
 import { fileUploadSchema, fileUploadHandler } from "./tools/file-upload.js";
 import type { FileUploadParams } from "./tools/file-upload.js";
+import { fillFormSchema, fillFormHandler } from "./tools/fill-form.js";
+import type { FillFormParams } from "./tools/fill-form.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -348,6 +350,24 @@ export class ToolRegistry {
       }),
     );
 
+    // Story 6.3: fill_form — fill complete forms with one call
+    this.server.tool(
+      "fill_form",
+      "Fill a complete form with one call. Each field needs ref or CSS selector plus value. Supports text inputs, selects, checkboxes, and radio buttons. Partial errors do not abort — each field reports its own status.",
+      {
+        fields: fillFormSchema.shape.fields,
+      },
+      wrap(async (params) => {
+        return fillFormHandler(
+          params as unknown as FillFormParams,
+          this.cdpClient,
+          this.sessionId,
+          this._sessionManager,
+          humanTouch,
+        );
+      }),
+    );
+
     // C1: Create Micro-LLM provider from environment for Operator mode
     const microLlm = createMicroLlmFromEnv();
 
@@ -444,6 +464,15 @@ export class ToolRegistry {
         this.cdpClient,
         this.sessionId,
         this._sessionManager,
+      );
+    });
+    this._handlers.set("fill_form", async (params) => {
+      return fillFormHandler(
+        params as unknown as FillFormParams,
+        this.cdpClient,
+        this.sessionId,
+        this._sessionManager,
+        humanTouch,
       );
     });
   }
