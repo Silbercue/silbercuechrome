@@ -44,7 +44,7 @@ import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
-import { getProHooks } from "./hooks/pro-hooks.js";
+import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hooks.js";
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -178,11 +178,14 @@ export class ToolRegistry {
     return async (params: T): Promise<ToolResponse> => {
       const gate = hooks.featureGate?.(toolName);
       if (gate && !gate.allowed) {
-        return {
-          content: [{ type: "text", text: gate.message ?? `${toolName} is a Pro feature` }],
-          isError: true,
-          _meta: { elapsedMs: 0, method: toolName },
-        };
+        if (gate.message) {
+          return {
+            content: [{ type: "text", text: gate.message }],
+            isError: true,
+            _meta: { elapsedMs: 0, method: toolName },
+          };
+        }
+        return proFeatureError(toolName);
       }
       return fn(params);
     };
@@ -191,6 +194,23 @@ export class ToolRegistry {
   registerAll(): void {
     // Story 9.5: Read Pro hooks once at startup
     const hooks = getProHooks();
+
+    // Story 9.6: Register default feature gate for Pro-only tools
+    // Pro-Repo can override by calling registerProHooks() before startServer()
+    if (!hooks.featureGate) {
+      const licenseStatus = this._licenseStatus;
+      registerProHooks({
+        ...hooks,
+        featureGate: (toolName: string) => {
+          if (toolName === "dom_snapshot" && !licenseStatus.isPro()) {
+            return { allowed: false };
+          }
+          return { allowed: true };
+        },
+      });
+    }
+    // Re-read hooks after potential registration
+    const finalHooks = getProHooks();
 
     // Create Human Touch config from environment (once at startup)
     const humanTouch = createHumanTouchFromEnv();
@@ -351,9 +371,9 @@ export class ToolRegistry {
       {
         ref: domSnapshotSchema.shape.ref,
       },
-      wrap(async (params) => {
+      wrap(this.wrapWithGate("dom_snapshot", async (params) => {
         return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-      }),
+      }, finalHooks)),
     );
 
     // Story 6.1: handle_dialog — configure dialog handling before triggering actions
@@ -512,9 +532,9 @@ export class ToolRegistry {
         this.connectionStatus,
       );
     });
-    this._handlers.set("dom_snapshot", async (params) => {
+    this._handlers.set("dom_snapshot", this.wrapWithGate("dom_snapshot", async (params) => {
       return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-    });
+    }, finalHooks));
     if (this._dialogHandler) {
       this._handlers.set("handle_dialog", async (params) => {
         return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);

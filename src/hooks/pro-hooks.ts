@@ -21,3 +21,12 @@ export function registerProHooks(hooks: ProHooks): void {
 export function getProHooks(): ProHooks {
   return _hooks;
 }
+
+/** Einheitliche Pro-Feature Error-Response. */
+export function proFeatureError(toolName: string): ToolResponse {
+  return {
+    content: [{ type: "text", text: `${toolName} ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'` }],
+    isError: true,
+    _meta: { elapsedMs: 0, method: toolName },
+  };
+}

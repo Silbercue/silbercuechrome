@@ -122,6 +122,6 @@ development_status:
   9-3-offline-grace-period: done
   9-4-cli-kommandos-fuer-lizenzverwaltung: done
   9-5-dual-repo-code-trennung: done
-  9-6-dom-snapshot-pro-feature-gate: ready-for-dev
-  9-7-publish-pipeline: backlog
+  9-6-dom-snapshot-pro-feature-gate: done
+  9-7-publish-pipeline: ready-for-dev
   epic-9-retrospective: optional
