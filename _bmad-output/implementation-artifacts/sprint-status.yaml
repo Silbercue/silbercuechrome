@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-03  # Story 5b-5 done — Codex Review C2/C3/H2/H3 fixes
+last_updated: 2026-04-04  # Story 8-1 review — Rule-Engine & Operator Grundgeruest
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -101,5 +101,10 @@ development_status:
   epic-7-retrospective: optional
 
   # Epic 8: Operator Architecture & Human Touch (Phase 3)
-  epic-8: backlog
+  epic-8: in-progress
+  8-1-rule-engine-operator-grundgeruest: done
+  8-2-micro-llm-integration: backlog
+  8-3-captain-escalation-protocol: backlog
+  8-4-chrome-profile-support: backlog
+  8-5-human-touch-patterns: backlog
   epic-8-retrospective: optional
