@@ -15,7 +15,8 @@
     "build": "tsc",
     "test": "vitest run",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\"",
+    "publish:release": "tsx scripts/publish.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -25,6 +26,7 @@
     "@types/node": "^22",
     "eslint": "^9",
     "prettier": "^3",
+    "tsx": "^4.21.0",
     "typescript": "^5.7",
     "typescript-eslint": "^8",
     "vitest": "^3"
