@@ -65,9 +65,7 @@ interface SnapshotDocument {
   layout: {
     nodeIndex: number[];
     bounds: number[][];
-    styles: {
-      properties: number[][];
-    };
+    styles: number[][];
   };
 }
 
@@ -262,7 +260,7 @@ export class A11yTreeProcessor {
       const [x, y, w, h] = boundsArr;
 
       // Read computed styles: display, visibility are at indices 0, 1
-      const styleProps = doc.layout.styles.properties[li] ?? [];
+      const styleProps = doc.layout.styles[li] ?? [];
       const displayVal = this.getSnapshotString(strings, styleProps[0]);
       const visibilityVal = this.getSnapshotString(strings, styleProps[1]);
 

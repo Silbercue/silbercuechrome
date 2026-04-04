@@ -50,7 +50,7 @@ function makeDomSnapshot(elements: Array<{
       layout: {
         nodeIndex: layoutNodeIndex,
         bounds: layoutBounds,
-        styles: { properties: layoutStyleProps },
+        styles: layoutStyleProps,
       },
     }],
     strings,

@@ -42,9 +42,7 @@ interface SomSnapshotDocument {
   layout: {
     nodeIndex: number[];
     bounds: number[][];
-    styles: {
-      properties: number[][];
-    };
+    styles: number[][];
     paintOrders: number[];
   };
 }
@@ -98,7 +96,7 @@ function collectSomLabels(
     const [x, y, w, h] = boundsArr;
 
     // Visibility check via computed styles (display, visibility are indices 0, 1)
-    const styleProps = doc.layout.styles.properties[li] ?? [];
+    const styleProps = doc.layout.styles[li] ?? [];
     const displayIdx = styleProps[0];
     const visibilityIdx = styleProps[1];
     const displayVal = (displayIdx !== undefined && displayIdx >= 0 && displayIdx < strings.length)

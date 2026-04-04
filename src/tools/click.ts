@@ -26,26 +26,38 @@ async function dispatchClick(
   sessionId: string,
   backendNodeId: number,
 ): Promise<void> {
-  // Step 1: Scroll into view
+  // Step 1: Reset scroll to origin before clicking.
+  // When Emulation.setDeviceMetricsOverride is active, Input.dispatchMouseEvent
+  // hit-tests at document coordinates (viewport + scrollY) instead of viewport
+  // coordinates. Scrolling to 0 ensures viewport coords = document coords.
+  await cdpClient.send(
+    "Runtime.evaluate",
+    { expression: "window.scrollTo(0,0)" },
+    sessionId,
+  );
+
+  // Step 2: Scroll element into view (from scroll 0)
   await cdpClient.send(
     "DOM.scrollIntoViewIfNeeded",
     { backendNodeId },
     sessionId,
   );
 
-  // Step 2: Get box model
-  const box = await cdpClient.send<{ model: { content: number[] } }>(
-    "DOM.getBoxModel",
+  // Step 3: Get viewport-relative center via DOM.getContentQuads
+  const quadsResult = await cdpClient.send<{ quads: number[][] }>(
+    "DOM.getContentQuads",
     { backendNodeId },
     sessionId,
   );
+  if (!quadsResult.quads || quadsResult.quads.length === 0) {
+    throw new Error("Element has no visible layout quads");
+  }
+  // Quad is [x1,y1, x2,y2, x3,y3, x4,y4] — average all 4 corners for center
+  const q = quadsResult.quads[0];
+  const x = (q[0] + q[2] + q[4] + q[6]) / 4;
+  const y = (q[1] + q[3] + q[5] + q[7]) / 4;
 
-  // Step 3: Calculate center point
-  const quad = box.model.content;
-  const x = (quad[0] + quad[2]) / 2;
-  const y = (quad[1] + quad[5]) / 2;
-
-  // Step 4: Dispatch mouse events
+  // Step 3: Dispatch mouse events at viewport coordinates
   await cdpClient.send(
     "Input.dispatchMouseEvent",
     {

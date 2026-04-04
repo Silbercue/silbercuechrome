@@ -1133,7 +1133,7 @@ describe("A11yTreeProcessor", () => {
         layout: {
           nodeIndex: layoutNodeIndex,
           bounds: layoutBounds,
-          styles: { properties: layoutStyleProps },
+          styles: layoutStyleProps,
         },
       }],
       strings,

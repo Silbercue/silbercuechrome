@@ -137,7 +137,7 @@ function buildSnapshot(elements: ElementSpec[]): {
           nodeIndex: layoutNodeIndex,
           bounds: layoutBounds,
           text: layoutText,
-          styles: { properties: layoutStyleProps },
+          styles: layoutStyleProps,
           paintOrders: layoutPaintOrders,
           offsetRects: layoutOffsetRects,
           clientRects: layoutClientRects,

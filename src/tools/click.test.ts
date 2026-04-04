@@ -34,8 +34,9 @@ interface MockCdpSetup {
 
 function createMockCdp(overrides: Record<string, unknown> = {}): MockCdpSetup {
   const defaultResponses: Record<string, unknown> = {
+    "Runtime.evaluate": {},
     "DOM.scrollIntoViewIfNeeded": {},
-    "DOM.getBoxModel": { model: { content: [100, 100, 200, 100, 200, 200, 100, 200] } },
+    "DOM.getContentQuads": { quads: [[100, 100, 200, 100, 200, 200, 100, 200]] },
     "Input.dispatchMouseEvent": {},
     "DOM.getDocument": { root: { nodeId: 1 } },
     "DOM.querySelector": { nodeId: 42 },
@@ -158,9 +159,10 @@ describe("clickHandler", () => {
     expect(result._meta).not.toHaveProperty("settleSignal");
     expect(result._meta).not.toHaveProperty("settleMs");
 
-    // Verify CDP calls: scroll, box model, 2x mouse — NO Page.getFrameTree
+    // Verify CDP calls: scrollTo(0,0), scroll, getContentQuads, 2x mouse — NO Page.getFrameTree
+    expect(sendFn).toHaveBeenCalledWith("Runtime.evaluate", { expression: "window.scrollTo(0,0)" }, "s1");
     expect(sendFn).toHaveBeenCalledWith("DOM.scrollIntoViewIfNeeded", { backendNodeId: 42 }, "s1");
-    expect(sendFn).toHaveBeenCalledWith("DOM.getBoxModel", { backendNodeId: 42 }, "s1");
+    expect(sendFn).toHaveBeenCalledWith("DOM.getContentQuads", { backendNodeId: 42 }, "s1");
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).not.toContain("Page.getFrameTree");
   });
@@ -174,8 +176,8 @@ describe("clickHandler", () => {
       resolvedVia: "ref",
       resolvedSessionId: "s1",
     });
-    // Box: TL(100,100) TR(200,100) BR(200,200) BL(100,200)
-    // Center: x = (100+200)/2 = 150, y = (100+200)/2 = 150
+    // getContentQuads returns quad [100,100, 200,100, 200,200, 100,200]
+    // Center: x = (100+200+200+100)/4 = 150, y = (100+100+200+200)/4 = 150
     const { cdpClient, sendFn } = createMockCdp();
 
     await clickHandler({ ref: "e5" }, cdpClient, "s1");
@@ -217,12 +219,13 @@ describe("clickHandler", () => {
 
     await clickHandler({ ref: "e5" }, cdpClient, "s1");
 
-    // Only 4 CDP calls: scrollIntoView, getBoxModel, mousePressed, mouseReleased
-    expect(sendFn).toHaveBeenCalledTimes(4);
+    // 5 CDP calls: scrollTo(0,0), scrollIntoView, getContentQuads, mousePressed, mouseReleased
+    expect(sendFn).toHaveBeenCalledTimes(5);
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).toEqual([
+      "Runtime.evaluate",
       "DOM.scrollIntoViewIfNeeded",
-      "DOM.getBoxModel",
+      "DOM.getContentQuads",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
     ]);
@@ -342,7 +345,7 @@ describe("clickHandler", () => {
 
   // --- Error handling tests ---
 
-  it("should return isError when DOM.getBoxModel throws", async () => {
+  it("should return isError when DOM.getContentQuads throws in dispatchClick", async () => {
     mockResolveElement.mockResolvedValue({
       backendNodeId: 42,
       objectId: "obj-42",
@@ -352,8 +355,8 @@ describe("clickHandler", () => {
       resolvedSessionId: "s1",
     });
     const { cdpClient } = createMockCdp({
-      "DOM.getBoxModel": () => {
-        throw new Error("Could not compute box model");
+      "DOM.getContentQuads": () => {
+        throw new Error("Node does not have a layout object");
       },
     });
 
@@ -363,7 +366,7 @@ describe("clickHandler", () => {
     expect(result.content[0]).toEqual(
       expect.objectContaining({
         type: "text",
-        text: "click failed: Could not compute box model",
+        text: "click failed: Node does not have a layout object",
       }),
     );
     expect(result._meta?.method).toBe("click");
@@ -418,12 +421,17 @@ describe("clickHandler", () => {
 
     // Verify CDP calls use OOPIF session for element interaction
     expect(sendFn).toHaveBeenCalledWith(
+      "Runtime.evaluate",
+      { expression: "window.scrollTo(0,0)" },
+      "oopif-session-1",
+    );
+    expect(sendFn).toHaveBeenCalledWith(
       "DOM.scrollIntoViewIfNeeded",
       { backendNodeId: 300 },
       "oopif-session-1",
     );
     expect(sendFn).toHaveBeenCalledWith(
-      "DOM.getBoxModel",
+      "DOM.getContentQuads",
       { backendNodeId: 300 },
       "oopif-session-1",
     );

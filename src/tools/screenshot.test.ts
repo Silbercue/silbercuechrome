@@ -326,7 +326,7 @@ function buildMockSnapshot(
       layout: {
         nodeIndex: nodeIndexArr,
         bounds: boundsArr,
-        styles: { properties: styleProps },
+        styles: styleProps,
         paintOrders,
       },
     }],

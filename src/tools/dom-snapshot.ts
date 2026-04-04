@@ -33,9 +33,7 @@ interface SnapshotDocument {
     nodeIndex: number[];
     bounds: number[][];
     text: number[];
-    styles: {
-      properties: number[][];
-    };
+    styles: number[][];
     paintOrders: number[];
     offsetRects: number[][];
     clientRects: number[][];
@@ -234,7 +232,7 @@ export async function domSnapshotHandler(
       if (li === undefined) continue;
 
       // Stage 2: Visibility Filter
-      const styleProps = doc.layout.styles.properties[li] ?? [];
+      const styleProps = doc.layout.styles[li] ?? [];
       // computedStyles order matches COMPUTED_STYLES: display, visibility, color, bg-color, font-size, position, z-index
       const displayVal = getStringAt(strings, styleProps[0]);
       const visibilityVal = getStringAt(strings, styleProps[1]);
