@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ChromeLauncher } from "./cdp/chrome-launcher.js";
 import { SessionManager } from "./cdp/session-manager.js";
+import { DialogHandler } from "./cdp/dialog-handler.js";
 import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
@@ -64,13 +65,17 @@ export async function startServer(): Promise<void> {
   });
   await sessionManager.init();
 
+  // 4c. Create DialogHandler for automatic dialog handling (Story 6.1)
+  const dialogHandler = new DialogHandler(cdpClient, sessionId);
+  dialogHandler.init();
+
   // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
     version: "0.1.0",
   });
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager);
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler);
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)
@@ -107,6 +112,9 @@ export async function startServer(): Promise<void> {
 
     // 5. Re-initialize SessionManager for OOPIF support
     await sessionManager.reinit(newCdpClient, newSessionId);
+
+    // 6. Re-initialize DialogHandler for dialog handling
+    dialogHandler.reinit(newCdpClient, newSessionId);
   });
 
   // 7. Start stdio transport
@@ -116,6 +124,7 @@ export async function startServer(): Promise<void> {
 
   // 8. Graceful shutdown
   const shutdown = async () => {
+    dialogHandler.detach();
     sessionManager.detach();
     tabStateCache.detachFromClient();
     await server.close();

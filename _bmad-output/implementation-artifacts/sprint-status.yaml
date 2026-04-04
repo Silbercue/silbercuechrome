@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-03
+# last_updated: 2026-04-04
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-04  # Story 8-5 done — Human Touch Patterns
+last_updated: 2026-04-04
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -79,10 +79,8 @@ development_status:
   epic-5-retrospective: optional
 
   # Epic 5b: Visual Intelligence (Post-MVP)
-  # Basiert auf Deep Research: browser-use, D2Snap, Stagehand, Set-of-Mark
-  # Story 5b.1 teilweise implementiert (commit e4d8805: Retina-Fix, Click-Settle, Screenshot)
   epic-5b: done
-  5b-1-retina-fix-screenshot-optimierung: done  # NFR25 + Emulation-Konstanten + Size-Guard + Div-by-Zero Guard
+  5b-1-retina-fix-screenshot-optimierung: done
   5b-2-domsnapshot-tool: done
   5b-3-read-page-visual-enrichment: done
   5b-4-set-of-mark-som: done
@@ -90,21 +88,40 @@ development_status:
   epic-5b-retrospective: optional
 
   # Epic 6: Extended Workflow Capabilities (Phase 2)
-  # Detaillierte Stories werden nach Epic 5b erstellt
-  epic-6: backlog
+  epic-6: in-progress
+  6-1-dialog-handling: done
+  6-2-file-upload: ready-for-dev
+  6-3-komplexe-formulare: backlog
+  6-4-erweiterter-run-plan: backlog
+  6-5-suspend-resume-fuer-run-plan: backlog
   epic-6-retrospective: optional
 
   # Epic 7: Observability & Session Intelligence (Phase 2)
-  # Inkl. Selector-Caching (FR62, Stagehand-inspiriert)
   epic-7: backlog
-  7-x-selector-caching-dom-fingerprinting: backlog
+  7-1-console-logs-tool: backlog
+  7-2-network-monitor-tool: backlog
+  7-3-session-defaults-auto-promote: backlog
+  7-4-precomputed-a11y-tree: backlog
+  7-5-selector-caching-dom-fingerprinting: backlog
+  7-6-multi-tab-parallel-control: backlog
   epic-7-retrospective: optional
 
   # Epic 8: Operator Architecture & Human Touch (Phase 3)
-  epic-8: in-progress
+  epic-8: done
   8-1-rule-engine-operator-grundgeruest: done
   8-2-micro-llm-integration: done
   8-3-captain-escalation-protocol: done
   8-4-chrome-profile-support: done
   8-5-human-touch-patterns: done
   epic-8-retrospective: optional
+
+  # Epic 9: Monetarisierung & Publish-Pipeline (MVP-Infrastruktur)
+  epic-9: backlog
+  9-1-free-tier-step-limit-fuer-run-plan: backlog
+  9-2-license-key-validierung-aktivierung: backlog
+  9-3-offline-grace-period: backlog
+  9-4-cli-kommandos-fuer-lizenzverwaltung: backlog
+  9-5-dual-repo-code-trennung: backlog
+  9-6-dom-snapshot-pro-feature-gate: backlog
+  9-7-publish-pipeline: backlog
+  epic-9-retrospective: optional

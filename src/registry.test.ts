@@ -245,4 +245,53 @@ describe("ToolRegistry", () => {
 
     expect(registry.connectionStatus).toBe("connected");
   });
+
+  // --- Story 6.1: Dialog notification injection tests (C1) ---
+
+  it("executeTool injects dialog notifications into tool response", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Mock DialogHandler that returns pending notifications
+    const mockDialogHandler = {
+      consumeNotifications: vi.fn().mockReturnValue([
+        { type: "alert", message: "Hello!", url: "https://example.com" },
+      ]),
+      pushHandler: vi.fn(),
+      popHandler: vi.fn(),
+      pendingCount: 1,
+      init: vi.fn(),
+      detach: vi.fn(),
+      reinit: vi.fn(),
+    } as never;
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      mockDialogHandler,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("evaluate", {
+      expression: "21*2",
+      await_promise: true,
+    });
+
+    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    // First content block is the tool result
+    expect(result.content[0]).toHaveProperty("text", "42");
+    // Second content block should be the injected dialog notification
+    expect(result.content.length).toBeGreaterThanOrEqual(2);
+    expect((result.content[1] as { text: string }).text).toContain('[dialog] alert: "Hello!"');
+  });
 });
