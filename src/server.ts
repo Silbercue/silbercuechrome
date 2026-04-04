@@ -5,6 +5,7 @@ import { SessionManager } from "./cdp/session-manager.js";
 import { DialogHandler } from "./cdp/dialog-handler.js";
 import { ConsoleCollector } from "./cdp/console-collector.js";
 import { NetworkCollector } from "./cdp/network-collector.js";
+import { DomWatcher } from "./cdp/dom-watcher.js";
 import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
@@ -86,6 +87,16 @@ export async function startServer(): Promise<void> {
   // 4f. Create SessionDefaults for session parameter defaults (Story 7.3)
   const sessionDefaults = new SessionDefaults();
 
+  // 4g. Create DomWatcher for precomputed A11y-Tree (Story 7.4)
+  const domWatcher = new DomWatcher(cdpClient, sessionId, { debounceMs: 500 });
+  domWatcher.onRefresh(async () => {
+    await a11yTree.refreshPrecomputed(cdpClient, sessionId, sessionManager);
+  });
+  domWatcher.onInvalidate(() => {
+    a11yTree.invalidatePrecomputed();
+  });
+  await domWatcher.init();
+
   // 6. Create MCP server and register tools
   const server = new McpServer({
     name: "silbercuechrome",
@@ -148,6 +159,18 @@ export async function startServer(): Promise<void> {
 
     // 8. Re-initialize NetworkCollector for network request monitoring
     networkCollector.reinit(newCdpClient, newSessionId);
+
+    // 9. Re-initialize DomWatcher for precomputed A11y-Tree (Story 7.4)
+    // H3: Rebind callbacks BEFORE reinit() to avoid race condition where
+    // reinit()->init() fires events that invoke stale closures
+    a11yTree.invalidatePrecomputed();
+    domWatcher.onRefresh(async () => {
+      await a11yTree.refreshPrecomputed(newCdpClient, newSessionId, sessionManager);
+    });
+    domWatcher.onInvalidate(() => {
+      a11yTree.invalidatePrecomputed();
+    });
+    await domWatcher.reinit(newCdpClient, newSessionId);
   });
 
   // 7. Start stdio transport
@@ -157,6 +180,7 @@ export async function startServer(): Promise<void> {
 
   // 8. Graceful shutdown
   const shutdown = async () => {
+    domWatcher.detach();
     networkCollector.detach();
     consoleCollector.detach();
     dialogHandler.detach();

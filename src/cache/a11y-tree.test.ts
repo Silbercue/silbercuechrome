@@ -304,6 +304,9 @@ describe("A11yTreeProcessor", () => {
     const cdp1 = mockCdpClient(nodes1);
     await processor.getTree(cdp1, "s1");
 
+    // Invalidate precomputed cache to simulate DOM mutation (DomWatcher would do this)
+    processor.invalidatePrecomputed();
+
     // Second call: original node + new node
     const nodes2: AXNode[] = [
       makeNode({
@@ -1639,6 +1642,416 @@ describe("A11yTreeProcessor", () => {
       // Should truncate since 200 buttons can't fit in 500 tokens even at L4
       expect(result.text).toContain("truncated");
       expect(result.text).toContain("omitted");
+    });
+  });
+
+  // --- Precomputed Cache tests (Story 7.4) ---
+
+  describe("Precomputed Cache", () => {
+    it("invalidatePrecomputed() setzt Cache zurueck", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "OK" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-invalidate");
+
+      // Prime cache via refreshPrecomputed
+      await processor.refreshPrecomputed(cdp, "s1");
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+
+      // Invalidate
+      processor.invalidatePrecomputed();
+      expect(processor.hasPrecomputed("s1")).toBe(false);
+    });
+
+    it("refreshPrecomputed() laedt Tree und cached Nodes", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Submit" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-refresh");
+
+      await processor.refreshPrecomputed(cdp, "s1");
+
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+      // Should have called Accessibility.getFullAXTree
+      expect(cdp.send).toHaveBeenCalledWith(
+        "Accessibility.getFullAXTree",
+        { depth: 3 },
+        "s1",
+      );
+    });
+
+    it("refreshPrecomputed() weist stabile Refs zu (bestehende Refs bleiben)", async () => {
+      const nodes1: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "First" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp1 = mockCdpClient(nodes1, "https://example.com/pc-stable");
+      await processor.refreshPrecomputed(cdp1, "s1");
+
+      // e1 = WebArea (100), e2 = button (101)
+      expect(processor.resolveRef("e1")).toBe(100);
+      expect(processor.resolveRef("e2")).toBe(101);
+
+      // Second refresh with new node — existing refs should stay
+      const nodes2: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2", "3"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "First" },
+          backendDOMNodeId: 101,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Second" },
+          backendDOMNodeId: 102,
+        }),
+      ];
+      const cdp2 = mockCdpClient(nodes2, "https://example.com/pc-stable");
+      await processor.refreshPrecomputed(cdp2, "s1");
+
+      // Old refs stable, new node gets e3
+      expect(processor.resolveRef("e1")).toBe(100);
+      expect(processor.resolveRef("e2")).toBe(101);
+      expect(processor.resolveRef("e3")).toBe(102);
+    });
+
+    it("refreshPrecomputed() bei URL-Aenderung: reset() wird aufgerufen", async () => {
+      const nodes1: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Old" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp1 = mockCdpClient(nodes1, "https://example.com/page-a");
+      // Set lastUrl by calling getTree first
+      await processor.getTree(cdp1, "s1");
+      expect(processor.resolveRef("e2")).toBe(101);
+
+      // Refresh with different URL — should reset
+      const nodes2: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 200,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "link" },
+          name: { type: "computedString", value: "New" },
+          backendDOMNodeId: 201,
+        }),
+      ];
+      const cdp2 = mockCdpClient(nodes2, "https://example.com/page-b");
+      await processor.refreshPrecomputed(cdp2, "s1");
+
+      // Old refs should be gone (reset cleared them), new refs start from e1
+      expect(processor.resolveRef("e1")).toBe(200);
+      expect(processor.resolveRef("e2")).toBe(201);
+    });
+
+    it("hasPrecomputed() gibt true bei gueltigem Cache", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-has-true");
+      await processor.refreshPrecomputed(cdp, "s1");
+
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+    });
+
+    it("hasPrecomputed() gibt false bei invalidiertem Cache", () => {
+      expect(processor.hasPrecomputed("s1")).toBe(false);
+    });
+
+    it("hasPrecomputed() gibt false bei falscher sessionId", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-wrong-session");
+      await processor.refreshPrecomputed(cdp, "s1");
+
+      expect(processor.hasPrecomputed("s2")).toBe(false);
+    });
+
+    it("getTree() nutzt Cache bei Cache-Hit (kein Accessibility.getFullAXTree Call)", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Cached Page" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Cached Button" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-cache-hit");
+
+      // Prime the cache
+      await processor.refreshPrecomputed(cdp, "s1");
+
+      // Reset call count
+      (cdp.send as ReturnType<typeof vi.fn>).mockClear();
+
+      // getTree should use cached nodes
+      const result = await processor.getTree(cdp, "s1");
+
+      // Should have called Runtime.evaluate (URL check) but NOT Accessibility.getFullAXTree
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
+      expect(a11yCalls).toHaveLength(0);
+
+      // But Runtime.evaluate for URL should still be called
+      const evalCalls = calls.filter((c: unknown[]) => c[0] === "Runtime.evaluate");
+      expect(evalCalls.length).toBeGreaterThan(0);
+
+      // Result should contain the cached button
+      expect(result.text).toContain('[e2] button "Cached Button"');
+    });
+
+    it("getTree() faellt auf CDP zurueck bei Cache-Miss", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Fresh" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-cache-miss");
+
+      // No cache primed — should fall back to CDP
+      const result = await processor.getTree(cdp, "s1");
+
+      // Should have called Accessibility.getFullAXTree
+      expect(cdp.send).toHaveBeenCalledWith(
+        "Accessibility.getFullAXTree",
+        { depth: 3 },
+        "s1",
+      );
+      expect(result.text).toContain('[e2] button "Fresh"');
+    });
+
+    it("getTree() mit ref-Parameter: immer frisch (kein Cache)", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "SubButton" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-subtree");
+
+      // Prime cache
+      await processor.refreshPrecomputed(cdp, "s1");
+      (cdp.send as ReturnType<typeof vi.fn>).mockClear();
+
+      // Subtree query — should bypass cache
+      const result = await processor.getTree(cdp, "s1", { ref: "e2", filter: "all" });
+
+      // Should have called Accessibility.getFullAXTree (bypassed cache)
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
+      expect(a11yCalls.length).toBeGreaterThan(0);
+
+      expect(result.text).toContain("Subtree for e2");
+    });
+
+    it("M2: Cache-Miss (Fallback) primes Precomputed-Cache, next call is Cache-Hit", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Prime Test" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Primed" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-prime-fallback");
+
+      // No cache primed — first call is a cache miss / fallback
+      expect(processor.hasPrecomputed("s1")).toBe(false);
+      const result1 = await processor.getTree(cdp, "s1");
+      expect(result1.text).toContain('[e2] button "Primed"');
+
+      // After fallback, cache should be primed
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+
+      // Reset call count to verify second call is a cache hit
+      (cdp.send as ReturnType<typeof vi.fn>).mockClear();
+
+      // Second call should be a cache hit — no Accessibility.getFullAXTree call
+      const result2 = await processor.getTree(cdp, "s1");
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
+      expect(a11yCalls).toHaveLength(0);
+      expect(result2.text).toContain('[e2] button "Primed"');
+    });
+
+    it("M1: Depth-Mismatch fuehrt zu Cache-Miss", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Deep" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-depth-mismatch");
+
+      // Prime cache at default depth (3)
+      await processor.refreshPrecomputed(cdp, "s1");
+      (cdp.send as ReturnType<typeof vi.fn>).mockClear();
+
+      // Request with depth 5 — exceeds cached depth 3 → cache miss
+      await processor.getTree(cdp, "s1", { depth: 5 });
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
+      expect(a11yCalls.length).toBeGreaterThan(0);
+      // Should have requested depth 5
+      expect(a11yCalls[0][1]).toEqual({ depth: 5 });
+    });
+
+    it("M1: Depth kleiner-gleich Cache-Depth ist Cache-Hit", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Shallow" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-depth-hit");
+
+      // Prime cache at default depth (3)
+      await processor.refreshPrecomputed(cdp, "s1");
+      (cdp.send as ReturnType<typeof vi.fn>).mockClear();
+
+      // Request with depth 2 — within cached depth → cache hit
+      await processor.getTree(cdp, "s1", { depth: 2 });
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
+      expect(a11yCalls).toHaveLength(0);
+    });
+
+    it("reset() invalidiert auch Precomputed-Cache", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/pc-reset");
+      await processor.refreshPrecomputed(cdp, "s1");
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+
+      processor.reset();
+      expect(processor.hasPrecomputed("s1")).toBe(false);
     });
   });
 });

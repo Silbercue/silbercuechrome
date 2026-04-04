@@ -18,3 +18,5 @@ export type { ChromeConnectionOptions, LaunchOptions } from "./chrome-launcher.j
 export { debug } from "./debug.js";
 export { settle } from "./settle.js";
 export type { SettleOptions, SettleResult } from "./settle.js";
+export { DomWatcher } from "./dom-watcher.js";
+export type { DomWatcherOptions } from "./dom-watcher.js";

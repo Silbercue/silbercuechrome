@@ -3,6 +3,7 @@ import type { SessionManager, SessionInfo } from "../cdp/session-manager.js";
 import { wrapCdpError } from "../tools/error-utils.js";
 import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "../tools/visual-constants.js";
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
+import { debug } from "../cdp/debug.js";
 
 // --- CDP A11y Types ---
 
@@ -154,6 +155,12 @@ export class A11yTreeProcessor {
   private nextRef = 1;
   private lastUrl = "";
 
+  // Precomputed cache state (Story 7.4)
+  private _precomputedNodes: AXNode[] | null = null;
+  private _precomputedUrl = "";
+  private _precomputedSessionId = "";
+  private _precomputedDepth = 3;
+
   reset(): void {
     this.refMap.clear();
     this.reverseMap.clear();
@@ -161,6 +168,75 @@ export class A11yTreeProcessor {
     this.sessionNodeMap.clear();
     this.nextRef = 1;
     this.lastUrl = "";
+    this.invalidatePrecomputed();
+  }
+
+  /** Invalidiert den Precomputed-Cache (z.B. nach Navigation oder Reconnect) */
+  invalidatePrecomputed(): void {
+    this._precomputedNodes = null;
+    this._precomputedUrl = "";
+    this._precomputedSessionId = "";
+    this._precomputedDepth = 3;
+  }
+
+  /** Hintergrund-Refresh: Laedt A11y-Tree und speichert als Cache */
+  async refreshPrecomputed(
+    cdpClient: CdpClient,
+    sessionId: string,
+    sessionManager?: SessionManager,
+  ): Promise<void> {
+    // 1. URL pruefen — wenn sich die URL geaendert hat, reset() aufrufen
+    const urlResult = await cdpClient.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression: "document.URL", returnByValue: true },
+      sessionId,
+    );
+    const currentUrl = urlResult.result.value;
+    if (currentUrl !== this.lastUrl) {
+      this.reset();
+      this.lastUrl = currentUrl;
+    }
+
+    // 2. A11y-Tree via CDP laden (same depth as default getTree)
+    const result = await cdpClient.send<{ nodes: AXNode[] }>(
+      "Accessibility.getFullAXTree",
+      { depth: 3 },
+      sessionId,
+    );
+    if (!result.nodes || result.nodes.length === 0) return;
+
+    // 3. Ref-IDs zuweisen (STABIL — bestehende Refs bleiben, neue bekommen neue Nummern)
+    for (const node of result.nodes) {
+      if (node.ignored || node.backendDOMNodeId === undefined) continue;
+      if (!this.refMap.has(node.backendDOMNodeId)) {
+        const refNum = this.nextRef++;
+        this.refMap.set(node.backendDOMNodeId, refNum);
+        this.reverseMap.set(refNum, node.backendDOMNodeId);
+      }
+      this.nodeInfoMap.set(node.backendDOMNodeId, {
+        role: (node.role?.value as string) ?? "",
+        name: (node.name?.value as string) ?? "",
+      });
+      if (!this.sessionNodeMap.has(sessionId)) {
+        this.sessionNodeMap.set(sessionId, new Set());
+      }
+      this.sessionNodeMap.get(sessionId)!.add(node.backendDOMNodeId);
+      sessionManager?.registerNode(node.backendDOMNodeId, sessionId);
+    }
+
+    // 4. Cache speichern
+    this._precomputedNodes = result.nodes;
+    this._precomputedUrl = currentUrl;
+    this._precomputedSessionId = sessionId;
+    this._precomputedDepth = 3;
+
+    debug("A11yTreeProcessor: precomputed cache refreshed, %d nodes cached", result.nodes.length);
+  }
+
+  /** Prueft ob ein gueltiger Precomputed-Cache vorliegt */
+  hasPrecomputed(sessionId: string): boolean {
+    return this._precomputedNodes !== null
+      && this._precomputedSessionId === sessionId;
   }
 
   /**
@@ -366,15 +442,41 @@ export class A11yTreeProcessor {
       this.nodeInfoMap.clear();
       this.nextRef = 1;
       this.lastUrl = currentUrl;
+      this.invalidatePrecomputed();
     }
 
-    // Fetch A11y tree from CDP — main frame
-    const result = await cdpClient.send<{ nodes: AXNode[] }>(
-      "Accessibility.getFullAXTree",
-      { depth },
-      sessionId,
-    );
-    const nodes = result.nodes;
+    // Precomputed cache check — bypass CDP call if cache is valid (Story 7.4)
+    // Subtree queries (options.ref) always load fresh — cached tree may not have full depth
+    // M1: Depth mismatch → cache miss (cached depth must be >= requested depth)
+    let nodes: AXNode[];
+    if (
+      this._precomputedNodes
+      && this._precomputedSessionId === sessionId
+      && currentUrl === this._precomputedUrl
+      && !options.ref
+      && depth <= this._precomputedDepth
+    ) {
+      nodes = this._precomputedNodes;
+      debug("A11yTreeProcessor: precomputed cache hit");
+    } else {
+      // Fetch A11y tree from CDP — main frame (fallback / cache miss)
+      const result = await cdpClient.send<{ nodes: AXNode[] }>(
+        "Accessibility.getFullAXTree",
+        { depth },
+        sessionId,
+      );
+      nodes = result.nodes;
+
+      // H1: Prime precomputed cache on fallback (AC #5)
+      // Only prime if this is a full-tree query (no ref) with valid nodes
+      if (!options.ref && nodes && nodes.length > 0) {
+        this._precomputedNodes = nodes;
+        this._precomputedUrl = currentUrl;
+        this._precomputedSessionId = sessionId;
+        this._precomputedDepth = depth;
+        debug("A11yTreeProcessor: cache primed from fallback, %d nodes", nodes.length);
+      }
+    }
 
     if (!nodes || nodes.length === 0) {
       return {
