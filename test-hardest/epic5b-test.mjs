@@ -58,6 +58,7 @@ const transport = new StdioClientTransport({
   command: "node",
   args: ["build/index.js"],
   cwd: new URL("..", import.meta.url).pathname,
+  env: { ...process.env },
 });
 
 const client = new Client({ name: "epic5b-test", version: "1.0.0" });
