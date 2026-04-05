@@ -16,11 +16,11 @@ export interface LicenseValidatorConfig {
   cacheDir: string;
 }
 
-/** Shape of the remote validation response. */
-interface ValidationResponse {
-  valid: boolean;
-  features?: string[];
-  expiresAt?: string;
+/** Shape of the Polar.sh license-keys/validate response. */
+interface PolarValidationResponse {
+  status: string; // "granted", "revoked", etc.
+  expires_at?: string | null;
+  [key: string]: unknown;
 }
 
 /** Shape of the local cache file. */
@@ -106,7 +106,7 @@ export class LicenseValidator implements LicenseStatus {
       const res = await fetch(this.config.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: licenseKey }),
+        body: JSON.stringify({ key: licenseKey, organization_id: POLAR_ORG_ID }),
         signal: controller.signal,
       });
 
@@ -114,20 +114,21 @@ export class LicenseValidator implements LicenseStatus {
         throw new Error(`HTTP ${res.status}`);
       }
 
-      const body = (await res.json()) as ValidationResponse;
+      const body = (await res.json()) as PolarValidationResponse;
+      const valid = body.status === "granted";
 
-      if (body.valid === true) {
+      if (valid) {
         this.pro = true;
         debug("License validated (Pro)");
         this.writeCache({
           key: licenseKey,
           valid: true,
           lastCheck: new Date().toISOString(),
-          features: body.features ?? [],
+          features: [],
         });
       } else {
         this.pro = false;
-        debug("License invalid — running Free Tier");
+        debug("License invalid (status: %s) — running Free Tier", body.status);
         this.writeCache({
           key: licenseKey,
           valid: false,
@@ -222,7 +223,8 @@ export class LicenseValidator implements LicenseStatus {
   }
 }
 
-const DEFAULT_ENDPOINT = "https://license.silbercuechrome.dev/validate";
+const POLAR_ORG_ID = "035df496-f4b7-4956-8ad4-6246f4a32788";
+const DEFAULT_ENDPOINT = "https://api.polar.sh/v1/customer-portal/license-keys/validate";
 
 /**
  * Loads LicenseValidatorConfig from environment variables.

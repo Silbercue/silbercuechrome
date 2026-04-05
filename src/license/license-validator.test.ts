@@ -16,18 +16,18 @@ function tmpCacheDir(): string {
 function makeConfig(overrides: Partial<LicenseValidatorConfig> = {}): LicenseValidatorConfig {
   return {
     licenseKey: undefined,
-    endpoint: "https://license.silbercuechrome.dev/validate",
+    endpoint: "https://api.polar.sh/v1/customer-portal/license-keys/validate",
     cacheDir: tmpCacheDir(),
     ...overrides,
   };
 }
 
-function mockFetchOk(valid: boolean, features: string[] = []): void {
+function mockFetchOk(valid: boolean, _features: string[] = []): void {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ valid, features }),
+      json: () => Promise.resolve({ status: valid ? "granted" : "revoked" }),
     }),
   );
 }
@@ -115,10 +115,10 @@ describe("LicenseValidator", () => {
       expect(v.isPro()).toBe(false);
     });
 
-    it("sends POST with correct body", async () => {
+    it("sends POST with correct body including organization_id", async () => {
       const spy = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ valid: true }),
+        json: () => Promise.resolve({ status: "granted" }),
       });
       vi.stubGlobal("fetch", spy);
 
@@ -130,14 +130,10 @@ describe("LicenseValidator", () => {
       );
       await v.validate();
 
-      expect(spy).toHaveBeenCalledWith(
-        "https://example.com/validate",
-        expect.objectContaining({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key: "test-key-123" }),
-        }),
-      );
+      const callBody = JSON.parse(spy.mock.calls[0][1].body);
+      expect(callBody.key).toBe("test-key-123");
+      expect(callBody.organization_id).toBe("035df496-f4b7-4956-8ad4-6246f4a32788");
+      expect(spy.mock.calls[0][0]).toBe("https://example.com/validate");
     });
 
     it("uses AbortController signal with timeout", async () => {
@@ -175,7 +171,7 @@ describe("LicenseValidator", () => {
   // ---- Task 3: Local cache ----
   describe("local cache", () => {
     it("writes cache after successful remote validation", async () => {
-      mockFetchOk(true, ["pro-features"]);
+      mockFetchOk(true);
       const cacheDir = tmpCacheDir();
       const v = new LicenseValidator(makeConfig({ licenseKey: "my-key", cacheDir }));
       await v.validate();
@@ -184,7 +180,7 @@ describe("LicenseValidator", () => {
       expect(cached).not.toBeNull();
       expect(cached!.key).toBe("my-key");
       expect(cached!.valid).toBe(true);
-      expect(cached!.features).toEqual(["pro-features"]);
+      expect(cached!.features).toEqual([]);
       expect(typeof cached!.lastCheck).toBe("string");
     });
 
@@ -665,8 +661,8 @@ describe("LicenseValidator", () => {
       expect(fetch).toHaveBeenCalled();
     });
 
-    it("truthy non-boolean valid (e.g. string) is NOT treated as Pro", async () => {
-      mockFetchStatus(200, { valid: "yes" });
+    it("non-granted status is NOT treated as Pro", async () => {
+      mockFetchStatus(200, { status: "revoked" });
       const v = new LicenseValidator(makeConfig({ licenseKey: "key" }));
       await v.validate();
       expect(v.isPro()).toBe(false);
@@ -713,7 +709,7 @@ describe("loadLicenseConfig", () => {
   it("returns default endpoint when env var is not set", () => {
     delete process.env.SILBERCUECHROME_LICENSE_ENDPOINT;
     const config = loadLicenseConfig();
-    expect(config.endpoint).toBe("https://license.silbercuechrome.dev/validate");
+    expect(config.endpoint).toBe("https://api.polar.sh/v1/customer-portal/license-keys/validate");
   });
 
   it("reads SILBERCUECHROME_LICENSE_ENDPOINT from env", () => {

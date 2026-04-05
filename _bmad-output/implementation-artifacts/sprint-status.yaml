@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-04
+# last_updated: 2026-04-05
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-04
+last_updated: 2026-04-05
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -116,7 +116,7 @@ development_status:
   epic-8-retrospective: optional
 
   # Epic 9: Monetarisierung & Publish-Pipeline (MVP-Infrastruktur)
-  epic-9: done
+  epic-9: in-progress
   9-1-free-tier-step-limit-fuer-run-plan: done
   9-2-license-key-validierung-aktivierung: done
   9-3-offline-grace-period: done
@@ -124,4 +124,5 @@ development_status:
   9-5-dual-repo-code-trennung: done
   9-6-dom-snapshot-pro-feature-gate: done
   9-7-publish-pipeline: done
+  9-8-license-validation-server: backlog
   epic-9-retrospective: optional
