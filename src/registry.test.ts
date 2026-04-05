@@ -1079,7 +1079,12 @@ describe("ToolRegistry", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
-    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    // Story 9.9: Use Pro license so the feature gate passes and the parallel check is reached
+    const license: LicenseStatus = { isPro: () => true };
+    const registry = new ToolRegistry(
+      mockServer, mockCdpClient, "global-session", {} as never,
+      undefined, undefined, undefined, license,
+    );
     registry.registerAll();
 
     // switch_tab with sessionIdOverride should be blocked
@@ -1087,5 +1092,305 @@ describe("ToolRegistry", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toHaveProperty("text", expect.stringContaining("parallelen Plan-Gruppen nicht erlaubt"));
+  });
+
+  // --- Story 9.9: Pro-Feature-Gates for switch_tab, virtual_desk, Human Touch ---
+
+  it("Free-Tier: switch_tab via MCP returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const switchTabCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "switch_tab",
+    );
+    expect(switchTabCall).toBeDefined();
+
+    const switchTabCallback = switchTabCall![switchTabCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean; _meta?: Record<string, unknown> }>;
+
+    const result = await switchTabCallback({ action: "list" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Free-Tier: virtual_desk via MCP returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const virtualDeskCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "virtual_desk",
+    );
+    expect(virtualDeskCall).toBeDefined();
+
+    const virtualDeskCallback = virtualDeskCall![virtualDeskCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean; _meta?: Record<string, unknown> }>;
+
+    const result = await virtualDeskCallback({});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "virtual_desk ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Free-Tier: switch_tab via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("switch_tab", { action: "list" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Free-Tier: virtual_desk via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("virtual_desk", {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "virtual_desk ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+  });
+
+  it("Pro-Tier: switch_tab via executeTool is NOT blocked by feature gate", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => true };
+    // Mock CDP client — handler will fail due to incomplete mock, but we only
+    // need to verify the gate does NOT block the call
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async () => {
+        throw new Error("mock CDP not available");
+      }),
+    } as never;
+    const registry = new ToolRegistry(
+      mockServer, mockCdpClient, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // Use "open" action — the handler will fail on CDP call, which is caught
+    // by its internal try/catch and returned as isError with a CDP error message
+    const result = await registry.executeTool("switch_tab", { action: "open" });
+
+    // The gate-blocked message is very specific — verify it's NOT that
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("ist ein Pro-Feature");
+  });
+
+  it("Pro-Tier: virtual_desk via executeTool is NOT blocked by feature gate", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => true };
+    // Mock CDP client that returns enough data for virtual_desk
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Target.getTargets") {
+          return { targetInfos: [] };
+        }
+        return {};
+      }),
+    } as never;
+    const registry = new ToolRegistry(
+      mockServer, mockCdpClient, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // The handler may fail due to incomplete CDP mock, but verify it's NOT the gate message
+    const result = await registry.executeTool("virtual_desk", {});
+
+    if (result.content[0]) {
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).not.toContain("ist ein Pro-Feature");
+    }
+  });
+
+  it("switch_tab is registered in server.tool() regardless of license tier (discoverability)", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const switchTabCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "switch_tab",
+    );
+    expect(switchTabCall).toBeDefined();
+    expect(switchTabCall![1]).toBe("Open, switch to, or close browser tabs");
+  });
+
+  it("virtual_desk is registered in server.tool() regardless of license tier (discoverability)", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const virtualDeskCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "virtual_desk",
+    );
+    expect(virtualDeskCall).toBeDefined();
+    expect(virtualDeskCall![1]).toBe(
+      "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
+    );
+  });
+
+  it("Free-Tier: Human Touch enabled is silently downgraded to disabled", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+
+    // Set env vars to enable Human Touch
+    const originalHT = process.env.SILBERCUE_HUMAN_TOUCH;
+    const originalHTS = process.env.SILBERCUE_HUMAN_TOUCH_SPEED;
+    process.env.SILBERCUE_HUMAN_TOUCH = "true";
+    process.env.SILBERCUE_HUMAN_TOUCH_SPEED = "fast";
+
+    try {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const registry = new ToolRegistry(
+        mockServer, {} as never, "session-1", {} as never,
+        undefined, undefined, undefined, license,
+      );
+      registry.registerAll();
+
+      // Should log the downgrade message
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "SilbercueChrome human touch disabled (Pro feature — activate with 'silbercuechrome license activate <key>')",
+      );
+      // Should NOT log the "enabled" message
+      const enabledCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("human touch enabled"),
+      );
+      expect(enabledCall).toBeUndefined();
+
+      consoleSpy.mockRestore();
+    } finally {
+      // Restore env vars
+      if (originalHT === undefined) delete process.env.SILBERCUE_HUMAN_TOUCH;
+      else process.env.SILBERCUE_HUMAN_TOUCH = originalHT;
+      if (originalHTS === undefined) delete process.env.SILBERCUE_HUMAN_TOUCH_SPEED;
+      else process.env.SILBERCUE_HUMAN_TOUCH_SPEED = originalHTS;
+    }
+  });
+
+  it("Pro-Tier: Human Touch enabled stays enabled", () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => true };
+
+    // Set env vars to enable Human Touch
+    const originalHT = process.env.SILBERCUE_HUMAN_TOUCH;
+    const originalHTS = process.env.SILBERCUE_HUMAN_TOUCH_SPEED;
+    process.env.SILBERCUE_HUMAN_TOUCH = "true";
+    process.env.SILBERCUE_HUMAN_TOUCH_SPEED = "normal";
+
+    try {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const registry = new ToolRegistry(
+        mockServer, {} as never, "session-1", {} as never,
+        undefined, undefined, undefined, license,
+      );
+      registry.registerAll();
+
+      // Should NOT log the downgrade message
+      const disabledCall = consoleSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("human touch disabled"),
+      );
+      expect(disabledCall).toBeUndefined();
+
+      // Should log the "enabled" message
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "SilbercueChrome human touch enabled (speed: normal)",
+      );
+
+      consoleSpy.mockRestore();
+    } finally {
+      if (originalHT === undefined) delete process.env.SILBERCUE_HUMAN_TOUCH;
+      else process.env.SILBERCUE_HUMAN_TOUCH = originalHT;
+      if (originalHTS === undefined) delete process.env.SILBERCUE_HUMAN_TOUCH_SPEED;
+      else process.env.SILBERCUE_HUMAN_TOUCH_SPEED = originalHTS;
+    }
+  });
+
+  it("Free-Tier: switch_tab gate fires BEFORE parallel check (sessionIdOverride)", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // Call switch_tab with sessionIdOverride — Free tier should get Pro-Feature error, NOT parallel block
+    const result = await registry.executeTool("switch_tab", { action: "list" }, "tab-override");
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toHaveProperty(
+      "text",
+      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
+    );
+    // Explicitly NOT the parallel error
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("parallelen Plan-Gruppen");
   });
 });

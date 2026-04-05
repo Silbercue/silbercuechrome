@@ -238,7 +238,8 @@ export class ToolRegistry {
       registerProHooks({
         ...hooks,
         featureGate: (toolName: string) => {
-          if (toolName === "dom_snapshot" && !licenseStatus.isPro()) {
+          const gatedTools = ["dom_snapshot", "switch_tab", "virtual_desk"];
+          if (gatedTools.includes(toolName) && !licenseStatus.isPro()) {
             return { allowed: false };
           }
           return { allowed: true };
@@ -250,6 +251,11 @@ export class ToolRegistry {
 
     // Create Human Touch config from environment (once at startup)
     const humanTouch = createHumanTouchFromEnv();
+    // Story 9.9: Human Touch is Pro-only — silently downgrade in Free tier (AC #3)
+    if (humanTouch.enabled && !this._licenseStatus.isPro()) {
+      humanTouch.enabled = false;
+      console.error("SilbercueChrome human touch disabled (Pro feature — activate with 'silbercuechrome license activate <key>')");
+    }
     if (humanTouch.enabled) {
       console.error(`SilbercueChrome human touch enabled (speed: ${humanTouch.speedProfile})`);
     }
@@ -401,7 +407,7 @@ export class ToolRegistry {
         url: switchTabSchema.shape.url,
         tab_id: switchTabSchema.shape.tab_id,
       },
-      wrap(async (params) => {
+      wrap(this.wrapWithGate("switch_tab", async (params) => {
         return switchTabHandler(
           params as unknown as SwitchTabParams,
           this.cdpClient,
@@ -412,14 +418,14 @@ export class ToolRegistry {
           },
           this._sessionManager,
         );
-      }, "switch_tab"),
+      }, finalHooks), "switch_tab"),
     );
 
     this.server.tool(
       "virtual_desk",
       "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
       {},
-      wrap(async (params) => {
+      wrap(this.wrapWithGate("virtual_desk", async (params) => {
         return virtualDeskHandler(
           params as unknown as VirtualDeskParams,
           this.cdpClient,
@@ -427,7 +433,7 @@ export class ToolRegistry {
           this._tabStateCache,
           this.connectionStatus,
         );
-      }, "virtual_desk"),
+      }, finalHooks), "virtual_desk"),
     );
 
     this.server.tool(
@@ -629,6 +635,14 @@ export class ToolRegistry {
       );
     });
     this._handlers.set("switch_tab", async (params, sessionIdOverride?) => {
+      // Story 9.9: Pro-Feature-Gate must fire BEFORE the parallel check
+      const switchGate = finalHooks.featureGate?.("switch_tab");
+      if (switchGate && !switchGate.allowed) {
+        if (switchGate.message) {
+          return { content: [{ type: "text", text: switchGate.message }], isError: true, _meta: { elapsedMs: 0, method: "switch_tab" } };
+        }
+        return proFeatureError("switch_tab");
+      }
       // H3 fix: switch_tab in parallel context would mutate the global session — block it
       if (sessionIdOverride) {
         return {
@@ -649,6 +663,14 @@ export class ToolRegistry {
       );
     });
     this._handlers.set("virtual_desk", async (params, sessionIdOverride?) => {
+      // Story 9.9: Pro-Feature-Gate for virtual_desk
+      const vdGate = finalHooks.featureGate?.("virtual_desk");
+      if (vdGate && !vdGate.allowed) {
+        if (vdGate.message) {
+          return { content: [{ type: "text", text: vdGate.message }], isError: true, _meta: { elapsedMs: 0, method: "virtual_desk" } };
+        }
+        return proFeatureError("virtual_desk");
+      }
       return virtualDeskHandler(
         params as unknown as VirtualDeskParams,
         this.cdpClient,
