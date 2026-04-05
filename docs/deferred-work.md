@@ -215,6 +215,35 @@ Tools werfen rohe "CdpClient is closed" statt der freundlichen Meldung "CDP conn
 
 ---
 
+## BUG-012: click() loest onclick-Handler nach DOM-Mutation nicht aus
+
+**Entdeckt:** 2026-04-05 (Live-Test T3.1)
+**Schwere:** P1 — Hoch
+**Betrifft:** `src/tools/click.ts` (Zeilen 26-91), CDP `Input.dispatchMouseEvent`
+
+### Problem
+CDP-Click via `Input.dispatchMouseEvent` (`mousePressed` + `mouseReleased`) loest inline `onclick`-Handler nicht zuverlaessig aus, wenn vorher DOM-Mutationen stattfanden (Shadow-DOM-Interaktion, Typing). Der Click-Return meldet Erfolg, aber der Handler feuert nicht.
+
+### Reproduktion (Benchmark T3.1)
+1. Shadow-Button klicken (e98) → OK, Text wechselt zu "Shadow Clicked!"
+2. Wert in Input tippen (e59) → OK
+3. Verify-Button klicken (e60, `onclick="Tests.t3_1_verify()"`) → Click-Return "success", aber Status bleibt PENDING
+4. Gleicher Verify via `evaluate("Tests.t3_1_verify()")` → PASS
+
+### Kontrast: T1.4 onclick funktioniert
+T1.4-Buttons nutzen ebenfalls inline `onclick`, aber dort gab es vorher keine DOM-Mutationen. Alle 5 Clicks registrierten korrekt.
+
+### Vermutete Ursache
+Nach DOM-Mutationen (Shadow-DOM, Typing) verschiebt sich das Layout oder die Element-Koordinaten aendern sich. `DOM.getContentQuads` liefert Koordinaten basierend auf dem alten Layout. Der Click landet geometrisch daneben — `mousePressed`/`mouseReleased` werden dispatched, aber nicht auf dem richtigen Element. Deshalb feuert der onclick-Handler nicht.
+
+### Moegliche Fixes
+- Vor dem Click `DOM.scrollIntoViewIfNeeded` + kurze Pause fuer Layout-Recalc
+- getContentQuads direkt vor dem Click aufrufen (nicht gecacht)
+- Fallback: Wenn ref-basierter Click fehlschlaegt, JS-Click via `Runtime.callFunctionOn` versuchen
+- Nach DOM-Mutationen automatisch A11y-Tree und Koordinaten-Cache invalidieren
+
+---
+
 ## TECH-DEBT-001: AutoLaunch-Verhalten bei HEADLESS=false
 
 **Entdeckt:** 2026-04-05

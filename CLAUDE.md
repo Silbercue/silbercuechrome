@@ -48,6 +48,10 @@ node test-hardest/smoke-test.mjs   # 10 Tests, startet MCP-Server intern
 
 Liegen als JSON in `test-hardest/benchmark-*.json` und `test-hardest/ops-*.json` (Stand 2026-04-02).
 
+## Bekannte Bugs & Deferred Work
+
+Vollstaendige Bug-Liste mit Reproduktionsschritten und Root-Cause-Analysen: `docs/deferred-work.md`
+
 ## Context7 — Aktuelle Library-Dokumentation
 - Vor jeder Implementierung, die externe Libraries oder Frameworks nutzt,
   automatisch Context7 MCP verwenden (resolve-library-id → get-library-docs)
