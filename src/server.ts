@@ -25,7 +25,9 @@ interface TargetInfo {
 export async function startServer(): Promise<void> {
   // 1. Connect to Chrome (Story 1.3: WebSocket first, then Auto-Launch)
   const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
-  const launcher = new ChromeLauncher({ profilePath });
+  const headless = process.env.SILBERCUE_CHROME_HEADLESS !== "false";
+  const autoLaunch = process.env.SILBERCUE_CHROME_AUTO_LAUNCH === "true" || (process.env.SILBERCUE_CHROME_AUTO_LAUNCH === undefined && headless);
+  const launcher = new ChromeLauncher({ profilePath, headless, autoLaunch });
   const connection = await launcher.connect();
   const { cdpClient } = connection;
 
