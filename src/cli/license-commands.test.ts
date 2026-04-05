@@ -35,12 +35,12 @@ function writeCache(cacheDir: string, data: Record<string, unknown>): void {
   fs.writeFileSync(path.join(cacheDir, "license-cache.json"), JSON.stringify(data), "utf-8");
 }
 
-function mockFetchOk(valid: boolean, features: string[] = []): void {
+function mockFetchOk(valid: boolean, _features: string[] = []): void {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ valid, features }),
+      json: () => Promise.resolve({ status: valid ? "granted" : "revoked" }),
     }),
   );
 }

@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-05c
+# last_updated: 2026-04-05
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-05c
+last_updated: 2026-04-05
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -127,3 +127,38 @@ development_status:
   9-8-license-validation-server: done
   9-9-pro-feature-gates-switch-tab-virtual-desk-human-touch: done
   epic-9-retrospective: optional
+
+  # ═══════════════════════════════════════════════════════════
+  # Phase 2: Community-Driven Evolution (Sprint Change 2026-04-05)
+  # Trigger: Post-Launch Benchmark + Community-Recherche
+  # Proposal: sprint-change-proposal-2026-04-05-phase2.md
+  # ═══════════════════════════════════════════════════════════
+
+  # Epic 10: Pre-Launch Stabilisierung
+  epic-10: in-progress
+  10-1-fix-license-commands-test: done
+  10-2-autolaunch-tests-doku: ready-for-dev
+  10-3-smoke-test-env-fix: backlog
+  10-4-benchmark-runner-finalisieren: backlog
+  10-5-prd-addendum: backlog
+  epic-10-retrospective: optional
+
+  # Epic 11: Benchmark-Suite v2 — Community Pain Points
+  epic-11: backlog
+  11-1-level5-infrastruktur: backlog
+  11-2-session-persistence-test: backlog
+  11-3-cdp-fingerprint-test: backlog
+  11-4-console-log-capture-test: backlog
+  11-5-file-upload-test: backlog
+  11-6-spa-navigation-test: backlog
+  11-7-reconnect-recovery-test: backlog
+  11-8-benchmark-runner-integration: backlog
+  epic-11-retrospective: optional
+
+  # Epic 12: Token-Transparenz & Metriken
+  epic-12: backlog
+  12-1-meta-response-bytes: backlog
+  12-2-meta-estimated-tokens: backlog
+  12-3-token-budget-benchmark-test: backlog
+  12-4-tool-definitions-token-zaehler: backlog
+  epic-12-retrospective: optional
