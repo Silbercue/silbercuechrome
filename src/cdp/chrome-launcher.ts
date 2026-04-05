@@ -40,6 +40,31 @@ interface LaunchResult {
   transportType: "pipe";
 }
 
+// ── AutoLaunch Resolution (Story 10.2) ────────────────────────────────
+
+/**
+ * Resolve the autoLaunch setting from environment variables and headless mode.
+ * Pure function — no side effects, fully testable.
+ *
+ * - SILBERCUE_CHROME_AUTO_LAUNCH=true  → always auto-launch
+ * - SILBERCUE_CHROME_AUTO_LAUNCH=false → never auto-launch
+ * - unset → auto-launch when headless (server mode), skip when headed (developer mode)
+ */
+export function resolveAutoLaunch(
+  env: Record<string, string | undefined>,
+  headless: boolean,
+): boolean {
+  const val = env.SILBERCUE_CHROME_AUTO_LAUNCH;
+  if (val === "true" || val === "1") return true;
+  if (val === "false" || val === "0") return false;
+  if (val === undefined) {
+    // Default: autoLaunch = true when headless (server mode), false when headed (developer mode)
+    return headless;
+  }
+  // Invalid env value (e.g. "foo", "bar") → safe default: no auto-launch
+  return false;
+}
+
 // ── Chrome Path Detection (Task 1) ────────────────────────────────────
 
 const CHROME_PATHS: Record<string, string[]> = {

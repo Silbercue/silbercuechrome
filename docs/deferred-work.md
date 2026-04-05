@@ -18,6 +18,9 @@ Bugs, Verbesserungen und offene Punkte die waehrend der Arbeit entdeckt, aber ni
 | BUG-010 | GEFIXT | Precomputed-Cache sofort bei DOM-Mutation invalidiert (DomWatcher + server.ts) |
 | BUG-011 | GEFIXT | wrapCdpError in 9 Tools nachgeruestet |
 | BUG-012 | GEFIXT | getBoundingClientRect + JS-Click Fallback in click.ts |
+| BUG-013 | OFFEN | Stale-Ref "Did you mean" schlaegt identischen Ref vor |
+| BUG-014 | OFFEN | read_page max_tokens harte Validierung statt Clamping |
+| UX-001 | OFFEN | click — kein Text-basiertes Matching |
 | TD-001 | OFFEN | AutoLaunch Tests + Doku |
 
 ---
@@ -253,6 +256,99 @@ Nach DOM-Mutationen (Shadow-DOM, Typing) verschiebt sich das Layout oder die Ele
 - getContentQuads direkt vor dem Click aufrufen (nicht gecacht)
 - Fallback: Wenn ref-basierter Click fehlschlaegt, JS-Click via `Runtime.callFunctionOn` versuchen
 - Nach DOM-Mutationen automatisch A11y-Tree und Koordinaten-Cache invalidieren
+
+---
+
+## BUG-013: Stale Ref — "Did you mean" schlaegt identischen Ref vor
+
+**Entdeckt:** 2026-04-05 (Live-Nutzung SteuerDB-Anwendung)
+**Schwere:** P2 — Mittel (UX-Problem, verschwendet Roundtrips)
+**Betrifft:** `src/tools/element-utils.ts` (Zeile 159-169), `src/cache/a11y-tree.ts` (Zeile 404-435)
+
+### Problem
+`click(ref: "e96")` schlaegt fehl mit `RefNotFoundError`, weil die Seite zwischen `read_page` und `click` neu gerendert hat. Die DOM-Node hinter dem Ref existiert nicht mehr. Die Fehlermeldung lautet:
+
+> "Element e96 not found. Did you mean e96 (button '📋 Umsätze anzeigen')?"
+
+Das ist widerspruechlich — der Vorschlag ist identisch mit dem fehlgeschlagenen Ref.
+
+### Root Cause
+`buildRefNotFoundError()` ruft `a11yTree.findClosestRef(ref)` auf. `findClosestRef` sucht im `reverseMap` nach dem numerisch naechsten Ref. Der `reverseMap` ist ein Cache aus dem letzten `read_page`-Aufruf — er enthaelt noch die alten Refs inkl. e96. Numerisch naechster Ref zu e96 ist e96 selbst. Die Funktion prueft nicht, ob der vorgeschlagene Ref identisch mit dem angefragten ist.
+
+### Reproduktion
+1. `read_page` → liefert Refs (u.a. e96 = Button "Umsätze anzeigen")
+2. Seite rendert neu (SPA-Navigation, DOM-Mutation)
+3. `click(ref: "e96")` → `resolveElement` findet DOM-Node nicht → `RefNotFoundError`
+4. `buildRefNotFoundError("e96")` → `findClosestRef` findet e96 im Cache → schlaegt e96 vor
+
+### Fix-Vorschlag
+In `buildRefNotFoundError()`: Wenn `suggestion.ref === ref`, stattdessen melden:
+
+> "Element e96 is stale — the page has re-rendered since read_page was called. Run read_page again to get fresh refs."
+
+Alternativ in `findClosestRef()`: Den angefragten Ref aus der Kandidatenliste ausschliessen, wenn er eine `RefNotFoundError` ausgeloest hat.
+
+---
+
+## BUG-014: read_page max_tokens — harte Validierung statt Clamping
+
+**Entdeckt:** 2026-04-05 (Live-Nutzung SteuerDB-Anwendung)
+**Schwere:** P3 — Niedrig (verschwendet 1 Roundtrip)
+**Betrifft:** `src/tools/read-page.ts` (Zeile 16)
+
+### Problem
+`read_page(max_tokens: 300)` wirft einen MCP-Validierungsfehler:
+
+> "Input validation error: Number must be greater than or equal to 500"
+
+Das LLM muss den exakt gleichen Call mit `max_tokens: 500` wiederholen — ein komplett verschwendeter Roundtrip. Das LLM will "so wenig wie moeglich" — 500 ist die bestmoegliche Antwort darauf.
+
+### Root Cause
+`readPageSchema` definiert `z.number().int().min(500)` — Zod wirft sofort einen Validierungsfehler fuer Werte < 500. Kein Clamping, kein Fallback.
+
+### Fix-Vorschlag
+Stilles Clamping statt Fehler:
+
+```typescript
+// Variante A: Zod Transform
+max_tokens: z.number().int().optional()
+  .transform(v => v !== undefined ? Math.max(v, 500) : undefined)
+
+// Variante B: Im Handler
+const effectiveMaxTokens = params.max_tokens 
+  ? Math.max(params.max_tokens, 500) 
+  : undefined;
+```
+
+Leitprinzip: Der MCP wird von LLMs konsumiert. Werte die offensichtlich korrigierbar sind, sollten still korrigiert werden statt einen Fehler zu werfen.
+
+---
+
+## UX-001: click — kein Text-basiertes Matching
+
+**Entdeckt:** 2026-04-05 (Live-Nutzung SteuerDB-Anwendung)
+**Schwere:** P2 — Mittel (erzeugt 3-5 Extra-Roundtrips)
+**Betrifft:** `src/tools/click.ts` (Zeile 12-21)
+
+### Problem
+Das LLM sieht einen Button mit Text "Umsaetze anzeigen" und will ihn klicken. Aktuell moeglich:
+- `click(ref: "e96")` — erfordert vorheriges `read_page` um den Ref zu kennen
+- `click(selector: "button...")` — CSS-Selektoren sind fehleranfaellig (`:has-text()` ist Playwright-Syntax, kein gueltiges CSS)
+
+Tatsaechlicher Ablauf fuer einen einzelnen Klick: 6 Tool-Calls (read_page → click stale → navigate → read_page → click). Optimal waere 1 Call.
+
+### Feature-Vorschlag
+`text`-Parameter fuer click:
+
+```typescript
+click(text: "Umsaetze anzeigen")          // Exakt-Match
+click(text: "Umsaetze", partial: true)     // Partial-Match
+```
+
+Intern: A11y-Tree nach dem Text durchsuchen, Element direkt klicken. Kein vorheriges `read_page` noetig, keine Stale-Ref-Problematik.
+
+### Abgrenzung
+Dies ist ein Feature-Request, kein Bug. Aber die Auswirkung auf LLM-Effizienz ist erheblich: Jeder vermeidbare Roundtrip kostet Latenz und Tokens.
 
 ---
 

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ChromeLauncher } from "./cdp/chrome-launcher.js";
+import { ChromeLauncher, resolveAutoLaunch } from "./cdp/chrome-launcher.js";
 import { SessionManager } from "./cdp/session-manager.js";
 import { DialogHandler } from "./cdp/dialog-handler.js";
 import { ConsoleCollector } from "./cdp/console-collector.js";
@@ -26,7 +26,7 @@ export async function startServer(): Promise<void> {
   // 1. Connect to Chrome (Story 1.3: WebSocket first, then Auto-Launch)
   const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
   const headless = process.env.SILBERCUE_CHROME_HEADLESS !== "false";
-  const autoLaunch = process.env.SILBERCUE_CHROME_AUTO_LAUNCH === "true" || (process.env.SILBERCUE_CHROME_AUTO_LAUNCH === undefined && headless);
+  const autoLaunch = resolveAutoLaunch(process.env as Record<string, string | undefined>, headless);
   const launcher = new ChromeLauncher({ profilePath, headless, autoLaunch });
   const connection = await launcher.connect();
   const { cdpClient } = connection;

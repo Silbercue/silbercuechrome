@@ -137,8 +137,8 @@ development_status:
   # Epic 10: Pre-Launch Stabilisierung
   epic-10: in-progress
   10-1-fix-license-commands-test: done
-  10-2-autolaunch-tests-doku: ready-for-dev
-  10-3-smoke-test-env-fix: backlog
+  10-2-autolaunch-tests-doku: done
+  10-3-smoke-test-env-fix: ready-for-dev
   10-4-benchmark-runner-finalisieren: backlog
   10-5-prd-addendum: backlog
   epic-10-retrospective: optional

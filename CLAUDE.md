@@ -7,18 +7,35 @@
 npm run build          # tsc → build/
 
 # Unit-Tests
-npm test               # vitest run (363+ Tests)
+npm test               # vitest run (1100+ Tests)
 
 # MCP-Server starten (fuer Live-Tests via MCP-Client)
 node build/index.js    # Stdio-Transport, verbindet sich zu Chrome via CDP
 ```
 
-Der Server verbindet sich automatisch zu einer laufenden Chrome-Instanz (WebSocket auf Port 9222) oder startet Chrome mit `--remote-debugging-port=9222`. Chrome muss mit Remote Debugging laufen:
+Der Server verbindet sich automatisch zu einer laufenden Chrome-Instanz (WebSocket auf Port 9222) oder startet Chrome als Child-Prozess. Chrome muss mit Remote Debugging laufen fuer manuelle Verbindung:
 
 ```bash
 # Chrome mit Remote Debugging starten (macOS)
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
 ```
+
+### Connection Modes
+
+SilbercueChrome verbindet sich in dieser Reihenfolge:
+
+1. **WebSocket (bevorzugt):** Prueft `127.0.0.1:9222/json/version`. Wenn Chrome laeuft, verbindet sich per WebSocket.
+2. **Auto-Launch (Fallback):** Wenn kein Chrome laeuft und `autoLaunch` aktiv, startet Chrome mit `--remote-debugging-pipe` als Child-Prozess.
+3. **Fehler:** Wenn kein Chrome laeuft und `autoLaunch=false`, wirft einen Verbindungsfehler.
+
+**Umgebungsvariablen:**
+
+| Variable | Werte | Default | Beschreibung |
+|----------|-------|---------|-------------|
+| `SILBERCUE_CHROME_AUTO_LAUNCH` | `true` / `false` | `true` (headless), `false` (headed) | Chrome automatisch starten wenn kein laufendes Chrome gefunden |
+| `SILBERCUE_CHROME_HEADLESS` | `true` / `false` | `true` | Chrome im Headless-Modus starten |
+| `SILBERCUE_CHROME_PROFILE` | Pfad | — | Chrome-Profilverzeichnis (nur bei Auto-Launch) |
+| `CHROME_PATH` | Pfad | — | Pfad zur Chrome-Binary (ueberschreibt automatische Erkennung) |
 
 ## Test Hardest — Benchmark-Seite
 

@@ -34,6 +34,7 @@ import {
   launchChrome,
   ChromeLauncher,
   ChromeConnection,
+  resolveAutoLaunch,
 } from "./chrome-launcher.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -1337,4 +1338,209 @@ describe("Chrome Profile Support", () => {
       await conn.close();
     }, 15_000);
   });
+});
+
+// ── resolveAutoLaunch tests (Story 10.2) ─────────────────────────────
+
+describe("resolveAutoLaunch", () => {
+  it("returns true when SILBERCUE_CHROME_AUTO_LAUNCH=true (env override)", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "true" },
+      false,
+    );
+    expect(result).toBe(true);
+  });
+
+  it("returns true when SILBERCUE_CHROME_AUTO_LAUNCH=true even if headless=false", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "true" },
+      false,
+    );
+    expect(result).toBe(true);
+  });
+
+  it("returns false when SILBERCUE_CHROME_AUTO_LAUNCH=false (env override)", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "false" },
+      true,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false when SILBERCUE_CHROME_AUTO_LAUNCH=false even if headless=true", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "false" },
+      true,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("defaults to true when env unset and headless=true (server mode)", () => {
+    const result = resolveAutoLaunch({}, true);
+    expect(result).toBe(true);
+  });
+
+  it("defaults to false when env unset and headless=false (developer mode)", () => {
+    const result = resolveAutoLaunch({}, false);
+    expect(result).toBe(false);
+  });
+
+  it("defaults to true when env is undefined and headless=true", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: undefined },
+      true,
+    );
+    expect(result).toBe(true);
+  });
+
+  it("defaults to false when env is undefined and headless=false", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: undefined },
+      false,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false for invalid env values like 'foo' (safe default, no auto-launch)", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "foo" },
+      true,
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns true when SILBERCUE_CHROME_AUTO_LAUNCH=1", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "1" },
+      false,
+    );
+    expect(result).toBe(true);
+  });
+
+  it("returns false when SILBERCUE_CHROME_AUTO_LAUNCH=0", () => {
+    const result = resolveAutoLaunch(
+      { SILBERCUE_CHROME_AUTO_LAUNCH: "0" },
+      true,
+    );
+    expect(result).toBe(false);
+  });
+});
+
+// ── AutoLaunch connection strategy tests (Story 10.2) ────────────────
+
+describe("AutoLaunch connection strategy", () => {
+  it("ChromeLauncher.connect() tries WebSocket first, falls back to pipe", async () => {
+    process.env.CHROME_PATH = "/bin/sh";
+
+    const mockChild = createMockChildProcess();
+    (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
+      "/bin/sh",
+      "--headless",
+      "--remote-debugging-pipe",
+      "--user-data-dir=/tmp/silbercuechrome-test",
+    ];
+    vi.mocked(spawn).mockReturnValue(mockChild as never);
+
+    // Start an HTTP server that immediately closes to get fast ECONNREFUSED
+    const srv = (await import("node:http")).createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const autoPort = (srv.address() as { port: number }).port;
+    srv.close();
+
+    const launcher = new ChromeLauncher({
+      port: autoPort,
+      autoLaunch: true,
+    });
+
+    const connectPromise = launcher.connect();
+
+    // Poll until spawn is called (= WebSocket failed, pipe fallback started)
+    const waitForSpawn = async () => {
+      for (let i = 0; i < 100; i++) {
+        if (vi.mocked(spawn).mock.calls.length > 0) return;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    };
+    await waitForSpawn();
+
+    // Verify spawn was called (pipe fallback triggered)
+    expect(spawn).toHaveBeenCalled();
+
+    simulateCdpResponse(mockChild, 1, { product: "Chrome/136.0" });
+
+    const connection = await connectPromise;
+
+    expect(connection.transportType).toBe("pipe");
+    expect(connection.status).toBe("connected");
+
+    await connection.close();
+  }, 15_000);
+
+  it("ChromeLauncher with autoLaunch=false does NOT spawn Chrome when WebSocket fails", async () => {
+    const launcher = new ChromeLauncher({
+      port: 19999,
+      autoLaunch: false,
+    });
+
+    await expect(launcher.connect()).rejects.toThrow();
+
+    // Verify spawn was NOT called — no auto-launch
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("ChromeLauncher with autoLaunch=true spawns Chrome with --remote-debugging-pipe", async () => {
+    process.env.CHROME_PATH = "/bin/sh";
+
+    const mockChild = createMockChildProcess();
+    (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
+      "/bin/sh",
+      "--headless",
+      "--remote-debugging-pipe",
+      "--user-data-dir=/tmp/silbercuechrome-test",
+    ];
+    vi.mocked(spawn).mockReturnValue(mockChild as never);
+
+    // Start an HTTP server that immediately closes to get fast ECONNREFUSED
+    const srv = (await import("node:http")).createServer();
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const autoPort = (srv.address() as { port: number }).port;
+    srv.close();
+
+    const launcher = new ChromeLauncher({
+      port: autoPort,
+      autoLaunch: true,
+      headless: true,
+    });
+
+    const connectPromise = launcher.connect();
+
+    const waitForSpawn = async () => {
+      for (let i = 0; i < 100; i++) {
+        if (vi.mocked(spawn).mock.calls.length > 0) return;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    };
+    await waitForSpawn();
+    simulateCdpResponse(mockChild, 1, { product: "Chrome/136.0" });
+
+    const connection = await connectPromise;
+
+    // Verify spawn was called with --remote-debugging-pipe and --headless
+    expect(spawn).toHaveBeenCalledWith(
+      "/bin/sh",
+      expect.arrayContaining([
+        "--headless",
+        "--remote-debugging-pipe",
+      ]),
+      expect.objectContaining({
+        stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+      }),
+    );
+
+    // Verify --user-data-dir is set
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args.some((a) => a.startsWith("--user-data-dir="))).toBe(true);
+
+    await connection.close();
+  }, 15_000);
 });
