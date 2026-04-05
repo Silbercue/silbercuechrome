@@ -16,6 +16,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
+    "benchmark": "node test-hardest/benchmark-full.mjs",
     "publish:release": "tsx scripts/publish.ts"
   },
   "dependencies": {
