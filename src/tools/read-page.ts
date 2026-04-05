@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { a11yTree, RefNotFoundError } from "../cache/a11y-tree.js";
+import { wrapCdpError } from "./error-utils.js";
 
 export const readPageSchema = z.object({
   depth: z.number().optional().default(3).describe("Tree depth to return (default: 3)"),
@@ -62,9 +63,8 @@ export async function readPageHandler(
       };
     }
 
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `read_page failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "read_page") }],
       isError: true,
       _meta: { elapsedMs, method },
     };

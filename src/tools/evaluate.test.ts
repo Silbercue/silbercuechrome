@@ -171,7 +171,7 @@ describe("evaluateHandler", () => {
     const response = await evaluateHandler({ expression: "1+1", await_promise: true }, cdp);
 
     expect(response.isError).toBe(true);
-    expect(response.content[0].text).toContain("Transport closed unexpectedly");
+    expect(response.content[0].text).toContain("CDP connection lost");
     expect(response._meta?.method).toBe("evaluate");
   });
 

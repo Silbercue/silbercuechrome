@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-04-05T16:30:00Z",
+  "mcp": "SilbercueChrome",
+  "run": 1,
+  "method": "llm-driven-agent",
+  "llm": "claude-opus-4-6",
+  "summary": {
+    "total": 24,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 24,
+    "status": "FAILED_DISCONNECT",
+    "output_bytes": 184878
+  },
+  "failure_reason": "CdpClient disconnected during test execution. Multiple Chrome instances on port 9222 caused WebSocket contention. Agent could not reconnect. Run 1 never recovered — total loss.",
+  "bugs_found": [
+    "BUG-003: WebSocket disconnect, no auto-reconnect",
+    "Multiple agents sharing port 9222 causes connection instability"
+  ]
+}

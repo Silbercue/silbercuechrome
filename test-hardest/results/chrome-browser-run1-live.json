@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-04-05T15:25:00Z",
+  "mcp": "chrome-browser (Playwright-based)",
+  "run": 1,
+  "method": "llm-driven-agent",
+  "llm": "claude-opus-4-6",
+  "notes": "Agent identified this as Playwright MCP under different name (mcp__chrome-browser__*)",
+  "summary": {
+    "total": 24,
+    "passed": 24,
+    "failed": 0,
+    "tool_uses": 115,
+    "duration_ms": 585148,
+    "duration_s": 585,
+    "total_tokens": 80171
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "duration_ms": 1 },
+    "T1.2": { "status": "pass", "duration_ms": 10300 },
+    "T1.3": { "status": "pass", "duration_ms": 8000 },
+    "T1.4": { "status": "pass", "duration_ms": 18500 },
+    "T1.5": { "status": "pass", "duration_ms": 17300 },
+    "T1.6": { "status": "pass", "duration_ms": 12600 },
+    "T2.1": { "status": "pass", "duration_ms": 45200 },
+    "T2.2": { "status": "pass", "duration_ms": 25100 },
+    "T2.3": { "status": "pass", "duration_ms": 32100 },
+    "T2.4": { "status": "pass", "duration_ms": 14800 },
+    "T2.5": { "status": "pass", "duration_ms": 17400 },
+    "T2.6": { "status": "pass", "duration_ms": 18200 },
+    "T3.1": { "status": "pass", "duration_ms": 18600 },
+    "T3.2": { "status": "pass", "duration_ms": 9900 },
+    "T3.3": { "status": "pass", "duration_ms": 1 },
+    "T3.4": { "status": "pass", "duration_ms": 55200 },
+    "T3.5": { "status": "pass", "duration_ms": 10300 },
+    "T3.6": { "status": "pass", "duration_ms": 15700 },
+    "T4.1": { "status": "pass", "duration_ms": 47600 },
+    "T4.2": { "status": "pass", "duration_ms": 24400 },
+    "T4.3": { "status": "pass", "duration_ms": 17300 },
+    "T4.4": { "status": "pass", "duration_ms": 32800 },
+    "T4.5": { "status": "pass", "duration_ms": 19000 },
+    "T4.6": { "status": "pass", "duration_ms": 30100 }
+  }
+}

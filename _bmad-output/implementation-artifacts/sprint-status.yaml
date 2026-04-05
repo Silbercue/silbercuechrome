@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-05
+# last_updated: 2026-04-05b
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-05
+last_updated: 2026-04-05b
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -124,5 +124,6 @@ development_status:
   9-5-dual-repo-code-trennung: done
   9-6-dom-snapshot-pro-feature-gate: done
   9-7-publish-pipeline: done
-  9-8-license-validation-server: backlog
+  9-8-license-validation-server: done
+  9-9-pro-feature-gates-switch-tab-virtual-desk-human-touch: backlog
   epic-9-retrospective: optional

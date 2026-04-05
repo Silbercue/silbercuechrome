@@ -6,7 +6,7 @@ import { DialogHandler } from "./cdp/dialog-handler.js";
 import { ConsoleCollector } from "./cdp/console-collector.js";
 import { NetworkCollector } from "./cdp/network-collector.js";
 import { DomWatcher } from "./cdp/dom-watcher.js";
-import { DEVICE_METRICS_OVERRIDE } from "./cdp/emulation.js";
+import { DEVICE_METRICS_OVERRIDE, EMULATED_WIDTH, EMULATED_HEIGHT } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
@@ -60,7 +60,22 @@ export async function startServer(): Promise<void> {
   await cdpClient.send("Page.enable", {}, sessionId);
   await cdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, sessionId);
   await cdpClient.send("Accessibility.enable", {}, sessionId);
-  await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, sessionId);
+  if (headless) {
+    await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, sessionId);
+  } else {
+    // Headed mode: resize browser window instead of emulating viewport.
+    // Emulation.setDeviceMetricsOverride causes a gray bar below the content.
+    try {
+      const { windowId } = await cdpClient.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: pageTarget.targetId });
+      await cdpClient.send("Browser.setWindowBounds", {
+        windowId,
+        bounds: { width: EMULATED_WIDTH, height: EMULATED_HEIGHT + 85 }, // +85 for Chrome UI (tabs, address bar)
+      });
+    } catch {
+      // Fallback to emulation if Browser.setWindowBounds fails (e.g. remote connection)
+      await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, sessionId);
+    }
+  }
 
   // 4. Create TabStateCache and attach to CDP events
   const tabStateCache = new TabStateCache({ ttlMs: 30_000 });
@@ -109,6 +124,11 @@ export async function startServer(): Promise<void> {
     // DOM mutations use fingerprint mismatch for self-healing instead.
     selectorCache.invalidate();
   });
+  // BUG-010: Invalidate precomputed A11y-tree immediately on DOM mutations
+  // (selector cache uses fingerprint self-healing, so only A11y cache needs immediate invalidation)
+  domWatcher.onMutationInvalidate(() => {
+    a11yTree.invalidatePrecomputed();
+  });
   await domWatcher.init();
 
   // 6. Create MCP server and register tools
@@ -152,7 +172,9 @@ export async function startServer(): Promise<void> {
     await newCdpClient.send("Page.enable", {}, newSessionId);
     await newCdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, newSessionId);
     await newCdpClient.send("Accessibility.enable", {}, newSessionId);
-    await newCdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, newSessionId);
+    if (headless) {
+      await newCdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, newSessionId);
+    }
 
     // 3. Re-wire TabStateCache: detach from old, attach to new
     tabStateCache.detachFromClient();
@@ -194,6 +216,10 @@ export async function startServer(): Promise<void> {
     domWatcher.onInvalidate(() => {
       a11yTree.invalidatePrecomputed();
       selectorCache.invalidate();
+    });
+    // BUG-010: Rebind mutation invalidation callback on reconnect
+    domWatcher.onMutationInvalidate(() => {
+      a11yTree.invalidatePrecomputed();
     });
     await domWatcher.reinit(newCdpClient, newSessionId);
   });

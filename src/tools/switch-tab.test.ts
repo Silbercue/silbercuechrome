@@ -563,7 +563,7 @@ describe("switchTabHandler — error handling", () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("switch_tab failed: Transport closed unexpectedly");
+    expect(result.content[0].text).toContain("CDP connection lost");
     expect(result._meta?.method).toBe("switch_tab");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
   });

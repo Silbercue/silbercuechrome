@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-04-05T16:30:00Z",
+  "mcp": "SilbercueChrome",
+  "run": 3,
+  "method": "llm-driven-agent",
+  "llm": "claude-opus-4-6",
+  "strategy": "Bug-hunter, edge cases, stress tests",
+  "summary": {
+    "total": 24,
+    "passed": 24,
+    "failed": 0,
+    "output_bytes": 947841,
+    "notes": "24/24 PASS. Some tests auto-passed from parallel Run 2 (shared Chrome tab). Agent recovered from disconnect and re-navigated."
+  },
+  "auto_passed_from_other_run": ["T2.2", "T2.3", "T2.6"],
+  "bugs_found": [
+    {
+      "id": "BUG-004",
+      "severity": "MEDIUM",
+      "title": "Reconnect delay with misleading error message",
+      "description": "After session restart, navigate fails with unclear error. User doesn't know if Chrome is unreachable or if there's a different problem.",
+      "suggestion": "Clear error: 'Chrome not reachable on port 9222. Is Chrome running with --remote-debugging-port=9222?'"
+    },
+    {
+      "id": "BUG-005",
+      "severity": "LOW",
+      "title": "Shared tab contamination between parallel agents",
+      "description": "Multiple agents operating on the same Chrome tab cause test result contamination. One agent's PASS appears as AUTO-PASS in another agent's results.",
+      "notes": "Architecture-level issue — CDP allows only one page state. Not really a bug, but needs documentation."
+    }
+  ],
+  "stress_test_results": {
+    "read_page_10k_dom": "Downsampling works. A11y tree correctly handles 10K elements with depth limiting.",
+    "fill_form_7_fields": "Works perfectly in 1 call",
+    "evaluate_shadow_dom": "Works via element.shadowRoot.querySelector",
+    "evaluate_iframe": "Works via contentDocument",
+    "evaluate_canvas_pixel_scan": "Works — can scan pixel colors and dispatch click at exact coordinates",
+    "evaluate_mutation_observer": "Works — captures all 3 sequential mutations",
+    "switch_tab_open_read_close": "Works correctly"
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "method": "click via ref" },
+    "T1.2": { "status": "pass", "method": "evaluate + type + click" },
+    "T1.3": { "status": "pass", "method": "fill_form (7 fields, 1 call)" },
+    "T1.4": { "status": "pass", "method": "click via ref (4/5) + evaluate (1/5)" },
+    "T1.5": { "status": "pass", "method": "evaluate (anchor-clicks + verify)" },
+    "T1.6": { "status": "pass", "method": "evaluate (sum + type)" },
+    "T2.1": { "status": "pass", "method": "evaluate (read + type)" },
+    "T2.2": { "status": "pass", "genuine": false, "notes": "AUTO-PASS from Run 2" },
+    "T2.3": { "status": "pass", "genuine": false, "notes": "AUTO-PASS from Run 2" },
+    "T2.4": { "status": "pass", "method": "type + evaluate (MouseEvent)" },
+    "T2.5": { "status": "pass", "method": "switch_tab open/switch/close" },
+    "T2.6": { "status": "pass", "genuine": false, "notes": "AUTO-PASS from Run 2" },
+    "T3.1": { "status": "pass", "method": "evaluate (shadowRoot)" },
+    "T3.2": { "status": "pass", "method": "evaluate (contentDocument)" },
+    "T3.3": { "status": "pass", "method": "evaluate (DOM manipulation)" },
+    "T3.4": { "status": "pass", "method": "evaluate (Canvas pixel scan + MouseEvent)" },
+    "T3.5": { "status": "pass", "method": "evaluate (KeyboardEvent dispatch)" },
+    "T3.6": { "status": "pass", "method": "evaluate (innerHTML)" },
+    "T4.1": { "status": "pass", "method": "click + wait_for + evaluate" },
+    "T4.2": { "status": "pass", "method": "evaluate (setInterval capture)" },
+    "T4.3": { "status": "pass", "method": "evaluate (querySelector)" },
+    "T4.4": { "status": "pass", "method": "evaluate (localStorage + cookie)" },
+    "T4.5": { "status": "pass", "method": "evaluate (MutationObserver)" },
+    "T4.6": { "status": "pass", "method": "fill_form + click + evaluate" }
+  }
+}

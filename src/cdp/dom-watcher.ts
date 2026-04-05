@@ -16,6 +16,7 @@ export class DomWatcher {
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _onRefreshCallback: (() => Promise<void>) | null = null;
   private _onInvalidateCallback: (() => void) | null = null;
+  private _onMutationInvalidateCallback: (() => void) | null = null;
   private _refreshInProgress = false;
 
   // Bound callbacks for on/off
@@ -39,6 +40,11 @@ export class DomWatcher {
   /** Registriert den Callback fuer sofortige Cache-Invalidierung (bei Navigation) */
   onInvalidate(callback: () => void): void {
     this._onInvalidateCallback = callback;
+  }
+
+  /** Registriert den Callback fuer sofortige Precomputed-Cache-Invalidierung bei DOM-Mutationen (BUG-010) */
+  onMutationInvalidate(callback: () => void): void {
+    this._onMutationInvalidateCallback = callback;
   }
 
 
@@ -109,6 +115,13 @@ export class DomWatcher {
     // H2 fix: Do NOT invalidate selector cache immediately on DOM mutations.
     // The debounced refresh will compute a new fingerprint, and any stale
     // cache entries will self-heal via fingerprint mismatch on next access.
+
+    // BUG-010 fix: Immediately invalidate precomputed A11y-tree cache so the next
+    // getTree() call fetches fresh data from CDP instead of serving stale cache.
+    // This is idempotent and cheap (just nulls the cached nodes array).
+    if (this._onMutationInvalidateCallback) {
+      this._onMutationInvalidateCallback();
+    }
 
     // Cancel existing timer
     if (this._debounceTimer) {

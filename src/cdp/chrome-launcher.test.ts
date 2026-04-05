@@ -634,7 +634,7 @@ describe("ChromeConnection.reconnect", () => {
     expect(conn.status).toBe("disconnected");
   });
 
-  it("parallel reconnect attempts are prevented", async () => {
+  it("parallel reconnect attempts are prevented", { timeout: 30_000 }, async () => {
     const transport = {
       send: vi.fn(() => true),
       onMessage: vi.fn(),
@@ -650,6 +650,8 @@ describe("ChromeConnection.reconnect", () => {
       "websocket",
       undefined,
       undefined,
+      undefined,
+      19999, // non-existent port for guaranteed failure
     );
 
     // Start first reconnect (will fail because no WS server, but triggers state)
@@ -695,7 +697,7 @@ describe("ChromeConnection.reconnect", () => {
     expect(conn.status).toBe("disconnected");
 
     await conn.close();
-  }, 15_000);
+  }, 30_000);
 
   it("reconnect calls onReconnect callback on success", async () => {
     // Start a real WS mock server for reconnect
@@ -824,7 +826,7 @@ describe("ChromeConnection.reconnect", () => {
     await conn.close();
   });
 
-  it("retries 3 times with 500ms pause between attempts before giving up", async () => {
+  it("retries 5 times with exponential backoff before giving up", async () => {
     const transport = {
       send: vi.fn(() => true),
       onMessage: vi.fn(),
@@ -850,12 +852,12 @@ describe("ChromeConnection.reconnect", () => {
 
     expect(result).toBe(false);
     expect(conn.status).toBe("disconnected");
-    // 3 attempts with 500ms pause between attempt 1→2 and 2→3 = at least ~1000ms
+    // 5 attempts with exponential backoff: 500 + 1000 + 2000 + 4000 = 7500ms
     // (first attempt has no pause)
-    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeGreaterThanOrEqual(7000);
 
     await conn.close();
-  }, 15_000);
+  }, 30_000);
 
   it("close() during reconnect aborts the retry loop", async () => {
     const transport = {
@@ -877,7 +879,7 @@ describe("ChromeConnection.reconnect", () => {
       19999, // non-existent port for fast failure
     );
 
-    // Start reconnect (will retry 3 times against non-existent port)
+    // Start reconnect (will retry 5 times against non-existent port)
     const reconnectPromise = conn.reconnect();
 
     // Close after a short delay (during retry pause)
@@ -890,7 +892,7 @@ describe("ChromeConnection.reconnect", () => {
     expect(conn.status).toBe("disconnected");
   }, 15_000);
 
-  it("onReconnect callback error leaves status as disconnected", async () => {
+  it("onReconnect callback error leaves status as disconnected", { timeout: 30_000 }, async () => {
     // Start a real WS mock server for reconnect
     const port = await new Promise<number>((resolve) => {
       wsServer = createServer((req, res) => {

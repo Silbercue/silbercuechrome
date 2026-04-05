@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-04-05T00:14:20.779Z",
+  "elapsed_s": 1185,
+  "summary": {
+    "total": 19,
+    "passed": 16,
+    "failed": 3
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "duration_ms": 83, "details": "Button clicked successfully" },
+    "T1.2": { "status": "pass", "duration_ms": 2766, "details": "Correct: V8QS-2JLU" },
+    "T1.3": { "status": "pass", "duration_ms": 15602, "details": "Form submitted successfully" },
+    "T1.4": { "status": "pass", "duration_ms": 12534, "details": "All 5 selectors found and clicked" },
+    "T1.5": { "status": "pass", "duration_ms": 7965, "details": "Navigation sequence correct" },
+    "T1.6": { "status": "pass", "duration_ms": 2448, "details": "Correct sum: 249" },
+    "T2.1": { "status": "pass", "duration_ms": 16600, "details": "Async value correct" },
+    "T2.3": { "status": "pass", "duration_ms": 24877, "details": "Wizard completed: pro" },
+    "T2.4": { "status": "pass", "duration_ms": 6943, "details": "Elixir selected!" },
+    "T2.5": { "status": "pass", "duration_ms": 3428, "details": "Tab value correct!" },
+    "T2.6": { "status": "pass", "duration_ms": 15925, "details": "Correct! Device Max is most expensive." },
+    "T3.1": { "status": "pass", "duration_ms": 3316, "details": "Shadow DOM value correct" },
+    "T3.2": { "status": "pass", "duration_ms": 4082, "details": "iFrame value correct" },
+    "T3.4": { "status": "fail", "duration_ms": 36046, "details": "Missed by 100.2px" },
+    "T3.6": { "status": "fail", "duration_ms": 9830, "details": "No bold formatting found" },
+    "T4.1": { "status": "pass", "duration_ms": 20222, "details": "Target caught!" },
+    "T4.3": { "status": "pass", "duration_ms": 16959, "details": "Needle found!" },
+    "T4.6": { "status": "pass", "duration_ms": 61824, "details": "Token verified! Final boss defeated!" },
+    "T4.2": { "status": "fail", "duration_ms": 16114, "details": "Captured at 2, expected 5" }
+  }
+}

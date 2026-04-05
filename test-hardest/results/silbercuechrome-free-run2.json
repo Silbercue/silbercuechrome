@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-04-05T02:53:22.567Z",
+  "elapsed_s": 900,
+  "summary": {
+    "total": 24,
+    "passed": 24,
+    "failed": 0
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "duration_ms": 955560, "details": "Button clicked successfully" },
+    "T1.2": { "status": "pass", "duration_ms": 887749, "details": "Correct: 9S83-S9TO" },
+    "T1.3": { "status": "pass", "duration_ms": 926244, "details": "Form submitted successfully" },
+    "T1.4": { "status": "pass", "duration_ms": 928097, "details": "All 5 selectors found and clicked" },
+    "T1.5": { "status": "pass", "duration_ms": 1007322, "details": "Navigation sequence correct" },
+    "T1.6": { "status": "pass", "duration_ms": 862674, "details": "Correct sum: 209" },
+    "T2.1": { "status": "pass", "duration_ms": 21014, "details": "Async value correct" },
+    "T2.2": { "status": "pass", "duration_ms": 0, "details": "Item 30 loaded" },
+    "T2.3": { "status": "pass", "duration_ms": 280616, "details": "Wizard completed: pro" },
+    "T2.4": { "status": "pass", "duration_ms": 216268, "details": "Python selected!" },
+    "T2.5": { "status": "pass", "duration_ms": 4870, "details": "Tab value correct!" },
+    "T2.6": { "status": "pass", "duration_ms": 179747, "details": "Correct! Device Max is most expensive." },
+    "T3.1": { "status": "pass", "duration_ms": 7475, "details": "Shadow DOM value correct" },
+    "T3.2": { "status": "pass", "duration_ms": 7145, "details": "iFrame value correct" },
+    "T3.3": { "status": "pass", "duration_ms": 1, "details": "Items in correct order!" },
+    "T3.4": { "status": "pass", "duration_ms": 101256, "details": "Hit! Distance: 0.4px" },
+    "T3.5": { "status": "pass", "duration_ms": 0, "details": "All keyboard shortcuts executed correctly" },
+    "T3.6": { "status": "pass", "duration_ms": 10247, "details": "Hello World with bold detected" },
+    "T4.1": { "status": "pass", "duration_ms": 0, "details": "Target caught!" },
+    "T4.2": { "status": "pass", "duration_ms": 0, "details": "Captured at exactly 4!" },
+    "T4.3": { "status": "pass", "duration_ms": 21077, "details": "Needle found!" },
+    "T4.4": { "status": "pass", "duration_ms": 20274, "details": "State chain complete!" },
+    "T4.5": { "status": "pass", "duration_ms": 1, "details": "All mutations captured!" },
+    "T4.6": { "status": "pass", "duration_ms": 1, "details": "Token verified! Final boss defeated!" }
+  }
+}

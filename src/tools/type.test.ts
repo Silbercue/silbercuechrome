@@ -457,11 +457,44 @@ describe("typeHandler", () => {
 
   // --- Error handling tests (AC #3, #9) ---
 
-  it("should return isError when DOM.focus fails", async () => {
+  it("should fall back to JS focus when DOM.focus fails (BUG-006)", async () => {
+    mockResolveElement.mockResolvedValue(mockTextbox());
+    const { cdpClient, sendFn } = createMockCdp({
+      "DOM.focus": () => {
+        throw new Error("Element is not focusable");
+      },
+    });
+
+    const result = await typeHandler({ ref: "e12", text: "test", clear: false }, cdpClient, "s1");
+
+    // JS fallback succeeds — no error
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Typed \"test\""),
+      }),
+    );
+    // Verify JS fallback was called with this.focus()
+    expect(sendFn).toHaveBeenCalledWith(
+      "Runtime.callFunctionOn",
+      expect.objectContaining({
+        functionDeclaration: "function() { this.focus(); }",
+        objectId: "obj-42",
+        silent: true,
+      }),
+      "s1",
+    );
+  });
+
+  it("should return isError when DOM.focus AND JS fallback both fail", async () => {
     mockResolveElement.mockResolvedValue(mockTextbox());
     const { cdpClient } = createMockCdp({
       "DOM.focus": () => {
         throw new Error("Element is not focusable");
+      },
+      "Runtime.callFunctionOn": () => {
+        throw new Error("Cannot find context");
       },
     });
 

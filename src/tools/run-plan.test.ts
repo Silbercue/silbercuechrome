@@ -673,6 +673,14 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
     expect(result._meta!.limit).toBe(3);
     expect(result._meta!.total).toBe(5);
     expect(result.isError).toBeFalsy();
+
+    // BUG-008: Visible truncation warning in content (not just _meta)
+    const firstBlock = result.content[0];
+    expect(firstBlock).toEqual(expect.objectContaining({ type: "text" }));
+    const text = (firstBlock as { type: "text"; text: string }).text;
+    expect(text).toContain("truncated from 5 to 3");
+    expect(text).toContain("[4] evaluate");
+    expect(text).toContain("[5] type");
   });
 
   it("does not limit steps when license is Pro", async () => {

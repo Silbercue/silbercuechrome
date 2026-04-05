@@ -320,7 +320,7 @@ describe("navigateHandler", () => {
 
     const result = await promise;
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Transport closed unexpectedly");
+    expect(result.content[0].text).toContain("CDP connection lost");
     expect(result._meta?.method).toBe("navigate");
   });
 });

@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-04-05T01:02:41.422Z",
+  "elapsed_s": 913,
+  "summary": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "duration_ms": 82, "details": "Button clicked successfully" },
+    "T1.2": { "status": "pass", "duration_ms": 4512, "details": "Correct: PIGD-O5LA" },
+    "T1.3": { "status": "pass", "duration_ms": 33686, "details": "Form submitted successfully" },
+    "T1.4": { "status": "pass", "duration_ms": 18562, "details": "All 5 selectors found and clicked" },
+    "T1.5": { "status": "pass", "duration_ms": 14277, "details": "Navigation sequence correct" },
+    "T1.6": { "status": "pass", "duration_ms": 4584, "details": "Correct sum: 234" },
+    "T2.1": { "status": "pass", "duration_ms": 22690, "details": "Async value correct" },
+    "T2.3": { "status": "pass", "duration_ms": 39247, "details": "Wizard completed: pro" },
+    "T2.4": { "status": "pass", "duration_ms": 10272, "details": "Scala selected!" },
+    "T2.5": { "status": "pass", "duration_ms": 3986, "details": "Tab value correct!" },
+    "T2.6": { "status": "pass", "duration_ms": 14147, "details": "Correct! Device Max is most expensive." },
+    "T3.1": { "status": "pass", "duration_ms": 5055, "details": "Shadow DOM value correct" },
+    "T3.2": { "status": "pass", "duration_ms": 4661, "details": "iFrame value correct" },
+    "T4.1": { "status": "pass", "duration_ms": 21522, "details": "Target caught!" },
+    "T4.2": { "status": "pass", "duration_ms": 14442, "details": "Captured at exactly 8!" },
+    "T4.3": { "status": "pass", "duration_ms": 34198, "details": "Needle found!" },
+    "T4.6": { "status": "pass", "duration_ms": 224344, "details": "Token verified! Final boss defeated!" }
+  }
+}

@@ -5,6 +5,7 @@ import type { ToolResponse } from "../types.js";
 import type { TabStateCache } from "../cache/tab-state-cache.js";
 import { settle } from "../cdp/settle.js";
 import { DEVICE_METRICS_OVERRIDE } from "../cdp/emulation.js";
+import { wrapCdpError } from "./error-utils.js";
 
 export const switchTabSchema = z.object({
   action: z
@@ -76,7 +77,9 @@ async function activateSession(
   await cdpClient.send("Page.enable", {}, newSessionId);
   await cdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, newSessionId);
   await cdpClient.send("Accessibility.enable", {}, newSessionId);
-  await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, newSessionId);
+  if (process.env.SILBERCUE_CHROME_HEADLESS !== "false") {
+    await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, newSessionId);
+  }
 
   // 3. Re-attach cache listeners to new session
   tabStateCache.detachFromClient();
@@ -129,9 +132,8 @@ export async function switchTabHandler(
       }
     } catch (err) {
       const elapsedMs = Math.round(performance.now() - start);
-      const message = err instanceof Error ? err.message : String(err);
       return {
-        content: [{ type: "text", text: `switch_tab failed: ${message}` }],
+        content: [{ type: "text", text: wrapCdpError(err, "switch_tab") }],
         isError: true,
         _meta: { elapsedMs, method },
       };

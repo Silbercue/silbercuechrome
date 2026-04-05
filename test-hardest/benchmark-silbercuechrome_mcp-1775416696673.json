@@ -1,0 +1,134 @@
+{
+  "name": "SilbercueChrome",
+  "type": "mcp-scripted",
+  "timestamp": "2026-04-05T19:18:16.672Z",
+  "summary": {
+    "total": 24,
+    "passed": 23,
+    "failed": 1,
+    "duration_s": 19,
+    "tool_uses": 134
+  },
+  "tests": {
+    "T1.1": {
+      "status": "pass",
+      "duration_ms": 12,
+      "details": "clicked"
+    },
+    "T1.2": {
+      "status": "pass",
+      "duration_ms": 22,
+      "details": "7ERK-35L8"
+    },
+    "T1.3": {
+      "status": "pass",
+      "duration_ms": 30,
+      "details": "submitted"
+    },
+    "T1.4": {
+      "status": "pass",
+      "duration_ms": 146,
+      "details": "5/5 selectors"
+    },
+    "T1.5": {
+      "status": "pass",
+      "duration_ms": 5,
+      "details": "alpha,beta,gamma"
+    },
+    "T1.6": {
+      "status": "pass",
+      "duration_ms": 18,
+      "details": "sum=290"
+    },
+    "T2.1": {
+      "status": "pass",
+      "duration_ms": 2064,
+      "details": "ASYNC-V3GATY"
+    },
+    "T2.2": {
+      "status": "pass",
+      "duration_ms": 1032,
+      "details": "scrolled"
+    },
+    "T2.3": {
+      "status": "pass",
+      "duration_ms": 43,
+      "details": "pro plan"
+    },
+    "T2.4": {
+      "status": "pass",
+      "duration_ms": 125,
+      "details": "Swift"
+    },
+    "T2.5": {
+      "status": "fail",
+      "duration_ms": 2125,
+      "details": "TAB-010Y-MHLS"
+    },
+    "T2.6": {
+      "status": "pass",
+      "duration_ms": 123,
+      "details": "Device Max"
+    },
+    "T3.1": {
+      "status": "pass",
+      "duration_ms": 24,
+      "details": "SHADOW-YZO1"
+    },
+    "T3.2": {
+      "status": "pass",
+      "duration_ms": 16,
+      "details": "FRAME-MMBM1I"
+    },
+    "T3.3": {
+      "status": "pass",
+      "duration_ms": 16,
+      "details": "1-2-3-4-5"
+    },
+    "T3.4": {
+      "status": "pass",
+      "duration_ms": 7,
+      "details": "(279,152)"
+    },
+    "T3.5": {
+      "status": "pass",
+      "duration_ms": 108,
+      "details": "Ctrl+K, Esc, Enter"
+    },
+    "T3.6": {
+      "status": "pass",
+      "duration_ms": 10,
+      "details": "Hello <b>World</b>"
+    },
+    "T4.1": {
+      "status": "pass",
+      "duration_ms": 2480,
+      "details": "caught"
+    },
+    "T4.2": {
+      "status": "pass",
+      "duration_ms": 3686,
+      "details": "captured at 7"
+    },
+    "T4.3": {
+      "status": "pass",
+      "duration_ms": 162,
+      "details": "NEEDLE-1YLA1NRR"
+    },
+    "T4.4": {
+      "status": "pass",
+      "duration_ms": 44,
+      "details": "6OHZD-BZAFM"
+    },
+    "T4.5": {
+      "status": "pass",
+      "duration_ms": 3526,
+      "details": "MUT-M7U,MUT-5JF,MUT-8TO"
+    },
+    "T4.6": {
+      "status": "pass",
+      "duration_ms": 249,
+      "details": "VGVzdFByb2plY3Q6cHJv"
+    }
+  }
+}

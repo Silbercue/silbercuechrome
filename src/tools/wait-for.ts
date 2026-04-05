@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { ToolResponse } from "../types.js";
 import { settle } from "../cdp/settle.js";
 import { a11yTree } from "../cache/a11y-tree.js";
+import { wrapCdpError } from "./error-utils.js";
 
 // --- Schema (Task 1) ---
 
@@ -337,9 +338,8 @@ export async function waitForHandler(
     }
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `wait_for failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "wait_for") }],
       isError: true,
       _meta: { elapsedMs, method: "wait_for" },
     };

@@ -17,8 +17,12 @@
   <p style="color:#888899;margin-bottom:24px">T2.5: Tab Management Test Page</p>
   <div class="value-box">
     <p>The secret value for this tab is:</p>
-    <div class="value" id="tab-value">TAB-TARGET-VALUE-8F3K</div>
+    <div class="value" id="tab-value">---</div>
   </div>
   <p class="hint">Copy this value, switch back to the main tab, paste it and verify.</p>
+  <script>
+    const token = localStorage.getItem('_bench_tab_token') || 'NO-TOKEN';
+    document.getElementById('tab-value').textContent = token;
+  </script>
 </body>
 </html>

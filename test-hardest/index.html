@@ -134,7 +134,7 @@
     <h3><span class="test-id">T1.2</span> Read Text Content</h3>
     <p class="test-desc">Lies den versteckten Wert aus dem Element und gib ihn in das Eingabefeld ein.</p>
     <div class="test-area">
-      <p>Der geheime Code lautet: <strong id="t1-2-secret">CHROME-7X9K</strong></p>
+      <p>Der geheime Code lautet: <strong id="t1-2-secret"></strong></p>
       <div class="flex gap-8 mt-12">
         <input type="text" id="t1-2-input" placeholder="Code hier eingeben...">
         <button class="action-btn" onclick="Tests.t1_2()">Verify</button>
@@ -185,7 +185,7 @@
         <button class="sel-by-class action-btn" onclick="Tests.t1_4_click(this)" style="align-self:flex-start">Find by Class</button>
         <button data-action="sel-data" class="action-btn" onclick="Tests.t1_4_click(this)" style="align-self:flex-start">Find by data-attribute</button>
         <button aria-label="accessibility-target" class="action-btn" onclick="Tests.t1_4_click(this)" style="align-self:flex-start">Find by aria-label</button>
-        <button class="action-btn" onclick="Tests.t1_4_click(this)" style="align-self:flex-start">Find by exact text: UNIQUE_SELECTOR_2847</button>
+        <button class="action-btn" id="t1-4-text-btn" onclick="Tests.t1_4_click(this)" style="align-self:flex-start">Find by exact text: ---</button>
       </div>
       <div class="verify-output" id="t1-4-result"></div>
     </div>
@@ -214,13 +214,7 @@
     <div class="test-area">
       <table class="test-table" id="t1-6-table">
         <thead><tr><th>Name</th><th>Category</th><th>Score</th></tr></thead>
-        <tbody>
-          <tr><td>Alpha</td><td>Speed</td><td>42</td></tr>
-          <tr><td>Beta</td><td>Accuracy</td><td>87</td></tr>
-          <tr><td>Gamma</td><td>Speed</td><td>23</td></tr>
-          <tr><td>Delta</td><td>Accuracy</td><td>91</td></tr>
-          <tr><td>Epsilon</td><td>Speed</td><td>56</td></tr>
-        </tbody>
+        <tbody id="t1-6-body"></tbody>
       </table>
       <div class="flex gap-8 mt-12">
         <input type="number" id="t1-6-input" placeholder="Sum of scores...">
@@ -305,7 +299,7 @@
 
   <div class="test-card" data-test="2.4">
     <h3><span class="test-id">T2.4</span> Searchable Dropdown</h3>
-    <p class="test-desc">Tippe in das Suchfeld, waehle "TypeScript" aus der gefilterten Liste.</p>
+    <p class="test-desc">Tippe in das Suchfeld, waehle "<strong id="t2-4-target"></strong>" aus der gefilterten Liste.</p>
     <div class="test-area">
       <div style="position:relative;width:300px">
         <input type="text" id="t2-4-search" placeholder="Search language..." autocomplete="off" style="width:100%" oninput="Tests.t2_4_filter()" onfocus="Tests.t2_4_open()">
@@ -321,7 +315,7 @@
     <h3><span class="test-id">T2.5</span> Tab Management</h3>
     <p class="test-desc">Klicke den Link (neuer Tab), lies den Wert dort, kehre zurueck und gib ihn ein.</p>
     <div class="test-area">
-      <a href="tab-target.html" target="_blank" style="color:var(--accent)">Open Target Tab</a>
+      <a id="t2-5-link" href="tab-target.html" target="_blank" style="color:var(--accent)">Open Target Tab</a>
       <div class="flex gap-8 mt-12">
         <input type="text" id="t2-5-input" placeholder="Value from other tab...">
         <button class="action-btn" onclick="Tests.t2_5_verify()">Verify</button>
@@ -380,7 +374,7 @@
     <h3><span class="test-id">T3.2</span> Nested iFrame Interaction</h3>
     <p class="test-desc">Navigiere in den verschachtelten iFrame, lies den Wert und gib ihn ein.</p>
     <div class="test-area">
-      <iframe id="t3-2-frame" srcdoc='<html><body style="background:#12121a;color:#e0e0e8;font-family:system-ui;padding:16px"><p>Outer Frame</p><iframe srcdoc="&lt;html&gt;&lt;body style=&apos;background:#1a1a28;color:#e0e0e8;font-family:system-ui;padding:16px&apos;&gt;&lt;p&gt;Inner Frame&lt;/p&gt;&lt;p&gt;Secret: &lt;strong id=&apos;inner-secret&apos;&gt;FRAME-DEEP-42&lt;/strong&gt;&lt;/p&gt;&lt;button onclick=&apos;document.getElementById(&quot;inner-secret&quot;).textContent=&quot;FRAME-CLICKED&quot;&apos; style=&apos;background:#6c5ce7;color:white;border:none;padding:6px 14px;border-radius:6px;cursor:pointer&apos;&gt;Click Inside&lt;/button&gt;&lt;/body&gt;&lt;/html&gt;" style="width:100%;height:120px;border:1px solid #2a2a3a;border-radius:6px"></iframe></body></html>' style="width:100%;height:220px;border:1px solid var(--border);border-radius:var(--radius)"></iframe>
+      <iframe id="t3-2-frame" style="width:100%;height:220px;border:1px solid var(--border);border-radius:var(--radius)"></iframe>
       <div class="flex gap-8 mt-12">
         <input type="text" id="t3-2-input" placeholder="Value from inner frame...">
         <button class="action-btn" onclick="Tests.t3_2_verify()">Verify</button>
@@ -463,7 +457,7 @@
 
   <div class="test-card" data-test="4.2">
     <h3><span class="test-id">T4.2</span> Racing Content Updates</h3>
-    <p class="test-desc">Der Zaehler aendert sich alle 500ms (0-9). Klicke Capture genau wenn der Wert 7 ist.</p>
+    <p class="test-desc">Der Zaehler aendert sich alle 500ms (0-9). Klicke Capture genau wenn der Wert <strong id="t4-2-target"></strong> ist.</p>
     <div class="test-area">
       <div class="flex gap-20" style="align-items:center">
         <div class="countdown" id="t4-2-counter">0</div>
@@ -492,19 +486,19 @@
 
   <div class="test-card" data-test="4.4">
     <h3><span class="test-id">T4.4</span> State Chain: localStorage + Cookies</h3>
-    <p class="test-desc">Setze localStorage key "bench-key"="ALPHA" und cookie "bench-cookie"="OMEGA", dann kombiniere: ALPHA-OMEGA.</p>
+    <p class="test-desc">Setze localStorage und cookie wie beschrieben, dann kombiniere die Werte.</p>
     <div class="test-area">
       <div class="flex flex-col gap-12">
         <div>
-          <label>1. Set localStorage: localStorage.setItem("bench-key", "ALPHA")</label>
+          <label id="t4-4-ls-label">1. Set localStorage: localStorage.setItem("bench-key", "---")</label>
           <button class="action-btn mt-12" id="t4-4-check-ls" onclick="Tests.t4_4_checkLS()">Check localStorage</button>
         </div>
         <div>
-          <label>2. Set cookie: document.cookie = "bench-cookie=OMEGA"</label>
+          <label id="t4-4-ck-label">2. Set cookie: document.cookie = "bench-cookie=---"</label>
           <button class="action-btn" id="t4-4-check-cookie" onclick="Tests.t4_4_checkCookie()" disabled>Check Cookie</button>
         </div>
         <div>
-          <label>3. Enter combined value (format: ALPHA-OMEGA):</label>
+          <label id="t4-4-combo-label">3. Enter combined value (format: ---)</label>
           <div class="flex gap-8 mt-12">
             <input type="text" id="t4-4-input" placeholder="Combined value..." disabled>
             <button class="action-btn" id="t4-4-verify-btn" onclick="Tests.t4_4_verify()" disabled>Verify</button>
@@ -624,34 +618,82 @@
 <div id="toast-container"></div>
 
 <script>
+// ── Randomized test values (generated on each page load) ──
+const R = (() => {
+  const rstr = (n=6) => Math.random().toString(36).substr(2,n).toUpperCase();
+  const rint = (lo,hi) => lo + Math.floor(Math.random()*(hi-lo+1));
+  const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+
+  const secret = rstr(4) + '-' + rstr(4);                         // T1.2
+  const selectorText = 'UNIQUE_' + rstr(8);                       // T1.4
+  const tableRows = [                                               // T1.6
+    {name:'Alpha',cat:'Speed',score:rint(10,99)},
+    {name:'Beta',cat:'Accuracy',score:rint(10,99)},
+    {name:'Gamma',cat:'Speed',score:rint(10,99)},
+    {name:'Delta',cat:'Accuracy',score:rint(10,99)},
+    {name:'Epsilon',cat:'Speed',score:rint(10,99)}
+  ];
+  const tableSum = tableRows.reduce((s,r)=>s+r.score,0);
+
+  const langs = ['JavaScript','TypeScript','Python','Rust','Go','Swift','Kotlin','Java','C++','Ruby','PHP','Dart','Elixir','Haskell','Scala'];
+  const dropdownTarget = pick(langs);                               // T2.4
+
+  const tabValue = 'TAB-' + rstr(4) + '-' + rstr(4);              // T2.5
+
+  const products = [                                                // T2.6
+    {name:'Widget Pro',   price:rint(20,80)+0.99,  stock:rint(50,200)},
+    {name:'Gadget Ultra', price:rint(100,250)+0.50,stock:rint(20,80)},
+    {name:'Tool Basic',   price:rint(5,30)+0.00,   stock:rint(300,800)},
+    {name:'Device Max',   price:rint(250,500)+0.99,stock:rint(10,50)},
+    {name:'Module Lite',  price:rint(3,15)+0.50,   stock:rint(500,1500)},
+    {name:'Sensor XR',    price:rint(80,200)+0.00, stock:rint(40,100)}
+  ];
+  const mostExpensive = products.reduce((a,b)=>a.price>b.price?a:b).name;
+
+  const shadowVal = 'SHADOW-' + rstr(4);                           // T3.1
+  const frameVal = 'FRAME-' + rstr(6);                             // T3.2
+
+  const counterTarget = rint(1,9);                                  // T4.2
+
+  const lsVal = rstr(5);                                           // T4.4
+  const ckVal = rstr(5);
+
+  const mutVals = ['MUT-'+rstr(3),'MUT-'+rstr(3),'MUT-'+rstr(3)]; // T4.5
+
+  return { secret, selectorText, tableRows, tableSum, langs, dropdownTarget, tabValue,
+           products, mostExpensive, shadowVal, frameVal, counterTarget, lsVal, ckVal, mutVals };
+})();
+
 const Benchmark = {
   results: {},
   startTime: null,
   timerInterval: null,
+  _lastCompletion: null,  // timestamp of last test completion (for delta timing)
 
+  _complete(id, status, details) {
+    const now = performance.now();
+    const prevTime = this._lastCompletion || (this.startTime ? performance.now() - (Date.now() - this.startTime) : now);
+    if (!this.results[id]) this.results[id] = { status: 'running', startTime: prevTime, endTime: null, details: '' };
+    this.results[id].status = status;
+    this.results[id].endTime = now;
+    this.results[id].startTime = prevTime;
+    this.results[id].details = details;
+    this._lastCompletion = now;
+    const el = document.getElementById('t' + id.replace('.', '-') + '-status');
+    if (el) { el.textContent = status.toUpperCase(); el.className = 'test-status ' + status; }
+    this.updateUI();
+    this.toast('T' + id + ' ' + status + (status === 'fail' ? ': ' + details : '!'), status === 'pass' ? 'success' : 'error');
+  },
+  touch(id) { /* kept for backward compat — no-op */ },
   start(id) {
-    this.results[id] = { status: 'running', startTime: performance.now(), endTime: null, details: '' };
+    if (!this.results[id]) this.results[id] = { status: 'running', startTime: performance.now(), endTime: null, details: '' };
     this.updateUI();
   },
   pass(id, details = '') {
-    if (!this.results[id]) this.start(id);
-    this.results[id].status = 'pass';
-    this.results[id].endTime = performance.now();
-    this.results[id].details = details;
-    const el = document.getElementById('t' + id.replace('.', '-') + '-status');
-    if (el) { el.textContent = 'PASS'; el.className = 'test-status pass'; }
-    this.updateUI();
-    this.toast('T' + id + ' passed!', 'success');
+    this._complete(id, 'pass', details);
   },
   fail(id, details = '') {
-    if (!this.results[id]) this.start(id);
-    this.results[id].status = 'fail';
-    this.results[id].endTime = performance.now();
-    this.results[id].details = details;
-    const el = document.getElementById('t' + id.replace('.', '-') + '-status');
-    if (el) { el.textContent = 'FAIL'; el.className = 'test-status fail'; }
-    this.updateUI();
-    this.toast('T' + id + ' failed: ' + details, 'error');
+    this._complete(id, 'fail', details);
   },
   setResult(id, el, pass, msg) {
     el.textContent = msg;
@@ -738,9 +780,8 @@ const Tests = {
   },
   t1_2() {
     Benchmark.start('1.2');
-    const secret = document.getElementById('t1-2-secret').textContent;
     const val = document.getElementById('t1-2-input').value.trim();
-    Benchmark.setResult('1.2', document.getElementById('t1-2-result'), val === secret, val === secret ? 'Correct: ' + secret : 'Expected "' + secret + '", got "' + val + '"');
+    Benchmark.setResult('1.2', document.getElementById('t1-2-result'), val === R.secret, val === R.secret ? 'Correct: ' + R.secret : 'Expected "' + R.secret + '", got "' + val + '"');
   },
   t1_3(e) {
     e.preventDefault();
@@ -787,8 +828,7 @@ const Tests = {
   t1_6() {
     Benchmark.start('1.6');
     const val = parseInt(document.getElementById('t1-6-input').value);
-    const sum = 299;
-    Benchmark.setResult('1.6', document.getElementById('t1-6-result'), val === sum, val === sum ? 'Correct sum: 299' : 'Expected 299, got ' + val);
+    Benchmark.setResult('1.6', document.getElementById('t1-6-result'), val === R.tableSum, val === R.tableSum ? 'Correct sum: ' + R.tableSum : 'Expected ' + R.tableSum + ', got ' + val);
   },
 
   // L2
@@ -894,7 +934,7 @@ const Tests = {
     Benchmark.setResult('2.3', document.getElementById('t2-3-result'), pass, pass ? 'Wizard completed: ' + Tests._t2_3_data.plan : 'Wizard incomplete');
   },
 
-  _t2_4_langs: ['JavaScript','TypeScript','Python','Rust','Go','Swift','Kotlin','Java','C++','Ruby','PHP','Dart','Elixir','Haskell','Scala'],
+  _t2_4_langs: R.langs,
   t2_4_open() {
     document.getElementById('t2-4-dropdown').classList.remove('hidden');
     Tests.t2_4_filter();
@@ -919,21 +959,14 @@ const Tests = {
     document.getElementById('t2-4-search').value = lang;
     document.getElementById('t2-4-selected').textContent = lang;
     document.getElementById('t2-4-dropdown').classList.add('hidden');
-    Benchmark.setResult('2.4', document.getElementById('t2-4-result'), lang === 'TypeScript', lang === 'TypeScript' ? 'TypeScript selected!' : 'Expected TypeScript, got ' + lang);
+    Benchmark.setResult('2.4', document.getElementById('t2-4-result'), lang === R.dropdownTarget, lang === R.dropdownTarget ? R.dropdownTarget + ' selected!' : 'Expected ' + R.dropdownTarget + ', got ' + lang);
   },
   t2_5_verify() {
     Benchmark.start('2.5');
     const val = document.getElementById('t2-5-input').value.trim();
-    Benchmark.setResult('2.5', document.getElementById('t2-5-result'), val === 'TAB-TARGET-VALUE-8F3K', val === 'TAB-TARGET-VALUE-8F3K' ? 'Tab value correct!' : 'Expected "TAB-TARGET-VALUE-8F3K", got "' + val + '"');
+    Benchmark.setResult('2.5', document.getElementById('t2-5-result'), val === R.tabValue, val === R.tabValue ? 'Tab value correct!' : 'Expected "' + R.tabValue + '", got "' + val + '"');
   },
-  _t2_6_data: [
-    {name:'Widget Pro', price:49.99, stock:120},
-    {name:'Gadget Ultra', price:189.50, stock:45},
-    {name:'Tool Basic', price:12.00, stock:500},
-    {name:'Device Max', price:299.99, stock:23},
-    {name:'Module Lite', price:7.50, stock:1000},
-    {name:'Sensor XR', price:154.00, stock:67}
-  ],
+  _t2_6_data: R.products.map(p => ({...p})),
   _t2_6_sortDir: {},
   _t2_6_render() {
     const tbody = document.getElementById('t2-6-body');
@@ -957,7 +990,7 @@ const Tests = {
   t2_6_verify() {
     Benchmark.start('2.6');
     const val = document.getElementById('t2-6-input').value.trim();
-    Benchmark.setResult('2.6', document.getElementById('t2-6-result'), val === 'Device Max', val === 'Device Max' ? 'Correct! Device Max is most expensive.' : 'Expected "Device Max", got "' + val + '"');
+    Benchmark.setResult('2.6', document.getElementById('t2-6-result'), val === R.mostExpensive, val === R.mostExpensive ? 'Correct! ' + R.mostExpensive + ' is most expensive.' : 'Expected "' + R.mostExpensive + '", got "' + val + '"');
   },
 
   // L3
@@ -972,7 +1005,7 @@ const Tests = {
     p.textContent = 'Shadow DOM Value: ';
     const strong = document.createElement('strong');
     strong.id = 'shadow-value';
-    strong.textContent = 'SHADOW-42XY';
+    strong.textContent = R.shadowVal;
     p.appendChild(strong);
     const btn = document.createElement('button');
     btn.id = 'shadow-btn';
@@ -986,13 +1019,13 @@ const Tests = {
   t3_1_verify() {
     Benchmark.start('3.1');
     const val = document.getElementById('t3-1-input').value.trim();
-    Benchmark.setResult('3.1', document.getElementById('t3-1-result'), val === 'SHADOW-42XY', val === 'SHADOW-42XY' ? 'Shadow DOM value correct' : 'Expected "SHADOW-42XY", got "' + val + '"');
+    Benchmark.setResult('3.1', document.getElementById('t3-1-result'), val === R.shadowVal, val === R.shadowVal ? 'Shadow DOM value correct' : 'Expected "' + R.shadowVal + '", got "' + val + '"');
   },
   t3_2_verify() {
     Benchmark.start('3.2');
     const val = document.getElementById('t3-2-input').value.trim();
-    const pass = val === 'FRAME-DEEP-42' || val === 'FRAME-CLICKED';
-    Benchmark.setResult('3.2', document.getElementById('t3-2-result'), pass, pass ? 'iFrame value correct' : 'Expected FRAME-DEEP-42 or FRAME-CLICKED, got "' + val + '"');
+    const pass = val === R.frameVal || val === 'FRAME-CLICKED';
+    Benchmark.setResult('3.2', document.getElementById('t3-2-result'), pass, pass ? 'iFrame value correct' : 'Expected ' + R.frameVal + ' or FRAME-CLICKED, got "' + val + '"');
   },
   _t3_3_init() {
     const list = document.getElementById('t3-3-list');
@@ -1130,7 +1163,7 @@ const Tests = {
     const val = Tests._t4_2_value;
     clearInterval(Tests._t4_2_interval);
     document.getElementById('t4-2-capture').disabled = true;
-    Benchmark.setResult('4.2', document.getElementById('t4-2-result'), val === 7, val === 7 ? 'Captured at exactly 7!' : 'Captured at ' + val + ', expected 7');
+    Benchmark.setResult('4.2', document.getElementById('t4-2-result'), val === R.counterTarget, val === R.counterTarget ? 'Captured at exactly ' + R.counterTarget + '!' : 'Captured at ' + val + ', expected ' + R.counterTarget);
   },
   _t4_3_needle: null,
   t4_3_generate() {
@@ -1162,33 +1195,34 @@ const Tests = {
   t4_4_checkLS() {
     Benchmark.start('4.4');
     const val = localStorage.getItem('bench-key');
-    if (val === 'ALPHA') {
+    if (val === R.lsVal) {
       document.getElementById('t4-4-check-ls').style.background = 'var(--success)';
       document.getElementById('t4-4-check-ls').textContent = 'localStorage OK';
       document.getElementById('t4-4-check-cookie').disabled = false;
     } else {
-      Benchmark.setResult('4.4', document.getElementById('t4-4-result'), false, '"bench-key" is "' + val + '", set it: localStorage.setItem("bench-key","ALPHA")');
+      Benchmark.setResult('4.4', document.getElementById('t4-4-result'), false, '"bench-key" is "' + val + '", set it: localStorage.setItem("bench-key","' + R.lsVal + '")');
     }
   },
   t4_4_checkCookie() {
     const c = document.cookie.split(';').map(x => x.trim()).find(x => x.startsWith('bench-cookie='));
     const val = c ? c.split('=')[1] : null;
-    if (val === 'OMEGA') {
+    if (val === R.ckVal) {
       document.getElementById('t4-4-check-cookie').style.background = 'var(--success)';
       document.getElementById('t4-4-check-cookie').textContent = 'Cookie OK';
       document.getElementById('t4-4-input').disabled = false;
       document.getElementById('t4-4-verify-btn').disabled = false;
     } else {
-      Benchmark.setResult('4.4', document.getElementById('t4-4-result'), false, '"bench-cookie" is "' + val + '", set it: document.cookie="bench-cookie=OMEGA"');
+      Benchmark.setResult('4.4', document.getElementById('t4-4-result'), false, '"bench-cookie" is "' + val + '", set it: document.cookie="bench-cookie=' + R.ckVal + '"');
     }
   },
   t4_4_verify() {
     const val = document.getElementById('t4-4-input').value.trim();
-    Benchmark.setResult('4.4', document.getElementById('t4-4-result'), val === 'ALPHA-OMEGA', val === 'ALPHA-OMEGA' ? 'State chain complete!' : 'Expected "ALPHA-OMEGA", got "' + val + '"');
+    const expected44 = R.lsVal + '-' + R.ckVal;
+    Benchmark.setResult('4.4', document.getElementById('t4-4-result'), val === expected44, val === expected44 ? 'State chain complete!' : 'Expected "' + expected44 + '", got "' + val + '"');
   },
   _t4_5_values: [],
   t4_5_start() {
-    const vals = ['MUT-A','MUT-B','MUT-C'];
+    const vals = R.mutVals;
     Tests._t4_5_values = vals;
     const el = document.getElementById('t4-5-value');
     el.textContent = '---';
@@ -1228,11 +1262,30 @@ const Tests = {
 const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6'];
 const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token'};
 
+const PRELOADED_RUNS = [
+  {"name":"SilbercueChrome Pro","timestamp":"2026-04-05T05:12:58.080Z","elapsed_s":555,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"}}},
+  {"name":"SilbercueChrome Free","timestamp":"2026-04-05T02:53:22.567Z","elapsed_s":900,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"}}},
+  {"name":"Playwright MCP","timestamp":"2026-04-05T01:30:00.000Z","elapsed_s":null,"tests":{"1.1":{"status":"pass","ms":1},"1.2":{"status":"pass","ms":3480},"1.3":{"status":"pass","ms":3725},"1.4":{"status":"pass","ms":18984},"1.5":{"status":"pass","ms":13130},"1.6":{"status":"pass","ms":3866},"2.1":{"status":"pass","ms":16668},"2.2":{"status":"pass","ms":0},"2.3":{"status":"pass","ms":33790},"2.4":{"status":"pass","ms":17298},"2.5":{"status":"pass","ms":7848},"2.6":{"status":"pass","ms":12563},"3.1":{"status":"pass","ms":7035},"3.2":{"status":"pass","ms":21},"3.3":{"status":"pass","ms":0},"3.4":{"status":"pass","ms":0},"3.5":{"status":"pass","ms":0},"3.6":{"status":"pass","ms":25307},"4.1":{"status":"pass","ms":26016},"4.2":{"status":"pass","ms":22507},"4.3":{"status":"pass","ms":11525},"4.4":{"status":"pass","ms":7483},"4.5":{"status":"pass","ms":28},"4.6":{"status":"pass","ms":38071}}},
+  {"name":"claude-in-chrome","timestamp":"2026-04-05T01:50:00.000Z","elapsed_s":1140,"tests":{"1.1":{"status":"pass","ms":17},"1.2":{"status":"pass","ms":7519},"1.3":{"status":"pass","ms":28306},"1.4":{"status":"pass","ms":10954},"1.5":{"status":"pass","ms":95816},"1.6":{"status":"pass","ms":3087},"2.1":{"status":"pass","ms":16985},"2.2":{"status":"pass","ms":16},"2.3":{"status":"pass","ms":26859},"2.4":{"status":"pass","ms":69153},"2.5":{"status":"pass","ms":20385},"2.6":{"status":"pass","ms":7729},"3.1":{"status":"pass","ms":8411},"3.2":{"status":"pass","ms":8051},"3.3":{"status":"pass","ms":22},"3.4":{"status":"pass","ms":20313},"3.5":{"status":"pass","ms":1},"3.6":{"status":"pass","ms":9646},"4.1":{"status":"pass","ms":35436},"4.2":{"status":"pass","ms":7223},"4.3":{"status":"pass","ms":23737},"4.4":{"status":"pass","ms":20743},"4.5":{"status":"pass","ms":25083},"4.6":{"status":"pass","ms":45599}}},
+  {"name":"browser-use","timestamp":"2026-04-05T01:02:41.422Z","elapsed_s":913,"tests":{"1.1":{"status":"pass","ms":82},"1.2":{"status":"pass","ms":4512},"1.3":{"status":"pass","ms":33686},"1.4":{"status":"pass","ms":18562},"1.5":{"status":"pass","ms":14277},"1.6":{"status":"pass","ms":4584},"2.1":{"status":"pass","ms":22690},"2.2":null,"2.3":{"status":"pass","ms":39247},"2.4":{"status":"pass","ms":10272},"2.5":{"status":"pass","ms":3986},"2.6":{"status":"pass","ms":14147},"3.1":{"status":"pass","ms":5055},"3.2":{"status":"pass","ms":4661},"3.3":null,"3.4":null,"3.5":null,"3.6":null,"4.1":{"status":"pass","ms":21522},"4.2":{"status":"pass","ms":14442},"4.3":{"status":"pass","ms":34198},"4.4":null,"4.5":null,"4.6":{"status":"pass","ms":224344}}}
+];
+
 const Compare = {
   _key: 'bench-compare-runs',
   _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); },
 
-  getRuns() { try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch { return []; } },
+  getRuns() {
+    const stored = (() => { try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch { return []; } })();
+    // Always ensure preloaded benchmark runs are present
+    const storedNames = new Set(stored.map(r => r.name));
+    const missing = PRELOADED_RUNS.filter(p => !storedNames.has(p.name));
+    if (missing.length > 0) {
+      const merged = [...PRELOADED_RUNS, ...stored.filter(r => !PRELOADED_RUNS.some(p => p.name === r.name))];
+      this.saveRuns(merged);
+      return merged;
+    }
+    return stored;
+  },
   saveRuns(runs) { localStorage.setItem(this._key, JSON.stringify(runs)); },
 
   saveRun() {
@@ -1308,7 +1361,8 @@ const Compare = {
       th.style.minWidth = '140px';
       const nameDiv = document.createElement('div'); nameDiv.style.fontWeight = '700'; nameDiv.textContent = run.name; th.appendChild(nameDiv);
       const scoreDiv = document.createElement('div'); scoreDiv.style.cssText = 'font-size:0.7rem;color:var(--muted);font-weight:400'; scoreDiv.textContent = passed + '/' + total + ' passed'; th.appendChild(scoreDiv);
-      const timeDiv = document.createElement('div'); timeDiv.style.cssText = 'font-size:0.65rem;color:var(--muted);margin-top:2px'; timeDiv.textContent = new Date(run.timestamp).toLocaleString(); th.appendChild(timeDiv);
+      const elapsedText = run.elapsed_s ? Math.floor(run.elapsed_s/60) + 'm ' + (run.elapsed_s%60) + 's' : '';
+      const timeDiv = document.createElement('div'); timeDiv.style.cssText = 'font-size:0.65rem;color:var(--muted);margin-top:2px'; timeDiv.textContent = (elapsedText ? elapsedText + ' — ' : '') + new Date(run.timestamp).toLocaleString(); th.appendChild(timeDiv);
       const delBtn = document.createElement('button');
       delBtn.textContent = 'Loeschen';
       delBtn.style.cssText = 'background:none;border:1px solid var(--danger);color:var(--danger);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:0.65rem;margin-top:4px';
@@ -1331,7 +1385,7 @@ const Compare = {
         if (!r) { td.style.color = 'var(--muted)'; td.textContent = '—'; }
         else if (r.status === 'pass') {
           const mark = document.createElement('span'); mark.style.cssText = 'color:var(--success);font-weight:600'; mark.textContent = '✓'; td.appendChild(mark);
-          if (r.ms !== null) { const ms = document.createElement('span'); ms.style.cssText = 'font-size:0.75rem;color:var(--muted);margin-left:4px'; ms.textContent = r.ms + 'ms'; td.appendChild(ms); }
+          if (r.ms != null) { const ms = document.createElement('span'); ms.style.cssText = 'font-size:0.75rem;color:var(--muted);margin-left:4px'; ms.textContent = r.ms + 'ms'; td.appendChild(ms); }
         } else if (r.status === 'fail') {
           const mark = document.createElement('span'); mark.style.cssText = 'color:var(--danger);font-weight:600'; mark.textContent = '✗'; td.appendChild(mark);
           td.title = r.details || '';
@@ -1345,6 +1399,47 @@ const Compare = {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  // ── Inject randomized values into DOM ──
+  document.getElementById('t1-2-secret').textContent = R.secret;
+  document.getElementById('t1-4-text-btn').textContent = 'Find by exact text: ' + R.selectorText;
+  // T1.6 table
+  const t16body = document.getElementById('t1-6-body');
+  R.tableRows.forEach(r => {
+    const tr = document.createElement('tr');
+    [r.name, r.cat, r.score].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+    t16body.appendChild(tr);
+  });
+  // T2.4 target
+  document.getElementById('t2-4-target').textContent = R.dropdownTarget;
+  // T2.5 tab link with token
+  localStorage.setItem('_bench_tab_token', R.tabValue);
+  // T3.2 iFrame with randomized value
+  const frame = document.getElementById('t3-2-frame');
+  const innerSrc = '<html><body style="background:#1a1a28;color:#e0e0e8;font-family:system-ui;padding:16px"><p>Inner Frame</p><p>Secret: <strong id="inner-secret">' + R.frameVal + '</strong></p><button onclick="document.getElementById(\'inner-secret\').textContent=\'FRAME-CLICKED\'" style="background:#6c5ce7;color:white;border:none;padding:6px 14px;border-radius:6px;cursor:pointer">Click Inside</button></body></html>';
+  const outerSrc = '<html><body style="background:#12121a;color:#e0e0e8;font-family:system-ui;padding:16px"><p>Outer Frame</p><iframe srcdoc="' + innerSrc.replace(/"/g,'&quot;') + '" style="width:100%;height:120px;border:1px solid #2a2a3a;border-radius:6px"></iframe></body></html>';
+  frame.srcdoc = outerSrc;
+  // T4.2 counter target
+  document.getElementById('t4-2-target').textContent = R.counterTarget;
+  // T4.4 localStorage/cookie labels
+  document.getElementById('t4-4-ls-label').textContent = '1. Set localStorage: localStorage.setItem("bench-key", "' + R.lsVal + '")';
+  document.getElementById('t4-4-ck-label').textContent = '2. Set cookie: document.cookie = "bench-cookie=' + R.ckVal + '"';
+  document.getElementById('t4-4-combo-label').textContent = '3. Enter combined value (format: ' + R.lsVal + '-' + R.ckVal + '):';
+
+  // ── Auto-detect first interaction per test card ──
+  document.querySelectorAll('.test-card').forEach(card => {
+    const testId = card.dataset.test;
+    if (!testId) return;
+    const handler = () => {
+      Benchmark.touch(testId);
+      card.removeEventListener('pointerdown', handler, true);
+      card.removeEventListener('focusin', handler, true);
+      card.removeEventListener('input', handler, true);
+    };
+    card.addEventListener('pointerdown', handler, true);
+    card.addEventListener('focusin', handler, true);
+    card.addEventListener('input', handler, true);
+  });
+
   Tests._t2_2_init();
   Tests._t2_6_render();
   Tests._t3_1_init();

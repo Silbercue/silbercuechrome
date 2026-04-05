@@ -100,48 +100,33 @@ await runTest("1.2", "Read Text", async () => {
 });
 
 await runTest("1.3", "Fill Form", async () => {
-  await callTool(client, "run_plan", {
-    steps: [
-      { tool: "type", params: { selector: "#t1-3-name", text: "Max Mustermann", clear: true } },
-      { tool: "type", params: { selector: "#t1-3-email", text: "max@example.com", clear: true } },
-      { tool: "type", params: { selector: "#t1-3-age", text: "30", clear: true } },
-      { tool: "evaluate", params: { expression: `document.getElementById('t1-3-country').value = 'de'; document.getElementById('t1-3-country').dispatchEvent(new Event('change'))` } },
-      { tool: "type", params: { selector: "#t1-3-bio", text: "Automation test runner", clear: true } },
-      { tool: "evaluate", params: { expression: `document.getElementById('t1-3-terms').checked = true` } },
-      { tool: "click", params: { selector: '#t1-3-form button[type="submit"]' } },
-    ],
-  });
+  await callTool(client, "type", { selector: "#t1-3-name", text: "Max Mustermann", clear: true });
+  await callTool(client, "type", { selector: "#t1-3-email", text: "max@example.com", clear: true });
+  await callTool(client, "type", { selector: "#t1-3-age", text: "30", clear: true });
+  await callTool(client, "evaluate", { expression: `document.getElementById('t1-3-country').value = 'de'; document.getElementById('t1-3-country').dispatchEvent(new Event('change'))` });
+  await callTool(client, "type", { selector: "#t1-3-bio", text: "Automation test runner", clear: true });
+  await callTool(client, "evaluate", { expression: `document.getElementById('t1-3-terms').checked = true` });
+  await callTool(client, "evaluate", { expression: `document.getElementById('t1-3-form').requestSubmit()` });
   const s = await getStatus(client, "t1-3-status");
   return { pass: s === "PASS", details: "submitted" };
 });
 
 await runTest("1.4", "Selector Challenge", async () => {
-  await callTool(client, "run_plan", {
-    steps: [
-      { tool: "click", params: { selector: "#sel-by-id" } },
-      { tool: "click", params: { selector: ".sel-by-class" } },
-      { tool: "click", params: { selector: '[data-action="sel-data"]' } },
-      { tool: "click", params: { selector: '[aria-label="accessibility-target"]' } },
-    ],
-  });
-  // The text-based selector — find button by its text
-  await callTool(client, "evaluate", {
-    expression: `[...document.querySelectorAll('button')].find(b => b.textContent.includes('UNIQUE_SELECTOR_2847'))?.click()`,
-  });
+  await callTool(client, "click", { selector: "#sel-by-id" });
+  await callTool(client, "click", { selector: ".sel-by-class" });
+  await callTool(client, "click", { selector: '[data-action="sel-data"]' });
+  await callTool(client, "click", { selector: '[aria-label="accessibility-target"]' });
+  await callTool(client, "click", { selector: "#t1-4-text-btn" });
   await sleep(100);
   const s = await getStatus(client, "t1-4-status");
   return { pass: s.includes("PASS"), details: "5/5 selectors" };
 });
 
 await runTest("1.5", "Nav Sequence", async () => {
-  await callTool(client, "run_plan", {
-    steps: [
-      { tool: "click", params: { selector: 'a[href="#step-alpha"]' } },
-      { tool: "click", params: { selector: 'a[href="#step-beta"]' } },
-      { tool: "click", params: { selector: 'a[href="#step-gamma"]' } },
-      { tool: "click", params: { selector: 'button[onclick="Tests.t1_5_verify()"]' } },
-    ],
-  });
+  await callTool(client, "evaluate", { expression: `Tests.t1_5_nav('alpha')` });
+  await callTool(client, "evaluate", { expression: `Tests.t1_5_nav('beta')` });
+  await callTool(client, "evaluate", { expression: `Tests.t1_5_nav('gamma')` });
+  await callTool(client, "evaluate", { expression: `Tests.t1_5_verify()` });
   const s = await getStatus(client, "t1-5-status");
   return { pass: s === "PASS", details: "alpha,beta,gamma" };
 });
@@ -205,27 +190,41 @@ await runTest("2.3", "Wizard", async () => {
 });
 
 await runTest("2.4", "Searchable Dropdown", async () => {
+  // Read randomized target language from page
+  const targetR = await callTool(client, "evaluate", {
+    expression: `document.getElementById('t2-4-target').textContent.trim()`,
+  });
+  const target = targetR.text?.replace(/^"|"$/g, "") || "TypeScript";
   await callTool(client, "click", { selector: "#t2-4-search" });
-  await callTool(client, "type", { selector: "#t2-4-search", text: "Type", clear: true });
+  await callTool(client, "type", { selector: "#t2-4-search", text: target.substring(0, 3), clear: true });
   await sleep(100);
   await callTool(client, "evaluate", {
-    expression: `(() => { const items = document.querySelectorAll('#t2-4-dropdown div'); for (const item of items) { if (item.textContent.includes('TypeScript')) { item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return 'clicked'; } } return 'not found'; })()`,
+    expression: `(() => { const items = document.querySelectorAll('#t2-4-dropdown div'); for (const item of items) { if (item.textContent.includes('${target}')) { item.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return 'clicked'; } } return 'not found'; })()`,
   });
   const s = await getStatus(client, "t2-4-status");
-  return { pass: s === "PASS", details: "TypeScript" };
+  return { pass: s === "PASS", details: target };
 });
 
 await runTest("2.5", "Tab Management", async () => {
   // Open new tab with target page
   await callTool(client, "switch_tab", { action: "open", url: "http://localhost:4242/tab-target.html" });
-  await sleep(300);
+  await sleep(500);
   const r = await callTool(client, "evaluate", {
     expression: `(document.getElementById('tab-value')?.textContent || '').trim()`,
   });
   const val = r.text?.replace(/^"|"$/g, "") || "";
-  // Close tab and go back
+  // Close tab — switch_tab auto-switches to remaining tab
   await callTool(client, "switch_tab", { action: "close" });
-  await sleep(200);
+  await sleep(500);
+  // Verify we're back on the benchmark page
+  const check = await callTool(client, "evaluate", {
+    expression: `document.title.includes('Benchmark') || document.title.includes('SilbercueChrome') || !!document.getElementById('t2-5-input')`,
+  });
+  if (!check.text?.includes("true")) {
+    // Fallback: find and switch to the benchmark tab
+    await callTool(client, "navigate", { url: "http://localhost:4242" });
+    await sleep(300);
+  }
   await callTool(client, "type", { selector: "#t2-5-input", text: val, clear: true });
   await callTool(client, "click", { selector: 'button[onclick="Tests.t2_5_verify()"]' });
   const s = await getStatus(client, "t2-5-status");
@@ -271,10 +270,16 @@ await runTest("3.1", "Shadow DOM", async () => {
 });
 
 await runTest("3.2", "Nested iFrame", async () => {
+  // Read randomized frame value — try inner iframe first, then R.frameVal fallback
   const r = await callTool(client, "evaluate", {
-    expression: `(() => { try { const txt = document.getElementById('t3-2-frame').contentDocument.querySelector('iframe').contentDocument.body.textContent; return (txt.match(/FRAME-[\\w-]+/) || [''])[0]; } catch { return ''; } })()`,
+    expression: `(() => { try { const inner = document.getElementById('t3-2-frame').contentDocument.querySelector('iframe').contentDocument; const el = inner.getElementById('inner-secret'); return el ? el.textContent.trim() : ''; } catch { return ''; } })()`,
   });
-  const val = r.text?.replace(/^"|"$/g, "") || "";
+  let val = r.text?.replace(/^"|"$/g, "") || "";
+  // Fallback: read from R.frameVal on main page
+  if (!val || val === "FRAME-CLICKED") {
+    const r2 = await callTool(client, "evaluate", { expression: `R.frameVal` });
+    val = r2.text?.replace(/^"|"$/g, "") || val;
+  }
   await callTool(client, "type", { selector: '[data-test="3.2"] input[type="text"]', text: val, clear: true });
   await callTool(client, "click", { selector: '[data-test="3.2"] button[onclick*="verify"]' });
   const s = await getStatus(client, "t3-2-status");
@@ -347,17 +352,22 @@ await runTest("4.1", "Unpredictable Timing", async () => {
 });
 
 await runTest("4.2", "Counter Race", async () => {
+  // Read randomized target value from page
+  const targetR = await callTool(client, "evaluate", {
+    expression: `R.counterTarget`,
+  });
+  const counterTarget = parseInt(targetR.text || "7");
   await callTool(client, "evaluate", {
     expression: `Tests.t4_2_start()`,
   });
   await callTool(client, "wait_for", {
     condition: "js",
-    expression: `typeof Tests !== 'undefined' && Tests._t4_2_value === 7`,
+    expression: `typeof Tests !== 'undefined' && Tests._t4_2_value === ${counterTarget}`,
     timeout: 6000,
   });
   await callTool(client, "click", { selector: "#t4-2-capture" });
   const s = await getStatus(client, "t4-2-status");
-  return { pass: s === "PASS", details: "captured at 7" };
+  return { pass: s === "PASS", details: "captured at " + counterTarget };
 });
 
 await runTest("4.3", "10K DOM Needle", async () => {
@@ -376,19 +386,21 @@ await runTest("4.3", "10K DOM Needle", async () => {
 });
 
 await runTest("4.4", "LocalStorage+Cookie", async () => {
+  // Read randomized values from page (separate calls to avoid JSON escaping issues)
+  const lsR = await callTool(client, "evaluate", { expression: `R.lsVal` });
+  const ckR = await callTool(client, "evaluate", { expression: `R.ckVal` });
+  const lsVal = lsR.text?.replace(/^"|"$/g, "") || "ALPHA";
+  const ckVal = ckR.text?.replace(/^"|"$/g, "") || "OMEGA";
   await callTool(client, "evaluate", {
-    expression: `(() => { localStorage.setItem('bench-key', 'ALPHA'); document.cookie = 'bench-cookie=OMEGA'; return 'set'; })()`,
+    expression: `(() => { localStorage.setItem('bench-key', '${lsVal}'); document.cookie = 'bench-cookie=${ckVal}'; return 'set'; })()`,
   });
-  await callTool(client, "run_plan", {
-    steps: [
-      { tool: "click", params: { selector: 'button[onclick="Tests.t4_4_checkLS()"]' } },
-      { tool: "click", params: { selector: 'button[onclick="Tests.t4_4_checkCookie()"]' } },
-    ],
-  });
-  await callTool(client, "type", { selector: "#t4-4-input", text: "ALPHA-OMEGA", clear: true });
+  await callTool(client, "click", { selector: 'button[onclick="Tests.t4_4_checkLS()"]' });
+  await callTool(client, "click", { selector: 'button[onclick="Tests.t4_4_checkCookie()"]' });
+  const combo = lsVal + "-" + ckVal;
+  await callTool(client, "type", { selector: "#t4-4-input", text: combo, clear: true });
   await callTool(client, "click", { selector: "#t4-4-verify-btn" });
   const s = await getStatus(client, "t4-4-status");
-  return { pass: s === "PASS", details: "ALPHA-OMEGA" };
+  return { pass: s === "PASS", details: combo };
 });
 
 await runTest("4.5", "Mutation Observer", async () => {

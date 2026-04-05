@@ -215,11 +215,12 @@ export async function runPlanHandler(
   };
 
   // Story 9.1: Apply step limit to steps array before execution
-  let steps = params.steps as PlanStep[];
-  const total = steps.length;
-  const truncated = stepLimit !== undefined && steps.length > stepLimit;
+  const allSteps = params.steps as PlanStep[];
+  let steps = allSteps;
+  const total = allSteps.length;
+  const truncated = stepLimit !== undefined && allSteps.length > stepLimit;
   if (truncated) {
-    steps = steps.slice(0, stepLimit);
+    steps = allSteps.slice(0, stepLimit);
   }
 
   // C1: When use_operator is true and deps are available, route through the Operator
@@ -254,22 +255,24 @@ export async function runPlanHandler(
     }
 
     const result = convertOperatorResult(operatorRaw as OperatorPlanResult, params.errorStrategy);
-    // Story 9.1: Inject truncation info into _meta for operator path
+    // Story 9.1 + BUG-008: Inject truncation info into _meta AND visible output
     if (truncated && result._meta) {
       result._meta.truncated = true;
       result._meta.limit = stepLimit!;
       result._meta.total = total;
+      injectTruncationWarning(result, total, stepLimit!, allSteps);
     }
     return result;
   }
 
   // Default: plain sequential execution without Operator
   const result = await executePlan(steps, registry, planOptions, stateStore);
-  // Story 9.1: Inject truncation info into _meta for both standard and suspended paths
+  // Story 9.1 + BUG-008: Inject truncation info into _meta AND visible output
   if (truncated && result._meta) {
     result._meta.truncated = true;
     result._meta.limit = stepLimit!;
     result._meta.total = total;
+    injectTruncationWarning(result as ToolResponse, total, stepLimit!, allSteps);
   }
   return result;
 }
@@ -369,4 +372,18 @@ function convertOperatorResult(operatorResult: OperatorPlanResult, errorStrategy
       },
     },
   };
+}
+
+/** BUG-008: Inject visible truncation warning into response content */
+function injectTruncationWarning(
+  result: ToolResponse,
+  total: number,
+  limit: number,
+  allSteps: PlanStep[],
+): void {
+  const skippedTools = allSteps.slice(limit).map((s, i) => `[${limit + i + 1}] ${s.tool}`).join(", ");
+  result.content.unshift({
+    type: "text",
+    text: `Plan truncated from ${total} to ${limit} steps (Free Tier limit). Skipped: ${skippedTools}. Upgrade to Pro for unlimited steps.`,
+  });
 }

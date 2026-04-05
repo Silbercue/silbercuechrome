@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { a11yTree } from "../cache/a11y-tree.js";
+import { wrapCdpError } from "./error-utils.js";
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
 import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "./visual-constants.js";
 
@@ -334,9 +335,8 @@ export async function domSnapshotHandler(
     };
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `dom_snapshot failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "dom_snapshot") }],
       isError: true,
       _meta: { elapsedMs, method },
     };

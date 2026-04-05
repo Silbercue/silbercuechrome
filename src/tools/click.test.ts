@@ -159,7 +159,7 @@ describe("clickHandler", () => {
     expect(result._meta).not.toHaveProperty("settleSignal");
     expect(result._meta).not.toHaveProperty("settleMs");
 
-    // Verify CDP calls: scrollTo(0,0), scroll, getContentQuads, 2x mouse — NO Page.getFrameTree
+    // Verify CDP calls: scrollTo(0,0), scroll, getContentQuads, 3x mouse — NO Page.getFrameTree
     expect(sendFn).toHaveBeenCalledWith("Runtime.evaluate", { expression: "window.scrollTo(0,0)" }, "s1");
     expect(sendFn).toHaveBeenCalledWith("DOM.scrollIntoViewIfNeeded", { backendNodeId: 42 }, "s1");
     expect(sendFn).toHaveBeenCalledWith("DOM.getContentQuads", { backendNodeId: 42 }, "s1");
@@ -167,7 +167,7 @@ describe("clickHandler", () => {
     expect(callMethods).not.toContain("Page.getFrameTree");
   });
 
-  it("should dispatch mousePressed and mouseReleased with correct center coordinates", async () => {
+  it("should dispatch mouseMoved, mousePressed and mouseReleased with correct center coordinates", async () => {
     mockResolveElement.mockResolvedValue({
       backendNodeId: 42,
       objectId: "obj-42",
@@ -185,23 +185,34 @@ describe("clickHandler", () => {
     const mouseEvents = sendFn.mock.calls.filter(
       (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
     );
-    expect(mouseEvents).toHaveLength(2);
+    expect(mouseEvents).toHaveLength(3);
+
+    // mouseMoved (establishes mouseenter/mouseover context)
+    expect(mouseEvents[0][1]).toEqual({
+      type: "mouseMoved",
+      x: 150,
+      y: 150,
+      button: "none",
+      buttons: 0,
+    });
 
     // mousePressed
-    expect(mouseEvents[0][1]).toEqual({
+    expect(mouseEvents[1][1]).toEqual({
       type: "mousePressed",
       x: 150,
       y: 150,
       button: "left",
+      buttons: 1,
       clickCount: 1,
     });
 
     // mouseReleased
-    expect(mouseEvents[1][1]).toEqual({
+    expect(mouseEvents[2][1]).toEqual({
       type: "mouseReleased",
       x: 150,
       y: 150,
       button: "left",
+      buttons: 0,
       clickCount: 1,
     });
   });
@@ -219,13 +230,14 @@ describe("clickHandler", () => {
 
     await clickHandler({ ref: "e5" }, cdpClient, "s1");
 
-    // 5 CDP calls: scrollTo(0,0), scrollIntoView, getContentQuads, mousePressed, mouseReleased
-    expect(sendFn).toHaveBeenCalledTimes(5);
+    // 6 CDP calls: scrollTo(0,0), scrollIntoView, getContentQuads, mouseMoved, mousePressed, mouseReleased
+    expect(sendFn).toHaveBeenCalledTimes(6);
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).toEqual([
       "Runtime.evaluate",
       "DOM.scrollIntoViewIfNeeded",
       "DOM.getContentQuads",
+      "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
     ]);
@@ -345,7 +357,7 @@ describe("clickHandler", () => {
 
   // --- Error handling tests ---
 
-  it("should return isError when DOM.getContentQuads throws in dispatchClick", async () => {
+  it("should fallback to getBoundingClientRect when getContentQuads throws (BUG-005)", async () => {
     mockResolveElement.mockResolvedValue({
       backendNodeId: 42,
       objectId: "obj-42",
@@ -354,22 +366,82 @@ describe("clickHandler", () => {
       resolvedVia: "ref",
       resolvedSessionId: "s1",
     });
-    const { cdpClient } = createMockCdp({
+    const { cdpClient, sendFn } = createMockCdp({
       "DOM.getContentQuads": () => {
         throw new Error("Node does not have a layout object");
+      },
+      "Runtime.callFunctionOn": () => ({
+        result: { value: { x: 200, y: 300 } },
+      }),
+    });
+
+    const result = await clickHandler({ ref: "e5" }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        text: "Clicked e5 (ref, fallback: js-rect)",
+      }),
+    );
+    expect(result._meta?.clickMethod).toBe("js-rect");
+
+    // Should have called Runtime.callFunctionOn for getBoundingClientRect
+    const jsCall = sendFn.mock.calls.find(
+      (c: unknown[]) => c[0] === "Runtime.callFunctionOn" && typeof c[1] === "object" &&
+        (c[1] as Record<string, unknown>).objectId === "obj-42",
+    );
+    expect(jsCall).toBeDefined();
+
+    // Should still dispatch mouse events at the JS-computed coordinates
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(3);
+    expect(mouseEvents[0][1]).toEqual(expect.objectContaining({ type: "mouseMoved", x: 200, y: 300 }));
+    expect(mouseEvents[1][1]).toEqual(expect.objectContaining({ type: "mousePressed", x: 200, y: 300 }));
+    expect(mouseEvents[2][1]).toEqual(expect.objectContaining({ type: "mouseReleased", x: 200, y: 300 }));
+  });
+
+  it("should fallback to JS click when both getContentQuads and getBoundingClientRect fail (BUG-005 Shadow-DOM)", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    let callCount = 0;
+    const { cdpClient, sendFn } = createMockCdp({
+      "DOM.getContentQuads": () => {
+        throw new Error("Node does not have a layout object");
+      },
+      "Runtime.callFunctionOn": () => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: getBoundingClientRect fails
+          throw new Error("Cannot find context with specified id");
+        }
+        // Second call: this.click() succeeds
+        return { result: { value: undefined } };
       },
     });
 
     const result = await clickHandler({ ref: "e5" }, cdpClient, "s1");
 
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBeUndefined();
     expect(result.content[0]).toEqual(
       expect.objectContaining({
-        type: "text",
-        text: "click failed: Node does not have a layout object",
+        text: "Clicked e5 (ref, fallback: js-click)",
       }),
     );
-    expect(result._meta?.method).toBe("click");
+    expect(result._meta?.clickMethod).toBe("js-click");
+
+    // No mouse events dispatched — pure JS click
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(0);
   });
 
   it("should return isError when DOM.scrollIntoViewIfNeeded throws", async () => {
@@ -436,11 +508,11 @@ describe("clickHandler", () => {
       "oopif-session-1",
     );
 
-    // Mouse events use OOPIF session
+    // Mouse events use OOPIF session (mouseMoved + mousePressed + mouseReleased)
     const mouseEvents = sendFn.mock.calls.filter(
       (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
     );
-    expect(mouseEvents).toHaveLength(2);
+    expect(mouseEvents).toHaveLength(3);
     expect(mouseEvents[0][2]).toBe("oopif-session-1");
 
     // No settle — no Page.getFrameTree call
@@ -478,13 +550,14 @@ describe("clickHandler", () => {
     );
 
     expect(result.isError).toBeUndefined();
-    // Exactly 5 CDP calls — no extra mouseMoved events
-    expect(sendFn).toHaveBeenCalledTimes(5);
+    // Exactly 6 CDP calls — mouseMoved + mousePressed + mouseReleased
+    expect(sendFn).toHaveBeenCalledTimes(6);
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).toEqual([
       "Runtime.evaluate",
       "DOM.scrollIntoViewIfNeeded",
       "DOM.getContentQuads",
+      "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
     ]);
@@ -519,8 +592,8 @@ describe("clickHandler", () => {
       (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
     );
 
-    // At least 10 mouseMoved + 1 mousePressed + 1 mouseReleased = 12+
-    expect(mouseEvents.length).toBeGreaterThanOrEqual(12);
+    // At least 10 humanTouch mouseMoved + 1 explicit mouseMoved + 1 mousePressed + 1 mouseReleased = 13+
+    expect(mouseEvents.length).toBeGreaterThanOrEqual(13);
 
     // Find the indices of mousePressed and first mouseMoved
     const firstMoveIdx = mouseEvents.findIndex(

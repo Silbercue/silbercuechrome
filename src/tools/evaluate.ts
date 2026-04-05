@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { ToolResponse } from "../types.js";
+import { wrapCdpError } from "./error-utils.js";
 
 export const evaluateSchema = z.object({
   expression: z.string().describe("JavaScript code to execute in the page context"),
@@ -88,9 +89,8 @@ export async function evaluateHandler(
     };
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `evaluate failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "evaluate") }],
       isError: true,
       _meta: { elapsedMs, method: "evaluate" },
     };

@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-04-04T23:25:59.517Z",
+  "elapsed_s": 1527,
+  "summary": {
+    "total": 16,
+    "passed": 16,
+    "failed": 0
+  },
+  "tests": {
+    "T1.1": { "status": "pass", "duration_ms": 1, "details": "Button clicked successfully" },
+    "T1.2": { "status": "pass", "duration_ms": 0, "details": "Correct: HYHI-ROCK" },
+    "T1.3": { "status": "pass", "duration_ms": 0, "details": "Form submitted successfully" },
+    "T1.4": { "status": "pass", "duration_ms": 0, "details": "All 5 selectors found and clicked" },
+    "T1.5": { "status": "pass", "duration_ms": 0, "details": "Navigation sequence correct" },
+    "T1.6": { "status": "pass", "duration_ms": 0, "details": "Correct sum: 283" },
+    "T2.1": { "status": "pass", "duration_ms": 0, "details": "Async value correct" },
+    "T2.3": { "status": "pass", "duration_ms": 0, "details": "Wizard completed: pro" },
+    "T2.4": { "status": "pass", "duration_ms": 0, "details": "Swift selected!" },
+    "T2.5": { "status": "pass", "duration_ms": 0, "details": "Tab value correct!" },
+    "T2.6": { "status": "pass", "duration_ms": 0, "details": "Correct! Device Max is most expensive." },
+    "T3.1": { "status": "pass", "duration_ms": 1, "details": "Shadow DOM value correct" },
+    "T3.2": { "status": "pass", "duration_ms": 0, "details": "iFrame value correct" },
+    "T4.1": { "status": "pass", "duration_ms": 0, "details": "Target caught!" },
+    "T4.3": { "status": "pass", "duration_ms": 0, "details": "Needle found!" },
+    "T4.6": { "status": "pass", "duration_ms": 1, "details": "Token verified! Final boss defeated!" }
+  }
+}

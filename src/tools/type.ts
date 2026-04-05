@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
+import { wrapCdpError } from "./error-utils.js";
 import type { HumanTouchConfig } from "../operator/human-touch.js";
 import { humanType } from "../operator/human-touch.js";
 
@@ -101,6 +102,7 @@ export async function typeHandler(
     }
 
     // Step 3: Focus the element (use resolved session for OOPIF)
+    // Try DOM.focus first, fall back to JS this.focus() for Shadow-DOM/post-mutation nodes (BUG-006)
     try {
       await cdpClient.send(
         "DOM.focus",
@@ -108,17 +110,30 @@ export async function typeHandler(
         targetSession,
       );
     } catch {
-      const elapsedMs = Math.round(performance.now() - start);
-      return {
-        content: [
+      // Fallback: JS focus via Runtime.callFunctionOn (handles Shadow-DOM and stale backendNodeIds)
+      try {
+        await cdpClient.send(
+          "Runtime.callFunctionOn",
           {
-            type: "text",
-            text: `Could not focus element ${params.ref ?? params.selector}. Element may be hidden or not focusable.`,
+            functionDeclaration: "function() { this.focus(); }",
+            objectId: element.objectId,
+            silent: true,
           },
-        ],
-        isError: true,
-        _meta: { elapsedMs, method: "type" },
-      };
+          targetSession,
+        );
+      } catch {
+        const elapsedMs = Math.round(performance.now() - start);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Could not focus element ${params.ref ?? params.selector}. Element may be hidden or not focusable.`,
+            },
+          ],
+          isError: true,
+          _meta: { elapsedMs, method: "type" },
+        };
+      }
     }
 
     // Step 4: Clear field if requested (use resolved session for OOPIF)
@@ -171,9 +186,8 @@ export async function typeHandler(
 
     // Generic error
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `type failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "type") }],
       isError: true,
       _meta: { elapsedMs, method: "type" },
     };

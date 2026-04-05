@@ -323,7 +323,9 @@ export class ChromeConnection {
   }
 
   /**
-   * Attempt to reconnect to Chrome (max 3 retries, 500ms delay between attempts).
+   * Attempt to reconnect to Chrome with exponential backoff.
+   * BUG-004 fix: No race window (_reconnecting stays true during entire loop),
+   * failed transports are cleaned up, and onReconnect errors don't short-circuit.
    * Returns true if reconnect succeeded, false otherwise.
    */
   async reconnect(): Promise<boolean> {
@@ -338,7 +340,9 @@ export class ChromeConnection {
       /* best-effort */
     }
 
-    const maxAttempts = 3;
+    const maxAttempts = 5;
+    const baseDelay = 500; // Exponential backoff: 500, 1000, 2000, 4000ms
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // B2: Check _closed inside the loop so close() during reconnect aborts immediately
       if (this._closed) {
@@ -347,11 +351,18 @@ export class ChromeConnection {
       }
 
       if (attempt > 1) {
-        await new Promise((r) => setTimeout(r, 500));
+        const delay = baseDelay * Math.pow(2, attempt - 2);
+        await new Promise((r) => setTimeout(r, delay));
         // B2: Re-check after the pause — close() may have been called while waiting
         if (this._closed) {
           this._reconnecting = false;
           return false;
+        }
+        // BUG-004: Clean up transport from previous failed attempt to prevent leaks
+        try {
+          await this._cdpClient.close();
+        } catch {
+          /* best-effort */
         }
       }
 
@@ -401,18 +412,11 @@ export class ChromeConnection {
         // Setup onClose for the new CdpClient to detect future disconnects
         this._setupOnClose(this._cdpClient);
 
-        // C1: Invoke onReconnect callback BEFORE setting status to connected.
-        // If callback fails, status stays disconnected.
+        // Invoke onReconnect callback BEFORE setting status to connected.
+        // BUG-004 fix: If callback fails, DON'T throw — let the loop continue
+        // to the next attempt. _reconnecting stays true (no race window).
         if (this._onReconnect) {
-          try {
-            await this._onReconnect(this);
-          } catch (cbErr) {
-            const cbMsg = cbErr instanceof Error ? cbErr.message : String(cbErr);
-            debug("onReconnect callback failed on attempt %d: %s", attempt, cbMsg);
-            this.status = "disconnected";
-            this._reconnecting = false;
-            throw cbErr;
-          }
+          await this._onReconnect(this);
         }
 
         this.status = "connected";
@@ -468,10 +472,13 @@ export class ChromeConnection {
     }
   }
 
-  /** Register onClose callback on a CdpClient to trigger reconnect on unexpected disconnect */
+  /** Register onClose callback on a CdpClient to trigger reconnect on unexpected disconnect.
+   *  BUG-004 fix: fired-flag prevents handler accumulation across reconnect attempts. */
   private _setupOnClose(client: CdpClient): void {
+    let fired = false;
     client.onClose(() => {
-      if (this._closed) return; // deliberate shutdown — no reconnect
+      if (fired || this._closed) return;
+      fired = true;
       this.status = "disconnected";
       // Fire-and-forget reconnect
       this.reconnect().catch((err) => {

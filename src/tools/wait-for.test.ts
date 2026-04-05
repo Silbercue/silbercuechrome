@@ -417,8 +417,7 @@ describe("waitForHandler — error handling", () => {
 
     const result = await waitForHandler(params, cdpClient, "s1");
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("wait_for failed:");
-    expect(result.content[0].text).toContain("Transport closed unexpectedly");
+    expect(result.content[0].text).toContain("CDP connection lost");
     expect(result._meta?.method).toBe("wait_for");
   });
 });

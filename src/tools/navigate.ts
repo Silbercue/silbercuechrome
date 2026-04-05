@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { ToolResponse } from "../types.js";
 import { settle } from "../cdp/settle.js";
 import type { SettleResult } from "../cdp/settle.js";
+import { wrapCdpError } from "./error-utils.js";
 
 export const navigateSchema = z.object({
   url: z.string().optional().describe("URL to navigate to (required for goto action)"),
@@ -59,9 +60,8 @@ export async function navigateHandler(
     return await handleGoto(cdpClient, sessionId, params.url, params.settle_ms, start, method);
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `Navigation failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "navigate") }],
       isError: true,
       _meta: { elapsedMs, method },
     };

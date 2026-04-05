@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
+import { wrapCdpError } from "./error-utils.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "./visual-constants.js";
 
@@ -356,9 +357,8 @@ export async function screenshotHandler(
     };
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
-    const message = err instanceof Error ? err.message : String(err);
     return {
-      content: [{ type: "text", text: `screenshot failed: ${message}` }],
+      content: [{ type: "text", text: wrapCdpError(err, "screenshot") }],
       isError: true,
       _meta: { elapsedMs, method: "screenshot" },
     };
