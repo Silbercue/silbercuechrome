@@ -1631,6 +1631,256 @@ describe("ToolRegistry", () => {
     expect(result._meta!.response_bytes as number).toBeGreaterThan(100);
   });
 
+  // --- Story 12.2: _meta.estimated_tokens in read_page and dom_snapshot ---
+
+  it("read_page via executeTool has estimated_tokens as positive number", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: [] }] };
+        }
+        if (method === "Runtime.evaluate") {
+          // Return a valid URL for the page
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "DOM.getDocument") {
+          return { root: { nodeId: 1 } };
+        }
+        if (method === "DOM.resolveNode") {
+          return { object: { objectId: "obj1" } };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("read_page", {});
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.estimated_tokens).toBeDefined();
+    expect(typeof result._meta!.estimated_tokens).toBe("number");
+    expect(result._meta!.estimated_tokens as number).toBeGreaterThan(0);
+  });
+
+  it("dom_snapshot via executeTool has estimated_tokens as positive number", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // dom_snapshot is Pro-gated; use a Pro license
+    const license: LicenseStatus = { isPro: () => true };
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "DOMSnapshot.captureSnapshot") {
+          return {
+            documents: [{
+              documentURL: "http://localhost/",
+              nodes: { nodeName: ["#document", "HTML", "BODY", "DIV"], nodeType: [9, 1, 1, 1], backendNodeId: [1, 2, 3, 4], parentIndex: [-1, 0, 1, 2], nodeValue: [-1, -1, -1, -1], textValue: { index: [], value: [] }, inputValue: { index: [], value: [] }, inputChecked: { index: [] }, optionSelected: { index: [] }, contentDocumentIndex: { index: [] }, pseudoType: { index: [], value: [] }, isClickable: { index: [] }, currentSourceURL: { index: [], value: [] } },
+              layout: { nodeIndex: [2, 3], bounds: [[0, 0, 800, 600], [0, 0, 100, 50]], styles: [[], []], text: [-1, -1], stackingContexts: { index: [] } },
+              textBoxes: { layoutIndex: [], bounds: [], start: [], length: [] },
+            }],
+            strings: [],
+          };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: [], backendDOMNodeId: 1 }] };
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        return {};
+      }),
+    } as never;
+
+    const registry = new ToolRegistry(
+      mockServer, mockCdpClient, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("dom_snapshot", {});
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.estimated_tokens).toBeDefined();
+    expect(typeof result._meta!.estimated_tokens).toBe("number");
+    expect(result._meta!.estimated_tokens as number).toBeGreaterThan(0);
+  });
+
+  it("estimated_tokens equals Math.ceil(response_bytes / 4)", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: [] }] };
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "DOM.getDocument") {
+          return { root: { nodeId: 1 } };
+        }
+        if (method === "DOM.resolveNode") {
+          return { object: { objectId: "obj1" } };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("read_page", {});
+
+    expect(result._meta).toBeDefined();
+    const responseBytes = result._meta!.response_bytes as number;
+    const estimatedTokens = result._meta!.estimated_tokens as number;
+    expect(estimatedTokens).toBe(Math.ceil(responseBytes / 4));
+  });
+
+  it("navigate via executeTool has NO estimated_tokens in _meta", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Page.navigate") {
+          return { frameId: "frame1" };
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "complete" } };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("navigate", { url: "http://example.com" });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(result._meta!.estimated_tokens).toBeUndefined();
+  });
+
+  it("click via executeTool has NO estimated_tokens in _meta", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: ["2"], backendDOMNodeId: 1 }, { nodeId: "2", role: { value: "button" }, name: { value: "Click me" }, properties: [], childIds: [], backendDOMNodeId: 2 }] };
+        }
+        if (method === "DOM.resolveNode") {
+          return { object: { objectId: "obj1" } };
+        }
+        if (method === "Runtime.callFunctionOn") {
+          return { result: { type: "object", value: { x: 100, y: 100, width: 50, height: 20 } } };
+        }
+        if (method === "Input.dispatchMouseEvent") {
+          return {};
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("click", { ref: "e2" });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(result._meta!.estimated_tokens).toBeUndefined();
+  });
+
+  it("read_page via MCP path (server.tool callback) has estimated_tokens", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: [] }] };
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "DOM.getDocument") {
+          return { root: { nodeId: 1 } };
+        }
+        if (method === "DOM.resolveNode") {
+          return { object: { objectId: "obj1" } };
+        }
+        return {};
+      }),
+    } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    // Find the read_page callback registered via server.tool()
+    const readPageCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "read_page",
+    );
+    expect(readPageCall).toBeDefined();
+
+    const readPageCallback = readPageCall![readPageCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    const result = await readPageCallback({});
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.estimated_tokens).toBeDefined();
+    expect(typeof result._meta!.estimated_tokens).toBe("number");
+    expect(result._meta!.estimated_tokens as number).toBeGreaterThan(0);
+    expect(result._meta!.estimated_tokens).toBe(Math.ceil((result._meta!.response_bytes as number) / 4));
+  });
+
+  it("existing _meta fields are preserved alongside estimated_tokens", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Accessibility.getFullAXTree") {
+          return { nodes: [{ nodeId: "1", role: { value: "rootWebArea" }, name: { value: "Test" }, properties: [], childIds: [] }] };
+        }
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "DOM.getDocument") {
+          return { root: { nodeId: 1 } };
+        }
+        if (method === "DOM.resolveNode") {
+          return { object: { objectId: "obj1" } };
+        }
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("read_page", {});
+
+    expect(result._meta).toBeDefined();
+    // Existing fields preserved
+    expect(result._meta!.elapsedMs).toBeDefined();
+    expect(typeof result._meta!.elapsedMs).toBe("number");
+    expect(result._meta!.method).toBe("read_page");
+    expect(result._meta!.response_bytes).toBeDefined();
+    // New field added
+    expect(result._meta!.estimated_tokens).toBeDefined();
+    expect(typeof result._meta!.estimated_tokens).toBe("number");
+  });
+
   it("response_bytes via MCP path with sessionDefaults is injected correctly", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;

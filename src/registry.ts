@@ -145,7 +145,13 @@ export class ToolRegistry {
     }
     // Story 12.1: Inject response_bytes into _meta
     if (result._meta) {
-      result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+      const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+      result._meta.response_bytes = responseBytes;
+      // Story 12.2: Inject estimated_tokens for text-heavy tools
+      const method = result._meta.method;
+      if (method === "read_page" || method === "dom_snapshot") {
+        result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
+      }
     }
     return result;
   }
@@ -270,9 +276,15 @@ export class ToolRegistry {
     // Story 7.3: Extended wrap to include session defaults tracking, resolution, and suggestion injection.
     const sessionDefaults = this._sessionDefaults;
     // Story 12.1: Helper to inject response_bytes into _meta
+    // Story 12.2: Also injects estimated_tokens for read_page and dom_snapshot
     const injectResponseBytes = (result: ToolResponse): void => {
       if (result._meta) {
-        result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+        const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+        result._meta.response_bytes = responseBytes;
+        const method = result._meta.method;
+        if (method === "read_page" || method === "dom_snapshot") {
+          result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
+        }
       }
     };
 
@@ -311,8 +323,14 @@ export class ToolRegistry {
           result._meta.suggestion = suggestionText;
         }
         // Story 12.1: Inject response_bytes into _meta
+        // Story 12.2: Inject estimated_tokens for text-heavy tools
         if (result._meta) {
-          result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+          const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+          result._meta.response_bytes = responseBytes;
+          const method = result._meta.method;
+          if (method === "read_page" || method === "dom_snapshot") {
+            result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
+          }
         }
         return result;
       };
