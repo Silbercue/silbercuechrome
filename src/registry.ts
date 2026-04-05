@@ -116,10 +116,11 @@ export class ToolRegistry {
   async executeTool(name: string, params: Record<string, unknown>, sessionIdOverride?: string): Promise<ToolResponse> {
     const handler = this._handlers.get(name);
     if (!handler) {
+      const content: ToolContentBlock[] = [{ type: "text", text: `Unknown tool: ${name}` }];
       return {
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        content,
         isError: true,
-        _meta: { elapsedMs: 0, method: name },
+        _meta: { elapsedMs: 0, method: name, response_bytes: Buffer.byteLength(JSON.stringify(content), 'utf8') },
       };
     }
     // Story 7.3: Track call and resolve session defaults for run_plan path
@@ -141,6 +142,10 @@ export class ToolRegistry {
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
       result._meta.suggestion = suggestionText;
+    }
+    // Story 12.1: Inject response_bytes into _meta
+    if (result._meta) {
+      result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
     }
     return result;
   }
@@ -264,14 +269,30 @@ export class ToolRegistry {
     // (direct MCP call vs executeTool/run_plan).
     // Story 7.3: Extended wrap to include session defaults tracking, resolution, and suggestion injection.
     const sessionDefaults = this._sessionDefaults;
+    // Story 12.1: Helper to inject response_bytes into _meta
+    const injectResponseBytes = (result: ToolResponse): void => {
+      if (result._meta) {
+        result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+      }
+    };
+
     const wrap = <T>(fn: (params: T) => Promise<ToolResponse>, toolName?: string) => {
       const dialogWrapped = this._wrapWithDialogInjection(fn);
-      if (!sessionDefaults) return dialogWrapped;
+      if (!sessionDefaults) {
+        // Story 12.1: Inject response_bytes even without sessionDefaults
+        return async (params: T): Promise<ToolResponse> => {
+          const result = await dialogWrapped(params);
+          injectResponseBytes(result);
+          return result;
+        };
+      }
       return async (params: T): Promise<ToolResponse> => {
         const name = toolName ?? "unknown";
         // H2 fix: Skip trackCall/resolveParams for meta-tools
         if (name === "configure_session") {
-          return dialogWrapped(params);
+          const result = await dialogWrapped(params);
+          injectResponseBytes(result);
+          return result;
         }
         // Track call for auto-promote analysis
         sessionDefaults.trackCall(name, params as unknown as Record<string, unknown>);
@@ -288,6 +309,10 @@ export class ToolRegistry {
         // Inject auto-promote suggestion into _meta
         if (suggestionText && result._meta) {
           result._meta.suggestion = suggestionText;
+        }
+        // Story 12.1: Inject response_bytes into _meta
+        if (result._meta) {
+          result._meta.response_bytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
         }
         return result;
       };

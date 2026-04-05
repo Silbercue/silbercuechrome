@@ -156,9 +156,9 @@ development_status:
   epic-11-retrospective: optional
 
   # Epic 12: Token-Transparenz & Metriken
-  epic-12: backlog
-  12-1-meta-response-bytes: backlog
-  12-2-meta-estimated-tokens: backlog
+  epic-12: in-progress
+  12-1-meta-response-bytes: done
+  12-2-meta-estimated-tokens: ready-for-dev
   12-3-token-budget-benchmark-test: backlog
   12-4-tool-definitions-token-zaehler: backlog
   epic-12-retrospective: optional

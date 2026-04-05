@@ -201,7 +201,11 @@ describe("ToolRegistry", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toHaveProperty("text", "Unknown tool: nonexistent");
-    expect(result._meta).toEqual({ elapsedMs: 0, method: "nonexistent" });
+    expect(result._meta).toEqual({
+      elapsedMs: 0,
+      method: "nonexistent",
+      response_bytes: Buffer.byteLength(JSON.stringify(result.content), "utf8"),
+    });
   });
 
   it("executeTool does not expose run_plan itself (no recursion)", async () => {
@@ -1392,5 +1396,288 @@ describe("ToolRegistry", () => {
     // Explicitly NOT the parallel error
     const text = (result.content[0] as { text: string }).text;
     expect(text).not.toContain("parallelen Plan-Gruppen");
+  });
+
+  // --- Story 12.1: _meta.response_bytes in all tool responses ---
+
+  it("executeTool injects response_bytes as positive number into _meta", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("evaluate", {
+      expression: "21*2",
+      await_promise: true,
+    });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+  });
+
+  it("response_bytes matches Buffer.byteLength of serialized content array", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("evaluate", {
+      expression: "21*2",
+      await_promise: true,
+    });
+
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  it("existing _meta fields (elapsedMs, method) are preserved alongside response_bytes", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("evaluate", {
+      expression: "21*2",
+      await_promise: true,
+    });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.elapsedMs).toBeDefined();
+    expect(typeof result._meta!.elapsedMs).toBe("number");
+    expect(result._meta!.method).toBe("evaluate");
+    expect(result._meta!.response_bytes).toBeDefined();
+  });
+
+  it("error response (unknown tool) has response_bytes > 0", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("nonexistent", {});
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+
+    // Verify the value matches the serialized content
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  it("minimal valid tool response has response_bytes > 0", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "string", value: "" },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    // evaluate with an empty string result — minimal valid response
+    const result = await registry.executeTool("evaluate", {
+      expression: "''",
+      await_promise: false,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+
+    // Verify the value matches the serialized content
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  it("gate-blocked response has response_bytes in executeTool path", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const license: LicenseStatus = { isPro: () => false };
+    const registry = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never,
+      undefined, undefined, undefined, license,
+    );
+    registry.registerAll();
+
+    // dom_snapshot is blocked for free tier — but executeTool still injects response_bytes
+    const result = await registry.executeTool("dom_snapshot", { ref: "e1" });
+
+    expect(result.isError).toBe(true);
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+
+    // Verify the value is correct
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  it("response_bytes via MCP path (server.tool callback) is injected correctly", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "string", value: "hello world" },
+      }),
+    } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    // Find the evaluate callback registered via server.tool()
+    const evaluateCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "evaluate",
+    );
+    expect(evaluateCall).toBeDefined();
+
+    const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    const result = await evaluateCallback({ expression: "'hello world'", await_promise: false });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+
+    // Verify the value matches
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  it("response_bytes with image content (screenshot-like) has correct byte count via MCP path", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    // Create a fake base64 image data string
+    const fakeBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    // Mock CDP client that returns a base64 screenshot
+    const mockCdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Page.captureScreenshot") {
+          return { data: fakeBase64 };
+        }
+        // Return dimensions for viewport check
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "object", value: { width: 800, height: 600 } } };
+        }
+        if (method === "Page.getLayoutMetrics") {
+          return {
+            cssLayoutViewport: { clientWidth: 800, clientHeight: 600, pageX: 0, pageY: 0 },
+            cssContentSize: { width: 800, height: 600, x: 0, y: 0 },
+            cssVisualViewport: { clientWidth: 800, clientHeight: 600, pageX: 0, pageY: 0, zoom: 1, scale: 1 },
+          };
+        }
+        return {};
+      }),
+    } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    // Find the screenshot callback registered via server.tool()
+    const screenshotCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "screenshot",
+    );
+    expect(screenshotCall).toBeDefined();
+
+    const screenshotCallback = screenshotCall![screenshotCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>; _meta?: Record<string, unknown> }>;
+
+    const result = await screenshotCallback({});
+
+    // Verify response contains image content
+    const imageBlock = result.content.find((c) => c.type === "image");
+    expect(imageBlock).toBeDefined();
+
+    // Verify response_bytes is set and matches the serialized content
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
+    // Image content serialized should be significantly larger than a simple text response
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(100);
+  });
+
+  it("response_bytes via MCP path with sessionDefaults is injected correctly", async () => {
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { type: "number", value: 42 },
+      }),
+    } as never;
+
+    const sessionDefaults = new SessionDefaults();
+
+    const registry = new ToolRegistry(
+      mockServer,
+      mockCdpClient,
+      "session-1",
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sessionDefaults,
+    );
+    registry.registerAll();
+
+    // Find the evaluate callback registered via server.tool()
+    const evaluateCall = toolFn.mock.calls.find(
+      (call: unknown[]) => call[0] === "evaluate",
+    );
+    expect(evaluateCall).toBeDefined();
+
+    const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+      params: Record<string, unknown>,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; _meta?: Record<string, unknown> }>;
+
+    const result = await evaluateCallback({ expression: "42", await_promise: true });
+
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.response_bytes).toBeDefined();
+    expect(typeof result._meta!.response_bytes).toBe("number");
+    expect(result._meta!.response_bytes as number).toBeGreaterThan(0);
+
+    // Verify the value matches the serialized content
+    const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+    expect(result._meta!.response_bytes).toBe(expectedBytes);
   });
 });
