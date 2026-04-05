@@ -539,6 +539,18 @@
     </div>
     <span class="test-status pending" id="t4-6-status">PENDING</span>
   </div>
+
+  <div class="test-card" data-test="4.7">
+    <h3><span class="test-id">T4.7</span> Token Budget — Large DOM</h3>
+    <p class="test-desc">Generiere 1000+ Elemente (interaktive + nicht-interaktive). Pruefe dass read_page unter 8000 Tokens bleibt, mit filter:"interactive" unter 2000.</p>
+    <div class="test-area">
+      <button class="action-btn" onclick="Tests.t4_7_generate()">Generate Large DOM</button>
+      <div id="t4-7-container" class="scroll-container mt-12" style="max-height:200px"></div>
+      <button class="action-btn mt-12" onclick="Tests.t4_7_verify(window._t4_7_allTokens, window._t4_7_interactiveTokens)">Verify Token Budget</button>
+      <div class="verify-output" id="t4-7-result"></div>
+    </div>
+    <span class="test-status pending" id="t4-7-status">PENDING</span>
+  </div>
 </section>
 
 <!-- Modal T4.6 -->
@@ -1256,18 +1268,116 @@ const Tests = {
     Benchmark.start('4.6');
     const val = document.getElementById('t4-6-input').value.trim();
     Benchmark.setResult('4.6', document.getElementById('t4-6-result'), val === window._t4_6_token, val === window._t4_6_token ? 'Token verified! Final boss defeated!' : 'Expected "' + window._t4_6_token + '", got "' + val + '"');
+  },
+
+  // T4.7 — Token Budget Large DOM
+  t4_7_generate() {
+    const container = document.getElementById('t4-7-container');
+    container.textContent = '';
+    const frag = document.createDocumentFragment();
+    const words = ['lorem','ipsum','dolor','sit','amet','consectetur','adipiscing','elit','sed','do','eiusmod','tempor','incididunt','ut','labore','et','dolore','magna','aliqua','enim','ad','minim','veniam','quis','nostrud','exercitation','ullamco','laboris','nisi','aliquip','ex','ea','commodo','consequat'];
+    function rtext(min, max) {
+      const len = min + Math.floor(Math.random() * (max - min + 1));
+      let s = '';
+      for (let i = 0; i < len; i++) s += (i ? ' ' : '') + words[Math.floor(Math.random() * words.length)];
+      return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+    let count = 0;
+    // Generate ~60 sections, each with mixed content (~1080 elements)
+    for (let sec = 0; sec < 60; sec++) {
+      // Heading
+      const h = document.createElement('h3');
+      h.textContent = 'Section ' + (sec + 1) + ': ' + rtext(2, 5);
+      frag.appendChild(h);
+      count++;
+      // 4 paragraphs
+      for (let p = 0; p < 4; p++) {
+        const el = document.createElement('p');
+        el.textContent = rtext(8, 15);
+        frag.appendChild(el);
+        count++;
+      }
+      // 2 divs with spans
+      for (let d = 0; d < 2; d++) {
+        const div = document.createElement('div');
+        const span = document.createElement('span');
+        span.textContent = rtext(5, 10);
+        div.appendChild(span);
+        frag.appendChild(div);
+        count += 2; // div + span
+      }
+      // A list with 4 items
+      const ul = document.createElement('ul');
+      for (let li = 0; li < 4; li++) {
+        const item = document.createElement('li');
+        item.textContent = rtext(3, 8);
+        ul.appendChild(item);
+        count++;
+      }
+      frag.appendChild(ul);
+      count++; // the ul itself
+      // Interactive elements: 2 buttons, 1 link, 1 input per section (~4 interactive * 50 = 200)
+      const btn1 = document.createElement('button');
+      btn1.textContent = rtext(2, 4);
+      btn1.setAttribute('aria-label', 'Action ' + (sec * 4 + 1));
+      frag.appendChild(btn1);
+      count++;
+      const btn2 = document.createElement('button');
+      btn2.textContent = rtext(2, 4);
+      btn2.setAttribute('aria-label', 'Action ' + (sec * 4 + 2));
+      frag.appendChild(btn2);
+      count++;
+      const a = document.createElement('a');
+      a.href = '#section-' + sec;
+      a.textContent = rtext(2, 5);
+      a.setAttribute('role', 'link');
+      frag.appendChild(a);
+      count++;
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.placeholder = rtext(2, 4);
+      inp.setAttribute('aria-label', 'Input ' + (sec + 1));
+      frag.appendChild(inp);
+      count++;
+    }
+    container.appendChild(frag);
+    window._t4_7_generated = true;
+    window._t4_7_elementCount = count;
+  },
+  t4_7_verify(allTokens, interactiveTokens) {
+    Benchmark.start('4.7');
+    const el = document.getElementById('t4-7-result');
+    if (!window._t4_7_generated) {
+      Benchmark.setResult('4.7', el, false, 'DOM not generated — click "Generate Large DOM" first');
+      return;
+    }
+    // Store values on window so the UI button can re-trigger with the same values
+    if (allTokens !== undefined && interactiveTokens !== undefined) {
+      window._t4_7_allTokens = allTokens;
+      window._t4_7_interactiveTokens = interactiveTokens;
+    }
+    // If called manually from UI without params, show info
+    if (allTokens === undefined || interactiveTokens === undefined) {
+      Benchmark.setResult('4.7', el, false, 'Token values not provided — run via benchmark runner (read_page required)');
+      return;
+    }
+    const allPass = allTokens < 8000;
+    const interactivePass = interactiveTokens < 2000;
+    const pass = allPass && interactivePass;
+    const msg = 'all: ' + allTokens + ' tokens' + (allPass ? ' OK' : ' OVER BUDGET') + ', interactive: ' + interactiveTokens + ' tokens' + (interactivePass ? ' OK' : ' OVER BUDGET') + ' — ' + (pass ? 'both under budget' : 'BUDGET EXCEEDED');
+    Benchmark.setResult('4.7', el, pass, msg);
   }
 };
 
-const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6'];
-const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token'};
+const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6','4.7'];
+const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token','4.7':'Token Budget'};
 
 const PRELOADED_RUNS = [
-  {"name":"SilbercueChrome Pro","timestamp":"2026-04-05T05:12:58.080Z","elapsed_s":555,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"}}},
-  {"name":"SilbercueChrome Free","timestamp":"2026-04-05T02:53:22.567Z","elapsed_s":900,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"}}},
-  {"name":"Playwright MCP","timestamp":"2026-04-05T01:30:00.000Z","elapsed_s":null,"tests":{"1.1":{"status":"pass","ms":1},"1.2":{"status":"pass","ms":3480},"1.3":{"status":"pass","ms":3725},"1.4":{"status":"pass","ms":18984},"1.5":{"status":"pass","ms":13130},"1.6":{"status":"pass","ms":3866},"2.1":{"status":"pass","ms":16668},"2.2":{"status":"pass","ms":0},"2.3":{"status":"pass","ms":33790},"2.4":{"status":"pass","ms":17298},"2.5":{"status":"pass","ms":7848},"2.6":{"status":"pass","ms":12563},"3.1":{"status":"pass","ms":7035},"3.2":{"status":"pass","ms":21},"3.3":{"status":"pass","ms":0},"3.4":{"status":"pass","ms":0},"3.5":{"status":"pass","ms":0},"3.6":{"status":"pass","ms":25307},"4.1":{"status":"pass","ms":26016},"4.2":{"status":"pass","ms":22507},"4.3":{"status":"pass","ms":11525},"4.4":{"status":"pass","ms":7483},"4.5":{"status":"pass","ms":28},"4.6":{"status":"pass","ms":38071}}},
-  {"name":"claude-in-chrome","timestamp":"2026-04-05T01:50:00.000Z","elapsed_s":1140,"tests":{"1.1":{"status":"pass","ms":17},"1.2":{"status":"pass","ms":7519},"1.3":{"status":"pass","ms":28306},"1.4":{"status":"pass","ms":10954},"1.5":{"status":"pass","ms":95816},"1.6":{"status":"pass","ms":3087},"2.1":{"status":"pass","ms":16985},"2.2":{"status":"pass","ms":16},"2.3":{"status":"pass","ms":26859},"2.4":{"status":"pass","ms":69153},"2.5":{"status":"pass","ms":20385},"2.6":{"status":"pass","ms":7729},"3.1":{"status":"pass","ms":8411},"3.2":{"status":"pass","ms":8051},"3.3":{"status":"pass","ms":22},"3.4":{"status":"pass","ms":20313},"3.5":{"status":"pass","ms":1},"3.6":{"status":"pass","ms":9646},"4.1":{"status":"pass","ms":35436},"4.2":{"status":"pass","ms":7223},"4.3":{"status":"pass","ms":23737},"4.4":{"status":"pass","ms":20743},"4.5":{"status":"pass","ms":25083},"4.6":{"status":"pass","ms":45599}}},
-  {"name":"browser-use","timestamp":"2026-04-05T01:02:41.422Z","elapsed_s":913,"tests":{"1.1":{"status":"pass","ms":82},"1.2":{"status":"pass","ms":4512},"1.3":{"status":"pass","ms":33686},"1.4":{"status":"pass","ms":18562},"1.5":{"status":"pass","ms":14277},"1.6":{"status":"pass","ms":4584},"2.1":{"status":"pass","ms":22690},"2.2":null,"2.3":{"status":"pass","ms":39247},"2.4":{"status":"pass","ms":10272},"2.5":{"status":"pass","ms":3986},"2.6":{"status":"pass","ms":14147},"3.1":{"status":"pass","ms":5055},"3.2":{"status":"pass","ms":4661},"3.3":null,"3.4":null,"3.5":null,"3.6":null,"4.1":{"status":"pass","ms":21522},"4.2":{"status":"pass","ms":14442},"4.3":{"status":"pass","ms":34198},"4.4":null,"4.5":null,"4.6":{"status":"pass","ms":224344}}}
+  {"name":"SilbercueChrome Pro","timestamp":"2026-04-05T05:12:58.080Z","elapsed_s":555,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"},"4.7":{"status":"pass"}}},
+  {"name":"SilbercueChrome Free","timestamp":"2026-04-05T02:53:22.567Z","elapsed_s":900,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"},"4.7":{"status":"pass"}}},
+  {"name":"Playwright MCP","timestamp":"2026-04-05T01:30:00.000Z","elapsed_s":null,"tests":{"1.1":{"status":"pass","ms":1},"1.2":{"status":"pass","ms":3480},"1.3":{"status":"pass","ms":3725},"1.4":{"status":"pass","ms":18984},"1.5":{"status":"pass","ms":13130},"1.6":{"status":"pass","ms":3866},"2.1":{"status":"pass","ms":16668},"2.2":{"status":"pass","ms":0},"2.3":{"status":"pass","ms":33790},"2.4":{"status":"pass","ms":17298},"2.5":{"status":"pass","ms":7848},"2.6":{"status":"pass","ms":12563},"3.1":{"status":"pass","ms":7035},"3.2":{"status":"pass","ms":21},"3.3":{"status":"pass","ms":0},"3.4":{"status":"pass","ms":0},"3.5":{"status":"pass","ms":0},"3.6":{"status":"pass","ms":25307},"4.1":{"status":"pass","ms":26016},"4.2":{"status":"pass","ms":22507},"4.3":{"status":"pass","ms":11525},"4.4":{"status":"pass","ms":7483},"4.5":{"status":"pass","ms":28},"4.6":{"status":"pass","ms":38071},"4.7":null}},
+  {"name":"claude-in-chrome","timestamp":"2026-04-05T01:50:00.000Z","elapsed_s":1140,"tests":{"1.1":{"status":"pass","ms":17},"1.2":{"status":"pass","ms":7519},"1.3":{"status":"pass","ms":28306},"1.4":{"status":"pass","ms":10954},"1.5":{"status":"pass","ms":95816},"1.6":{"status":"pass","ms":3087},"2.1":{"status":"pass","ms":16985},"2.2":{"status":"pass","ms":16},"2.3":{"status":"pass","ms":26859},"2.4":{"status":"pass","ms":69153},"2.5":{"status":"pass","ms":20385},"2.6":{"status":"pass","ms":7729},"3.1":{"status":"pass","ms":8411},"3.2":{"status":"pass","ms":8051},"3.3":{"status":"pass","ms":22},"3.4":{"status":"pass","ms":20313},"3.5":{"status":"pass","ms":1},"3.6":{"status":"pass","ms":9646},"4.1":{"status":"pass","ms":35436},"4.2":{"status":"pass","ms":7223},"4.3":{"status":"pass","ms":23737},"4.4":{"status":"pass","ms":20743},"4.5":{"status":"pass","ms":25083},"4.6":{"status":"pass","ms":45599},"4.7":null}},
+  {"name":"browser-use","timestamp":"2026-04-05T01:02:41.422Z","elapsed_s":913,"tests":{"1.1":{"status":"pass","ms":82},"1.2":{"status":"pass","ms":4512},"1.3":{"status":"pass","ms":33686},"1.4":{"status":"pass","ms":18562},"1.5":{"status":"pass","ms":14277},"1.6":{"status":"pass","ms":4584},"2.1":{"status":"pass","ms":22690},"2.2":null,"2.3":{"status":"pass","ms":39247},"2.4":{"status":"pass","ms":10272},"2.5":{"status":"pass","ms":3986},"2.6":{"status":"pass","ms":14147},"3.1":{"status":"pass","ms":5055},"3.2":{"status":"pass","ms":4661},"3.3":null,"3.4":null,"3.5":null,"3.6":null,"4.1":{"status":"pass","ms":21522},"4.2":{"status":"pass","ms":14442},"4.3":{"status":"pass","ms":34198},"4.4":null,"4.5":null,"4.6":{"status":"pass","ms":224344},"4.7":null}}
 ];
 
 const Compare = {

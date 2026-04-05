@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SilbercueChrome Full Benchmark — runs all 24 tests against the live benchmark page.
+ * SilbercueChrome Full Benchmark — runs all 25 tests against the live benchmark page.
  * Usage: node test-hardest/benchmark-full.mjs
  * Requires: Chrome on port 9222, benchmark server on port 4242
  * Outputs: JSON benchmark results to file
@@ -33,6 +33,14 @@ async function callTool(client, name, args = {}) {
   return { text, ms, isError: res.isError };
 }
 
+async function callToolRaw(client, name, args = {}) {
+  totalCalls++;
+  const t0 = Date.now();
+  const res = await client.callTool({ name, arguments: args });
+  const ms = Date.now() - t0;
+  return { ...res, ms };
+}
+
 function log(icon, id, name, ms, detail = "") {
   const d = detail ? ` ${DIM}${detail}${RESET}` : "";
   console.error(`  ${icon} ${id} ${name} ${DIM}(${ms}ms)${RESET}${d}`);
@@ -58,7 +66,7 @@ async function runTest(id, name, client, fn) {
 }
 
 // ── Main ──
-console.error(`\n${BOLD}SilbercueChrome Full Benchmark (24 Tests)${RESET}\n`);
+console.error(`\n${BOLD}SilbercueChrome Full Benchmark (25 Tests)${RESET}\n`);
 
 const transport = new StdioClientTransport({
   command: "node",
@@ -605,6 +613,51 @@ await runTest("T4.6", "Multi-Modal Chain", client, async () => {
   return "open modal + fill + generate + verify in 1 call";
 });
 
+// T4.7 — Token values captured via closure for post-runTest assignment
+let t4_7_allTokens = 0;
+let t4_7_interactiveTokens = 0;
+
+await runTest("T4.7", "Token Budget", client, async () => {
+  // 1) Generate large DOM
+  await callTool(client, "evaluate", {
+    expression: "Tests.t4_7_generate(); window._t4_7_generated",
+  });
+
+  // 2) read_page without filter — get full response for _meta
+  const rawAll = await callToolRaw(client, "read_page", {});
+  const metaAll = rawAll._meta || {};
+  if (!metaAll.estimated_tokens && !metaAll.response_bytes) {
+    throw new Error("estimated_tokens not found in _meta — Story 12.1/12.2 not implemented?");
+  }
+  t4_7_allTokens = metaAll.estimated_tokens ?? Math.ceil((metaAll.response_bytes || 0) / 4);
+
+  // 3) read_page with filter: "interactive" — get full response for _meta
+  const rawInt = await callToolRaw(client, "read_page", { filter: "interactive" });
+  const metaInt = rawInt._meta || {};
+  if (!metaInt.estimated_tokens && !metaInt.response_bytes) {
+    throw new Error("estimated_tokens not found in _meta for interactive filter — Story 12.1/12.2 not implemented?");
+  }
+  t4_7_interactiveTokens = metaInt.estimated_tokens ?? Math.ceil((metaInt.response_bytes || 0) / 4);
+
+  // 4) Verify via page JS
+  const r = await callTool(client, "evaluate", {
+    expression: `(() => {
+      Tests.t4_7_verify(${t4_7_allTokens}, ${t4_7_interactiveTokens});
+      return document.querySelector('[data-test="4.7"] .test-status')?.textContent;
+    })()`,
+  });
+  if (!r.text.includes("PASS")) throw new Error(r.text);
+
+  return `all: ${t4_7_allTokens} tokens, interactive: ${t4_7_interactiveTokens} tokens`;
+});
+
+// Attach token values after runTest has created the testResults entry
+if (testResults["T4.7"]) {
+  testResults["T4.7"].estimated_tokens_all = t4_7_allTokens;
+  testResults["T4.7"].estimated_tokens_interactive = t4_7_interactiveTokens;
+}
+
+
 // ═══════════════════════════════════════
 // Results
 // ═══════════════════════════════════════
@@ -627,7 +680,7 @@ const output = {
   name: "SilbercueChrome MCP",
   type: "mcp-scripted",
   timestamp: new Date().toISOString(),
-  notes: "Automated benchmark via npm run benchmark. 24 tests across 4 levels.",
+  notes: "Automated benchmark via npm run benchmark. 25 tests across 4 levels.",
   summary: {
     total: Object.keys(testResults).length,
     passed,
