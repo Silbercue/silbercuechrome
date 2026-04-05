@@ -46,13 +46,13 @@ async function runTest(id, name, client, fn) {
     const ms = Date.now() - t0;
     const calls = totalCalls - callsBefore;
     const level = parseInt(id.replace("T", ""));
-    testResults[id] = { status: "pass", level, duration_ms: ms, tool_calls: calls };
+    testResults[id] = { name, status: "pass", level, duration_ms: ms, tool_calls: calls };
     log(PASS, id, name, ms, detail || "");
   } catch (e) {
     const ms = Date.now() - t0;
     const calls = totalCalls - callsBefore;
     const level = parseInt(id.replace("T", ""));
-    testResults[id] = { status: "fail", level, duration_ms: ms, tool_calls: calls, error: e.message };
+    testResults[id] = { name, status: "fail", level, duration_ms: ms, tool_calls: calls, error: e.message };
     log(FAIL, id, name, ms, e.message);
   }
 }
@@ -629,9 +629,11 @@ const output = {
   timestamp: new Date().toISOString(),
   notes: "Automated benchmark via npm run benchmark. 24 tests across 4 levels.",
   summary: {
-    total: 24,
+    total: Object.keys(testResults).length,
     passed,
     failed,
+    total_passed: passed,
+    total_failed: failed,
     duration_s: totalDuration,
     total_time_ms: benchmarkEnd - benchmarkStart,
     tool_uses: totalCalls,
