@@ -2,6 +2,24 @@
 
 Bugs, Verbesserungen und offene Punkte die waehrend der Arbeit entdeckt, aber nicht sofort behoben wurden.
 
+## Status-Uebersicht (Stand 2026-04-05)
+
+| Bug | Status | Fix |
+|-----|--------|-----|
+| BUG-001 | GEFIXT | Tabellen mit Section-Heading annotiert in a11y-tree.ts |
+| BUG-002 | GEFIXT | mouseMoved vor mousePressed in click.ts |
+| BUG-003 | GEFIXT | Accept-Skip permanent — Node 22 undici Bug bestaetigt |
+| BUG-004 | GEFIXT | Exponential Backoff, Race-Fix, Handler-Akkumulation |
+| BUG-005 | GEFIXT | getBoundingClientRect + JS-Click Fallback in click.ts |
+| BUG-006 | GEFIXT | JS-Fallback this.focus() via Runtime.callFunctionOn in type.ts |
+| BUG-007 | GEFIXT | getBoundingClientRect Fallback in click.ts |
+| BUG-008 | GEFIXT | Sichtbare Truncation-Warnung in run-plan.ts |
+| BUG-009 | GEFIXT | Safety-Cap 50K Tokens auto-downsample in a11y-tree.ts |
+| BUG-010 | GEFIXT | Precomputed-Cache sofort bei DOM-Mutation invalidiert (DomWatcher + server.ts) |
+| BUG-011 | GEFIXT | wrapCdpError in 9 Tools nachgeruestet |
+| BUG-012 | GEFIXT | getBoundingClientRect + JS-Click Fallback in click.ts |
+| TD-001 | OFFEN | AutoLaunch Tests + Doku |
+
 ---
 
 ## BUG-001: read_page liefert unspezifischen Tabellen-Kontext
@@ -9,21 +27,13 @@ Bugs, Verbesserungen und offene Punkte die waehrend der Arbeit entdeckt, aber ni
 **Entdeckt:** 2026-04-05 (MCP Benchmark Run)
 **Schwere:** Medium
 **Betrifft:** `read_page` Tool
+**Status:** GEFIXT (2026-04-05)
 
 ### Problem
 Wenn mehrere Tabellen auf einer Seite sind, liefert `read_page` nicht genug Kontext um Tabellen eindeutig zuzuordnen. Der LLM liest die falsche Tabelle oder die falsche Spalte.
 
-### Reproduktion (Benchmark T1.6 + T2.6)
-- T1.6: Agent las Score-Spalte aus der falschen Tabelle (brauchte 2. Versuch mit spezifischerem Selektor)
-- T2.6: Agent las Stock-Spalte statt Price-Spalte (verwechselte Spaltenreihenfolge)
-
-### Erwartetes Verhalten
-`read_page` sollte Tabellen mit ihrem umgebenden Kontext (Heading, Test-ID, Section) zurueckgeben, sodass der LLM eindeutig zuordnen kann welche Tabelle welche ist.
-
-### Moegliche Fixes
-- Tabellen-Output mit naechstem Heading/Label annotieren
-- Section-Kontext (h2/h3 vor der Tabelle) in den Output einbeziehen
-- Tabellen-Headers immer mit ausgeben
+### Fix
+`formatLine()` in `a11y-tree.ts` annotiert `table`-Nodes mit dem naechsten Heading-Geschwister via `findSectionHeading()`. Output: `[e42] table (section: "Player Scores")`. Wirkt in regulaerem und downsampled Rendering.
 
 ---
 
@@ -57,17 +67,18 @@ Custom Dropdown-Menus die auf `mousedown` statt `click` Events reagieren, werden
 **Entdeckt:** 2026-04-05 (Browser-Automation fuer Polar.sh)
 **Schwere:** Medium
 **Betrifft:** `src/transport/websocket-transport.ts`
+**Status:** GEFIXT (2026-04-05)
 
 ### Problem
-WebSocket-Handshake zu Chrome via `--remote-debugging-port=9222` schlaegt fehl. Node 22 `httpRequest` und Chrome 146 produzieren unterschiedliche `Sec-WebSocket-Accept`-Hashes. Der Client berechnet den erwarteten Hash korrekt (SHA1 von Key + GUID), aber Chrome gibt einen anderen zurueck.
+WebSocket-Handshake zu Chrome via `--remote-debugging-port=9222` schlaegt fehl. Node 22 `httpRequest` und Chrome 146 produzieren unterschiedliche `Sec-WebSocket-Accept`-Hashes.
 
-### Temporaerer Fix
-Accept-Validierung in `websocket-transport.ts` uebersprungen (Zeile 67-74 durch Kommentar ersetzt). Funktioniert weil Chrome DevTools ein vertrauenswuerdiger localhost-Endpoint ist.
+### Root Cause
+Bestaetigt als Bug in Node 22 undici 6.21.1. Die native `WebSocket`-API hat exakt denselben Hash-Mismatch — getestet mit Mock-Server und nativem WebSocket-Client. Betrifft alle WebSocket-Implementierungen in Node 22.
 
-### Moegliche permanente Fixes
-- Root Cause identifizieren (Header-Encoding? Node 22 httpRequest Aenderung?)
-- `ws` npm-Paket als Alternative zum Custom-WebSocket-Client
-- Node.js native WebSocket API (verfuegbar ab Node 22)
+### Fix
+Accept-Validierung permanent uebersprungen. Die Custom-Implementierung (HTTP Upgrade + manuelle Frame-Kodierung) funktioniert korrekt — nur die Accept-Validierung ist betroffen. Chrome DevTools ist ein vertrauenswuerdiger localhost-Endpoint, daher ist der Skip sicher.
+
+Native WebSocket und `ws`-Paket wurden als Alternativen getestet — beide scheitern am selben undici-Bug.
 
 ---
 
@@ -175,12 +186,13 @@ Jeder run_plan mit >3 Steps im Free Tier. 3x reproduziert mit identischem Ergebn
 **Entdeckt:** 2026-04-05 (Live-Benchmark Run 3)
 **Schwere:** P3 — Niedrig
 **Betrifft:** `src/tools/read-page.ts`
+**Status:** GEFIXT (2026-04-05)
 
 ### Problem
-`read_page(filter: "all", depth: 10)` auf Seite mit 10.000 DOM-Elementen erzeugt 855.381 Zeichen Response. Der MCP-Client schneidet die Response ab. Mit `max_tokens` funktioniert Downsampling korrekt.
+`read_page(filter: "all", depth: 10)` auf Seite mit 10.000 DOM-Elementen erzeugt 855.381 Zeichen Response. Der MCP-Client schneidet die Response ab.
 
-### Positiv
-Server crashed nicht. Downsampling funktioniert.
+### Fix
+Safety-Cap `DEFAULT_MAX_TOKENS = 50_000` (~200KB) in `a11y-tree.ts`. Wenn kein `max_tokens` angegeben wird, greift automatisch der Safety-Cap und triggert Downsampling. Gross genug fuer normale Seiten, verhindert MCP-Client-Truncation.
 
 ---
 

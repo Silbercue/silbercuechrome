@@ -77,6 +77,10 @@ interface CaptureSnapshotResponse {
 
 // --- Constants ---
 
+/** BUG-009: Safety cap to prevent oversized responses that MCP clients truncate silently.
+ *  ~200KB chars ≈ 50K tokens. Large enough for normal pages, prevents 855KB+ responses. */
+const DEFAULT_MAX_TOKENS = 50_000;
+
 const INTERACTIVE_ROLES = new Set([
   "button",
   "link",
@@ -632,38 +636,37 @@ export class A11yTreeProcessor {
     const text = this.formatHeader(pageTitle, refCount, filter, depth)
       + (lines.length > 0 ? "\n\n" + lines.join("\n") : "");
 
-    // Token-Budget Downsampling
-    if (options.max_tokens) {
-      const currentTokens = estimateTokens(text);
-      if (currentTokens > options.max_tokens) {
-        const downsampled = this.downsampleTree(
-          root, nodeMap, filter, options.max_tokens,
-          oopifSections, visualMap,
-        );
-        const dsHeader = this.formatDownsampledHeader(
-          pageTitle, downsampled.refCount, filter, depth,
-          currentTokens, downsampled.level,
-        );
-        // C2: Final budget check — trim body if header+body exceeds budget
-        let dsBody = downsampled.lines.join("\n");
-        const fullText = dsHeader + (dsBody ? "\n\n" + dsBody : "");
-        if (estimateTokens(fullText) > options.max_tokens && dsBody) {
-          const headerTokens = estimateTokens(dsHeader + "\n\n");
-          const bodyBudget = options.max_tokens - headerTokens;
-          const trimmed = this.trimBodyToFit(downsampled.lines, bodyBudget);
-          dsBody = trimmed.join("\n");
-        }
-        const dsText = dsHeader + (dsBody ? "\n\n" + dsBody : "");
-        return {
-          text: dsText,
-          refCount: downsampled.refCount,
-          depth,
-          downsampled: true,
-          originalTokens: currentTokens,
-          downsampleLevel: downsampled.level,
-          ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
-        };
+    // Token-Budget Downsampling — explicit max_tokens or BUG-009 safety cap
+    const effectiveMaxTokens = options.max_tokens ?? DEFAULT_MAX_TOKENS;
+    const currentTokens = estimateTokens(text);
+    if (currentTokens > effectiveMaxTokens) {
+      const downsampled = this.downsampleTree(
+        root, nodeMap, filter, effectiveMaxTokens,
+        oopifSections, visualMap,
+      );
+      const dsHeader = this.formatDownsampledHeader(
+        pageTitle, downsampled.refCount, filter, depth,
+        currentTokens, downsampled.level,
+      );
+      // C2: Final budget check — trim body if header+body exceeds budget
+      let dsBody = downsampled.lines.join("\n");
+      const fullText = dsHeader + (dsBody ? "\n\n" + dsBody : "");
+      if (estimateTokens(fullText) > effectiveMaxTokens && dsBody) {
+        const headerTokens = estimateTokens(dsHeader + "\n\n");
+        const bodyBudget = effectiveMaxTokens - headerTokens;
+        const trimmed = this.trimBodyToFit(downsampled.lines, bodyBudget);
+        dsBody = trimmed.join("\n");
       }
+      const dsText = dsHeader + (dsBody ? "\n\n" + dsBody : "");
+      return {
+        text: dsText,
+        refCount: downsampled.refCount,
+        depth,
+        downsampled: true,
+        originalTokens: currentTokens,
+        downsampleLevel: downsampled.level,
+        ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
+      };
     }
 
     return {
@@ -878,7 +881,7 @@ export class A11yTreeProcessor {
 
     if (elementClass === "interactive") {
       // Interactive: ALWAYS fully preserved
-      let line = this.formatLine(indent, refNum, role, node);
+      let line = this.formatLine(indent, refNum, role, node, nodeMap);
       if (visualMap) {
         const vi = visualMap.get(node.backendDOMNodeId);
         if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
@@ -894,7 +897,7 @@ export class A11yTreeProcessor {
     } else if (elementClass === "content") {
       if (level < 4) {
         // Content at levels 0-3: unchanged
-        let line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node, nodeMap);
         if (visualMap) {
           const vi = visualMap.get(node.backendDOMNodeId);
           if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
@@ -929,7 +932,7 @@ export class A11yTreeProcessor {
       // Container
       if (level === 0) {
         // Level 0: no merging, render normally
-        let line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node, nodeMap);
         if (visualMap) {
           const vi = visualMap.get(node.backendDOMNodeId);
           if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
@@ -952,7 +955,7 @@ export class A11yTreeProcessor {
           }
           return;
         }
-        let line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node, nodeMap);
         if (visualMap) {
           const vi = visualMap.get(node.backendDOMNodeId);
           if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
@@ -981,7 +984,7 @@ export class A11yTreeProcessor {
           return;
         }
         // Multiple children: keep container but render children
-        let line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node, nodeMap);
         if (visualMap) {
           const vi = visualMap.get(node.backendDOMNodeId);
           if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
@@ -1221,6 +1224,24 @@ export class A11yTreeProcessor {
     return this.truncateToFit(lines, maxTokens);
   }
 
+  /** BUG-001: Find the nearest heading sibling before this node in parent's children */
+  private findSectionHeading(node: AXNode, nodeMap: Map<string, AXNode>): string | null {
+    if (!node.parentId) return null;
+    const parent = nodeMap.get(node.parentId);
+    if (!parent?.childIds) return null;
+    const myIdx = parent.childIds.indexOf(node.nodeId);
+    for (let i = myIdx - 1; i >= 0; i--) {
+      const sibling = nodeMap.get(parent.childIds[i]);
+      if (!sibling) continue;
+      const siblingRole = this.getRole(sibling);
+      if (siblingRole === "heading") {
+        const name = sibling.name?.value as string;
+        if (name) return name;
+      }
+    }
+    return null;
+  }
+
   private renderNode(
     node: AXNode,
     nodeMap: Map<string, AXNode>,
@@ -1242,7 +1263,7 @@ export class A11yTreeProcessor {
       const refNum = this.refMap.get(node.backendDOMNodeId);
       if (refNum !== undefined) {
         const indent = "  ".repeat(indentLevel);
-        let line = this.formatLine(indent, refNum, role, node);
+        let line = this.formatLine(indent, refNum, role, node, nodeMap);
 
         // Append visual info if visualMap is provided
         if (visualMap) {
@@ -1300,7 +1321,7 @@ export class A11yTreeProcessor {
     return false;
   }
 
-  private formatLine(indent: string, refNum: number, role: string, node: AXNode): string {
+  private formatLine(indent: string, refNum: number, role: string, node: AXNode, nodeMap?: Map<string, AXNode>): string {
     let line = `${indent}[e${refNum}] ${role}`;
 
     const name = node.name?.value as string | undefined;
@@ -1311,6 +1332,14 @@ export class A11yTreeProcessor {
     const value = node.value?.value as string | undefined;
     if (value !== undefined && value !== "") {
       line += ` value="${value}"`;
+    }
+
+    // BUG-001: Annotate tables with nearest heading for disambiguation
+    if (role === "table" && nodeMap) {
+      const sectionHeading = this.findSectionHeading(node, nodeMap);
+      if (sectionHeading) {
+        line += ` (section: "${sectionHeading}")`;
+      }
     }
 
     // URL for links — shorten to path to save tokens

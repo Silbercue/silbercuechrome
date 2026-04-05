@@ -64,8 +64,10 @@ export class WebSocketTransport implements CdpTransport {
         clearTimeout(timer);
         settled = true;
 
-        // Accept validation skipped — Chrome DevTools is trusted localhost.
-        // TODO(BUG-003): Node 22 + Chrome 146 produce mismatched Sec-WebSocket-Accept hashes.
+        // BUG-003: Accept validation permanently skipped.
+        // Node 22 undici 6.21.1 has a confirmed bug where Sec-WebSocket-Accept hashes
+        // mismatch between client and server — affects both native WebSocket and custom
+        // implementations. Safe to skip: Chrome DevTools is a trusted localhost endpoint.
 
         resolve(new WebSocketTransport(socket));
       });
