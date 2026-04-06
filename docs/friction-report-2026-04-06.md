@@ -11,14 +11,14 @@ Quelle: Live-Benchmark-Durchlauf Session `51a1443e-68`, 35 Tests, SilbercueChrom
 
 | ID | Titel | Prio | Status | Verschwendete Calls |
 |----|-------|------|--------|-------------------|
-| FR-001 | switch_tab(close) liefert keinen Kontext ueber das Ziel-Tab | P0 | OFFEN | 4 + Session-Verlust |
-| FR-002 | read_page zeigt Form-Felder nicht bei verschachteltem DOM | P1 | OFFEN | 3 |
-| FR-003 | click auf unsichtbares Element — kryptische Fehlermeldung | P1 | OFFEN | 2 |
-| FR-004 | Refs nach Hash-Navigation ungueltig ohne Warnung | P1 | OFFEN | 1 |
-| FR-005 | Custom-Dropdown .click() wirkungslos — kein Hinweis | P1 | OFFEN | 6 |
-| FR-006 | wait_for Timeout ohne Kontext-Hilfe | P2 | OFFEN | 1 + 5s Wartezeit |
-| FR-007 | evaluate Scope-Sharing verursacht SyntaxErrors | P2 | OFFEN | 1 |
-| FR-008 | click auf nicht-existierenden Selektor — kein Vorschlag | P3 | OFFEN | 1 |
+| FR-001 | switch_tab(close) liefert keinen Kontext ueber das Ziel-Tab | P0 | GEFIXT (af36b81) | 4 + Session-Verlust |
+| FR-002 | read_page zeigt Form-Felder nicht bei verschachteltem DOM | P1 | GEFIXT (af36b81) | 3 |
+| FR-003 | click auf unsichtbares Element — kryptische Fehlermeldung | P1 | GEFIXT (af36b81) | 2 |
+| FR-004 | Refs nach Hash-Navigation ungueltig ohne Warnung | P1 | GEFIXT (63e09bf) | 1 |
+| FR-005 | Custom-Dropdown .click() wirkungslos — kein Hinweis | P1 | GEFIXT (63e09bf) | 6 |
+| FR-006 | wait_for Timeout ohne Kontext-Hilfe | P2 | GEFIXT (63e09bf) | 1 + 5s Wartezeit |
+| FR-007 | evaluate Scope-Sharing verursacht SyntaxErrors | P2 | GEFIXT (af36b81) | 1 |
+| FR-008 | click auf nicht-existierenden Selektor — kein Vorschlag | P3 | GEFIXT (63e09bf) | 1 |
 
 ---
 
