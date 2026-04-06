@@ -113,13 +113,13 @@ describe("ToolRegistry", () => {
       expect.objectContaining({
         action: expect.anything(),
         url: expect.anything(),
-        tab_id: expect.anything(),
+        tab: expect.anything(),
       }),
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(
       "virtual_desk",
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost.",
+      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
       {},
       expect.any(Function),
     );
@@ -1290,7 +1290,7 @@ describe("ToolRegistry", () => {
     );
     expect(virtualDeskCall).toBeDefined();
     expect(virtualDeskCall![1]).toBe(
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost.",
+      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
     );
   });
 

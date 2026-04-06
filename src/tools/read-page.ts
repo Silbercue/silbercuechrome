@@ -36,8 +36,14 @@ export async function readPageHandler(
       fresh: true, // Story 13a.2 fix: always fetch fresh data — precomputed cache may be stale after SPA navigation
     }, sessionManager);
 
-    // FR-H6: Detect hidden interactive elements — hint when page has hidden sections
     let responseText = result.text;
+
+    // Truncation warning — when downsampled, hint that overlays may be hidden
+    if (result.downsampled && params.max_tokens) {
+      responseText += `\n\n⚠ Truncated to ~${params.max_tokens} tokens (full page: ~${result.originalTokens}). Overlays/modals are prioritized but some elements may be hidden — retry without max_tokens or use screenshot to check for modals.`;
+    }
+
+    // FR-H6: Detect hidden interactive elements — hint when page has hidden sections
     if (params.filter === "interactive" && result.refCount > 0) {
       try {
         const hiddenResult = await cdpClient.send<{ result: { value: number } }>(

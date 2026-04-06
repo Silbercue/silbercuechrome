@@ -246,7 +246,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -260,7 +260,7 @@ describe("switchTabHandler — action: switch", () => {
     expect(result._meta?.method).toBe("switch_tab");
   });
 
-  it("returns error for non-existent tab_id", async () => {
+  it("returns error for non-existent tab", async () => {
     const { cdpClient } = createMockCdp({
       ...defaultCdpResponses,
       "Target.getTargets": {
@@ -272,7 +272,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "NONEXISTENT" },
+      { action: "switch", tab: "NONEXISTENT" },
       cdpClient,
       "session-old",
       cache,
@@ -291,7 +291,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -313,7 +313,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     await switchTabHandler(
-      { action: "switch", tab_id: "NONEXISTENT" },
+      { action: "switch", tab: "NONEXISTENT" },
       cdpClient,
       "session-old",
       cache,
@@ -324,7 +324,7 @@ describe("switchTabHandler — action: switch", () => {
     expect(onSessionChange).not.toHaveBeenCalled();
   });
 
-  it("lists tabs when tab_id missing for switch action", async () => {
+  it("lists tabs when tab missing for switch action", async () => {
     const { cdpClient } = createMockCdp(defaultCdpResponses);
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("T1");
@@ -360,7 +360,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -388,9 +388,9 @@ describe("switchTabHandler — action: switch", () => {
     cache.setActiveTarget("T1");
     const onSessionChange = vi.fn();
 
-    // tab_id "2" should resolve to T2 (second entry in pageTabs)
+    // tab "2" should resolve to T2 (second entry in pageTabs)
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "2" },
+      { action: "switch", tab: "2" },
       cdpClient,
       "session-old",
       cache,
@@ -408,7 +408,7 @@ describe("switchTabHandler — action: switch", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "5" },
+      { action: "switch", tab: "5" },
       cdpClient,
       "session-old",
       cache,
@@ -447,14 +447,14 @@ describe("switchTabHandler — action: close", () => {
     expect(result._meta?.method).toBe("switch_tab");
   });
 
-  it("closes specific tab by tab_id", async () => {
+  it("closes specific tab by tab", async () => {
     const { cdpClient } = createMockCdp(defaultCdpResponses);
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("T1");
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "close", tab_id: "T2" },
+      { action: "close", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -560,14 +560,14 @@ describe("switchTabHandler — action: close", () => {
     expect(attachIdx).toBeGreaterThan(activateIdx);
   });
 
-  it("H2: returns error for non-existent tab_id in close action", async () => {
+  it("H2: returns error for non-existent tab in close action", async () => {
     const { cdpClient } = createMockCdp(defaultCdpResponses);
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("T1");
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "close", tab_id: "NONEXISTENT" },
+      { action: "close", tab: "NONEXISTENT" },
       cdpClient,
       "session-old",
       cache,
@@ -590,9 +590,9 @@ describe("switchTabHandler — action: close", () => {
     cache.setActiveTarget("T1");
     const onSessionChange = vi.fn();
 
-    // tab_id "2" should resolve to T2 (non-active tab)
+    // tab "2" should resolve to T2 (non-active tab)
     const result = await switchTabHandler(
-      { action: "close", tab_id: "2" },
+      { action: "close", tab: "2" },
       cdpClient,
       "session-old",
       cache,
@@ -651,7 +651,7 @@ describe("switchTabHandler — error handling", () => {
     expect(successResult._meta!.method).toBe("switch_tab");
     expect(typeof successResult._meta!.elapsedMs).toBe("number");
 
-    // Tab listing case (no tab_id)
+    // Tab listing case (no tab)
     const listResult = await switchTabHandler(
       { action: "switch" },
       cdpClient,
@@ -676,7 +676,7 @@ describe("switchTabHandler — error handling", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -700,7 +700,7 @@ describe("switchTabHandler — error handling", () => {
     const onSessionChange = vi.fn();
 
     const result = await switchTabHandler(
-      { action: "close", tab_id: "T2" },
+      { action: "close", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -810,14 +810,14 @@ describe("switchTabHandler — serialisation (H3)", () => {
 
     // Launch two switches concurrently
     const p1 = switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
       onSessionChange,
     );
     const p2 = switchTabHandler(
-      { action: "switch", tab_id: "T1" },
+      { action: "switch", tab: "T1" },
       cdpClient,
       "session-old",
       cache,
@@ -962,7 +962,7 @@ describe("switchTabHandler — origin tab tracking (FR-001)", () => {
     const onSessionChange = vi.fn();
 
     await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,
@@ -979,7 +979,7 @@ describe("switchTabHandler — origin tab tracking (FR-001)", () => {
 
     // Trigger switch to set origin
     await switchTabHandler(
-      { action: "switch", tab_id: "T2" },
+      { action: "switch", tab: "T2" },
       cdpClient,
       "session-old",
       cache,

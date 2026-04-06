@@ -392,6 +392,49 @@ return x + y;`;
     expect(result).toBe(code); // unchanged
   });
 
+  // FR-011: await-Regression — Patterns die vorher nicht erkannt wurden
+  it("should use async IIFE for destructuring await", () => {
+    const code = `const { data } = await fetch('/api').then(r => r.json());\ndata;`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(async () => {");
+    expect(result).toContain("return data;");
+  });
+
+  it("should use async IIFE for array destructuring await", () => {
+    const code = `const [a, b] = await Promise.all([fetch('/a'), fetch('/b')]);\n[a, b];`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(async () => {");
+  });
+
+  it("should use async IIFE for parenthesized await", () => {
+    const code = `const x = (await fetch('/api')).status;\nx;`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(async () => {");
+  });
+
+  it("should use async IIFE for the T4.5 MutationObserver pattern", () => {
+    const code = `const values = [];
+const target = document.getElementById('t4-5-value');
+const observer = new MutationObserver(() => {
+  const v = target.textContent;
+  if (v !== '---' && !values.includes(v)) values.push(v);
+});
+observer.observe(target, {childList: true, subtree: true});
+await new Promise(r => setTimeout(r, 3500));
+observer.disconnect();
+values.join(',');`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(async () => {");
+    expect(result).toContain("return values.join(',');");
+  });
+
+  it("should NOT use async IIFE when await is absent", () => {
+    const code = `const x = 1;\nx;`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(() => {");
+    expect(result).not.toContain("async");
+  });
+
   it("should handle the exact T3.4 failure case from benchmark", () => {
     const code = `const card = [...document.querySelectorAll('.test-card')].find(c => c.querySelector('.test-id')?.textContent === 'T3.4');
 const canvas = card?.querySelector('canvas');

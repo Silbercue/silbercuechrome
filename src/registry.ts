@@ -492,12 +492,24 @@ export class ToolRegistry {
         settle_ms: navigateSchema.shape.settle_ms,
       },
       wrap(async (params) => {
-        const result = await navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
-        // FR-H: Remind LLM to check browser context if it hasn't yet
-        if (!this._contextChecked && result.content?.[0]?.type === "text") {
-          result.content[0].text += "\n\n⚠ Hint: You haven't called virtual_desk yet in this session. Call it to see all open tabs before navigating — you may be overwriting the user's active tab.";
+        // FR-H: If virtual_desk hasn't been called yet, run it instead of navigating.
+        // This prevents overwriting the user's active tab blindly.
+        if (!this._contextChecked) {
+          this._contextChecked = true;
+          const vdResult = await virtualDeskHandler(
+            {} as VirtualDeskParams,
+            this.cdpClient,
+            this.sessionId,
+            this._tabStateCache,
+            this.connectionStatus,
+          );
+          const tabList = vdResult.content?.[0]?.type === "text" ? vdResult.content[0].text : "";
+          return {
+            content: [{ type: "text" as const, text: `Navigation blocked — virtual_desk was not called yet. Here are your open tabs:\n\n${tabList}\n\nUse switch_tab(tab: "<id>") to go to an existing tab, or call navigate again to open a new page.` }],
+            _meta: { elapsedMs: vdResult._meta?.elapsedMs ?? 0, method: "navigate", intercepted: true },
+          };
         }
-        return result;
+        return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
       }, "navigate"),
     );
 
@@ -523,7 +535,31 @@ export class ToolRegistry {
         som: screenshotSchema.shape.som,
       },
       wrap(async (params) => {
-        return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+        // Check for minimized window before taking screenshot
+        const activeTarget = this._tabStateCache.activeTargetId;
+        if (activeTarget) {
+          try {
+            const { bounds } = await this.cdpClient.send<{ windowId: number; bounds: { windowState: string } }>(
+              "Browser.getWindowForTarget",
+              { targetId: activeTarget },
+            );
+            if (bounds.windowState === "minimized") {
+              return {
+                content: [{ type: "text", text: "Warning: Window is minimized — screenshot may be empty or stale. Use switch_tab to bring the window to foreground first, or call Browser.setWindowBounds to restore it." }],
+                isError: true,
+                _meta: { elapsedMs: 0, method: "screenshot", windowMinimized: true },
+              };
+            }
+          } catch {
+            /* best-effort — proceed with screenshot */
+          }
+        }
+        const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+        // Hint: nudge LLM toward read_page for interaction
+        if (!result.isError && result.content?.length > 0) {
+          result.content.push({ type: "text", text: "Tip: Use read_page for element refs — it's faster and cheaper than screenshots for interaction." });
+        }
+        return result;
       }, "screenshot"),
     );
 
@@ -619,7 +655,7 @@ export class ToolRegistry {
       {
         action: switchTabSchema.shape.action,
         url: switchTabSchema.shape.url,
-        tab_id: switchTabSchema.shape.tab_id,
+        tab: switchTabSchema.shape.tab,
       },
       wrap(this.wrapWithGate("switch_tab", async (params) => {
         return switchTabHandler(
@@ -637,7 +673,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "virtual_desk",
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost.",
+      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
       {},
       wrap(this.wrapWithGate("virtual_desk", async (params) => {
         this._contextChecked = true;

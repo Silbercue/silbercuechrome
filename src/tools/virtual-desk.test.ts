@@ -3,6 +3,8 @@ import { virtualDeskHandler } from "./virtual-desk.js";
 import { TabStateCache } from "../cache/tab-state-cache.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 
+const DEFAULT_WINDOW = { windowId: 1, bounds: { left: 0, top: 0, width: 1280, height: 800, windowState: "normal" } };
+
 function createMockCdp(sendResponses?: Record<string, unknown>): CdpClient {
   const sendFn = vi.fn(async (method: string) => {
     if (sendResponses && method in sendResponses) {
@@ -10,6 +12,8 @@ function createMockCdp(sendResponses?: Record<string, unknown>): CdpClient {
       if (typeof val === "function") return val();
       return val;
     }
+    // Default: return window info for getWindowForTarget
+    if (method === "Browser.getWindowForTarget") return DEFAULT_WINDOW;
     return {};
   });
 
@@ -43,13 +47,66 @@ describe("virtualDeskHandler", () => {
 
     expect(result.isError).toBeUndefined();
     const text = result.content[0].text;
-    expect(text).toContain("Tabs (3):");
     expect(text).toContain("T0001");
     expect(text).toContain("T0002");
     expect(text).toContain("T0003");
     expect(text).toContain("example1.com");
     expect(text).toContain("example2.com");
     expect(text).toContain("example3.com");
+  });
+
+  it("groups tabs by window with bounds info", async () => {
+    const targets = makeTargets(2);
+    const cdp = createMockCdp({
+      "Target.getTargets": { targetInfos: targets },
+    });
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache);
+    const text = result.content[0].text;
+
+    expect(text).toContain("Window 1 (1280x800 at 0,0):");
+    expect(text).toContain("Tab 1:");
+    expect(text).toContain("Tab 2:");
+  });
+
+  it("shows window state when not normal (e.g. minimized)", async () => {
+    const targets = makeTargets(1);
+    const cdp = createMockCdp({
+      "Target.getTargets": { targetInfos: targets },
+      "Browser.getWindowForTarget": { windowId: 5, bounds: { left: 0, top: 0, width: 1280, height: 800, windowState: "minimized" } },
+    });
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache);
+    const text = result.content[0].text;
+
+    expect(text).toContain("minimized");
+    expect(text).toContain("Window 5");
+  });
+
+  it("groups tabs from different windows separately", async () => {
+    const targets = [
+      { targetId: "T1", type: "page", url: "https://a.com", title: "Page A" },
+      { targetId: "T2", type: "page", url: "https://b.com", title: "Page B" },
+    ];
+    let callCount = 0;
+    const cdp = createMockCdp({
+      "Target.getTargets": { targetInfos: targets },
+      "Browser.getWindowForTarget": () => {
+        callCount++;
+        return callCount === 1
+          ? { windowId: 1, bounds: { left: 0, top: 0, width: 1280, height: 800, windowState: "normal" } }
+          : { windowId: 2, bounds: { left: 1280, top: 0, width: 1440, height: 900, windowState: "normal" } };
+      },
+    });
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache);
+    const text = result.content[0].text;
+
+    expect(text).toContain("Window 1 (1280x800 at 0,0):");
+    expect(text).toContain("Window 2 (1440x900 at 1280,0):");
   });
 
   it("marks active tab with > prefix", async () => {
@@ -63,12 +120,10 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const lines = result.content[0].text.split("\n");
 
-    // T0001 should NOT have > prefix (inactive), but should have Tab index
     const line1 = lines.find((l: string) => l.includes("T0001"));
     expect(line1).toMatch(/^ /);
     expect(line1).toContain("Tab 1:");
 
-    // T0002 should have > prefix (active), with Tab index
     const line2 = lines.find((l: string) => l.includes("T0002"));
     expect(line2).toMatch(/^>/);
     expect(line2).toContain("Tab 2:");
@@ -105,7 +160,6 @@ describe("virtualDeskHandler", () => {
       "Target.getTargets": { targetInfos: targets },
     });
     const cache = new TabStateCache({ ttlMs: 30_000 });
-    // No cache entry set — should use CDP title and infer "ready" from url+title
 
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const text = result.content[0].text;
@@ -181,14 +235,13 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const text = result.content[0].text;
 
-    expect(text).toContain("Tabs (1):");
     expect(text).toContain("t1");
     expect(text).not.toContain("t2");
     expect(text).not.toContain("t3");
   });
 
   // Token efficiency tests
-  it("response for 10 tabs stays under 500 tokens", async () => {
+  it("response for 10 tabs stays under 600 tokens", async () => {
     const targets = makeTargets(10);
     const cdp = createMockCdp({
       "Target.getTargets": { targetInfos: targets },
@@ -199,8 +252,8 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const text = result.content[0].text;
 
-    // Approximation: 1 token ~= 4 chars. 500 tokens = ~2000 chars
-    expect(text.length).toBeLessThan(2000);
+    // Approximation: 1 token ~= 4 chars. 600 tokens = ~2400 chars (window headers add some overhead)
+    expect(text.length).toBeLessThan(2400);
   });
 
   it("truncates long URLs to max 80 chars", async () => {
@@ -217,9 +270,7 @@ describe("virtualDeskHandler", () => {
     const text = result.content[0].text;
     const tabLine = text.split("\n").find((l: string) => l.includes("t1"));
 
-    // URL in the line should be truncated — the full long URL should NOT appear
     expect(tabLine).not.toContain(longUrl);
-    // The URL part should end with "..."
     expect(tabLine).toContain("...");
   });
 
@@ -236,9 +287,7 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const text = result.content[0].text;
 
-    // Full title should NOT appear
     expect(text).not.toContain(longTitle);
-    // Truncated title should end with "..."
     expect(text).toContain("A".repeat(37) + "...");
   });
 
@@ -310,18 +359,36 @@ describe("virtualDeskHandler", () => {
     expect(result._meta!.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
-  it("makes exactly 1 CDP call (Target.getTargets) — no N+1 problem", async () => {
-    const targets = makeTargets(10);
+  it("calls Browser.getWindowForTarget for each tab", async () => {
+    const targets = makeTargets(3);
     const cdp = createMockCdp({
       "Target.getTargets": { targetInfos: targets },
     });
     const cache = new TabStateCache({ ttlMs: 30_000 });
-    cache.setActiveTarget("T0001");
 
     await virtualDeskHandler({}, cdp, undefined, cache);
 
-    expect(cdp.send).toHaveBeenCalledTimes(1);
-    expect(cdp.send).toHaveBeenCalledWith("Target.getTargets");
+    // 1 Target.getTargets + 3 Browser.getWindowForTarget
+    expect(cdp.send).toHaveBeenCalledTimes(4);
+    expect(cdp.send).toHaveBeenCalledWith("Browser.getWindowForTarget", { targetId: "T0001" });
+    expect(cdp.send).toHaveBeenCalledWith("Browser.getWindowForTarget", { targetId: "T0002" });
+    expect(cdp.send).toHaveBeenCalledWith("Browser.getWindowForTarget", { targetId: "T0003" });
+  });
+
+  it("handles Browser.getWindowForTarget failure gracefully", async () => {
+    const targets = makeTargets(1);
+    const cdp = createMockCdp({
+      "Target.getTargets": { targetInfos: targets },
+      "Browser.getWindowForTarget": () => { throw new Error("Not supported"); },
+    });
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+
+    const result = await virtualDeskHandler({}, cdp, undefined, cache);
+    const text = result.content[0].text;
+
+    expect(result.isError).toBeUndefined();
+    expect(text).toContain("Window (unknown):");
+    expect(text).toContain("T0001");
   });
 
   it("_meta includes tabCount", async () => {

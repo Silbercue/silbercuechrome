@@ -14,6 +14,19 @@ interface TargetInfo {
   title: string;
 }
 
+interface WindowBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  windowState: string;
+}
+
+interface WindowInfo {
+  windowId: number;
+  bounds: WindowBounds;
+}
+
 function truncateUrl(url: string, maxLen: number): string {
   if (url.length <= maxLen) return url;
   const short = url.replace(/^https?:\/\//, "");
@@ -70,23 +83,55 @@ export async function virtualDeskHandler(
       };
     }
 
-    // Cache enrichment + compact formatting
+    // Fetch window info for each tab (parallel CDP calls)
+    const windowInfos = await Promise.all(
+      pageTabs.map(async (tab) => {
+        try {
+          return await cdpClient.send<WindowInfo>("Browser.getWindowForTarget", { targetId: tab.targetId });
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    // Group tabs by windowId
+    const windowMap = new Map<number, { info: WindowInfo | null; tabs: { tab: TargetInfo; index: number }[] }>();
+    for (let i = 0; i < pageTabs.length; i++) {
+      const wInfo = windowInfos[i];
+      const key = wInfo?.windowId ?? -1;
+      if (!windowMap.has(key)) {
+        windowMap.set(key, { info: wInfo, tabs: [] });
+      }
+      windowMap.get(key)!.tabs.push({ tab: pageTabs[i], index: i });
+    }
+
+    // Build output grouped by window
     const activeId = tabStateCache.activeTargetId;
     const lines: string[] = [];
-    lines.push(`Tabs (${pageTabs.length}):`);
+    let tabCounter = 0;
 
-    for (let i = 0; i < pageTabs.length; i++) {
-      const tab = pageTabs[i];
-      const isActive = tab.targetId === activeId;
-      const cached = tabStateCache.get(tab.targetId);
+    for (const [windowId, group] of windowMap) {
+      // Window header with bounds
+      if (group.info) {
+        const b = group.info.bounds;
+        const stateLabel = b.windowState !== "normal" ? ` — ${b.windowState}` : "";
+        lines.push(`Window ${windowId} (${b.width}x${b.height} at ${b.left},${b.top}${stateLabel}):`);
+      } else {
+        lines.push(`Window (unknown):`);
+      }
 
-      // Truncate for token efficiency
-      const url = truncateUrl(tab.url, 80);
-      const title = truncate(cached?.title || tab.title, 40);
-      const status = cached?.loadingState ?? inferLoadingState(tab);
-      const marker = isActive ? ">" : " ";
+      // Tabs within this window
+      for (const { tab } of group.tabs) {
+        tabCounter++;
+        const isActive = tab.targetId === activeId;
+        const cached = tabStateCache.get(tab.targetId);
+        const url = truncateUrl(tab.url, 80);
+        const title = truncate(cached?.title || tab.title, 40);
+        const status = cached?.loadingState ?? inferLoadingState(tab);
+        const marker = isActive ? ">" : " ";
 
-      lines.push(`${marker} Tab ${i + 1}: ${tab.targetId} | ${status} | ${title} | ${url}`);
+        lines.push(`${marker} Tab ${tabCounter}: ${tab.targetId} | ${status} | ${title} | ${url}`);
+      }
     }
 
     return {

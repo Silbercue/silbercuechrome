@@ -975,33 +975,60 @@ export class A11yTreeProcessor {
     lines: string[],
     maxTokens: number,
   ): { lines: string[]; refCount: number; level: number } {
-    // C3: Prioritize interactive elements — collect them first, then fill with content
+    // C3: Prioritize elements: dialogs/modals > interactive > content
+    const dialogLines: Array<{ line: string; idx: number }> = [];
     const interactiveLines: Array<{ line: string; idx: number }> = [];
     const contentLines: Array<{ line: string; idx: number }> = [];
 
+    // Track dialog context: lines inside a dialog subtree get dialog priority
+    let insideDialog = false;
+    let dialogIndent = -1;
+
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      // Lines containing ref IDs (e.g. [e42]) are interactive/important elements
-      if (/\[e\d+\]/.test(line)) {
-        // Check if it's an interactive element by looking for interactive role keywords
-        const roleMatch = line.match(/\[e\d+\]\s+(\S+)/);
-        const role = roleMatch ? roleMatch[1] : "";
-        if (INTERACTIVE_ROLES.has(role)) {
-          interactiveLines.push({ line, idx: i });
-        } else {
-          contentLines.push({ line, idx: i });
-        }
+      const indent = line.search(/\S/);
+
+      // Detect dialog/modal boundaries
+      const roleMatch = line.match(/\[e\d+\]\s+(\S+)/);
+      const role = roleMatch ? roleMatch[1] : "";
+
+      if (role === "dialog" || role === "alertdialog") {
+        insideDialog = true;
+        dialogIndent = indent;
+        dialogLines.push({ line, idx: i });
+        continue;
+      }
+
+      // If we were inside a dialog and indentation decreased back to/beyond dialog level, we left the dialog
+      if (insideDialog && indent <= dialogIndent && i > 0) {
+        insideDialog = false;
+        dialogIndent = -1;
+      }
+
+      if (insideDialog) {
+        dialogLines.push({ line, idx: i });
+      } else if (/\[e\d+\]/.test(line) && INTERACTIVE_ROLES.has(role)) {
+        interactiveLines.push({ line, idx: i });
       } else {
         contentLines.push({ line, idx: i });
       }
     }
 
-    // Build result: interactive first, then fill with content
+    // Build result: dialogs first, then interactive, then content
     const result: string[] = [];
     let tokensSoFar = 15; // header estimate
     const addedIndices = new Set<number>();
 
-    // Phase 1: Add all interactive elements (preserve order)
+    // Phase 0: Add all dialog/modal elements (highest priority — always visible)
+    for (const { line, idx } of dialogLines) {
+      const lineTokens = estimateTokens(line + "\n");
+      if (tokensSoFar + lineTokens > maxTokens - 15) break;
+      result.push(line);
+      addedIndices.add(idx);
+      tokensSoFar += lineTokens;
+    }
+
+    // Phase 1: Add interactive elements
     for (const { line, idx } of interactiveLines) {
       const lineTokens = estimateTokens(line + "\n");
       if (tokensSoFar + lineTokens > maxTokens - 15) break;
@@ -1010,7 +1037,7 @@ export class A11yTreeProcessor {
       tokensSoFar += lineTokens;
     }
 
-    // Phase 2: Fill remaining budget with content lines (preserve order)
+    // Phase 2: Fill remaining budget with content lines
     for (const { line, idx } of contentLines) {
       const lineTokens = estimateTokens(line + "\n");
       if (tokensSoFar + lineTokens > maxTokens - 15) break;

@@ -10,12 +10,14 @@ import { wrapCdpError } from "./error-utils.js";
 export const switchTabSchema = z.object({
   action: z
     .enum(["open", "switch", "close"])
-    .describe("Action: open (new tab), switch (to existing tab), close (close tab)"),
+    .optional()
+    .default("switch")
+    .describe("Action: open (new tab), switch (to existing tab, default), close (close tab)"),
   url: z
     .string()
     .optional()
     .describe("URL to navigate to (for open action, defaults to about:blank)"),
-  tab_id: z
+  tab: z
     .string()
     .optional()
     .describe(
@@ -33,7 +35,7 @@ interface TargetInfo {
 }
 
 /**
- * Resolve a tab_id that may be a 1-based numeric index (e.g. "2")
+ * Resolve a tab that may be a 1-based numeric index (e.g. "2")
  * or a CDP targetId (32-char hex). Returns the actual targetId or undefined.
  */
 function resolveTabId(tabId: string, pageTabs: TargetInfo[]): string | undefined {
@@ -235,8 +237,8 @@ async function handleSwitch(
   method: string,
   sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
-  if (!params.tab_id) {
-    // No tab_id: list available tabs so the LLM can pick one
+  if (!params.tab) {
+    // No tab: list available tabs so the LLM can pick one
     const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
     const pageTabs = targetInfos.filter((t) => t.type === "page");
     const activeId = tabStateCache.activeTargetId;
@@ -253,10 +255,10 @@ async function handleSwitch(
   // Verify tab exists before switching (supports numeric index or targetId)
   const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
   const pageTabs = targetInfos.filter((t) => t.type === "page");
-  const resolvedId = resolveTabId(params.tab_id!, pageTabs);
+  const resolvedId = resolveTabId(params.tab!, pageTabs);
   if (!resolvedId) {
     return {
-      content: [{ type: "text", text: `Tab not found: ${params.tab_id}. Use virtual_desk to discover available tabs.` }],
+      content: [{ type: "text", text: `Tab not found: ${params.tab}. Use virtual_desk to discover available tabs.` }],
       isError: true,
       _meta: { elapsedMs: Math.round(performance.now() - start), method },
     };
@@ -268,8 +270,20 @@ async function handleSwitch(
   // C1: Remember previous state for rollback if attachToTarget fails
   const previousTargetId = tabStateCache.activeTargetId;
 
-  // Bring tab to front visually
+  // Bring tab to front visually + ensure its window is in foreground
   await cdpClient.send("Target.activateTarget", { targetId: resolvedId });
+  try {
+    const { windowId } = await cdpClient.send<{ windowId: number }>(
+      "Browser.getWindowForTarget",
+      { targetId: resolvedId },
+    );
+    await cdpClient.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: { windowState: "normal" },
+    });
+  } catch {
+    /* best-effort — window focus is not critical */
+  }
 
   // C1: Activate CDP session — rollback on failure
   let newSessionId: string;
@@ -325,13 +339,13 @@ async function handleClose(
   const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
   const pageTabs = targetInfos.filter((t) => t.type === "page");
 
-  // Resolve tab_id (supports numeric index or targetId)
+  // Resolve tab (supports numeric index or targetId)
   let targetTab: string | undefined;
-  if (params.tab_id) {
-    targetTab = resolveTabId(params.tab_id, pageTabs);
+  if (params.tab) {
+    targetTab = resolveTabId(params.tab, pageTabs);
     if (!targetTab) {
       return {
-        content: [{ type: "text", text: `Tab not found: ${params.tab_id}` }],
+        content: [{ type: "text", text: `Tab not found: ${params.tab}` }],
         isError: true,
         _meta: { elapsedMs: Math.round(performance.now() - start), method },
       };

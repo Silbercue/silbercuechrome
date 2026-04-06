@@ -18,7 +18,7 @@ export function wrapInIIFE(expression: string): string {
   // - top-level await (FR-H3: illegal outside async function)
   const hasDeclarations = /^[ \t]*(const|let|class)\s/m.test(expression);
   const hasTopLevelReturn = /^[ \t]*return\s/m.test(expression);
-  const hasTopLevelAwait = /(?:^|[;{}\n])\s*(?:(?:const|let|var)\s+\w+\s*=\s*)?await\s/m.test(expression);
+  const hasTopLevelAwait = /\bawait\b/.test(expression);
   if (!hasDeclarations && !hasTopLevelReturn && !hasTopLevelAwait) return expression;
 
   // Already wrapped in an IIFE? Don't double-wrap.
