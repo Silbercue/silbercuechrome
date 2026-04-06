@@ -639,9 +639,9 @@ Wenn der Pro-Tier keinen messbaren Mehrwert liefert, wird er komplett Free. Wir 
 
 - **FR69:** Der Publish-Workflow erstellt reproduzierbar aus beiden Repos ein veroeffentlichungsfaehiges Release mit Versions-Tag
 
-### License Validation Server (MVP-Infrastruktur)
+### License Validation (MVP-Infrastruktur)
 
-- **FR70:** Ein externer Micro-Service validiert License-Keys gegen die Polar.sh API. Der Endpoint (`license.silbercuechrome.dev/validate`) nimmt `{ key: string }` entgegen und gibt `{ valid: boolean, features?: string[] }` zurueck. Gehostet als Cloudflare Worker fuer minimale Latenz und Kosten
+- **FR70:** License-Keys werden direkt gegen die Polar.sh Public API (`/v1/customer-portal/license-keys/validate`) validiert. Kein eigener Server — die Organization-ID ist oeffentlich im Code, die Polar-Response (`status: "granted"`) wird auf `{ valid: true }` gemappt. Analog zu SilbercueSwift
 
 ### Benchmark & Verifikation (Phase 2 — Community-Validation)
 
@@ -656,7 +656,7 @@ Wenn der Pro-Tier keinen messbaren Mehrwert liefert, wird er komplett Free. Wir 
 - **FR79:** `read_page` und `dom_snapshot` enthalten `_meta.estimated_tokens` — geschaetzte Token-Anzahl basierend auf Response-Laenge / 4.
 - **FR80:** Der Benchmark-Runner (`npm run benchmark`) fuehrt alle Tests automatisiert aus und exportiert Ergebnisse als JSON mit Millisekunden pro Test und Tool-Calls pro Test.
 
-**Phasen-Zuordnung:** MVP: FR1-FR34 (34 FRs) | Post-MVP Visual Intelligence: FR52-FR62 (11 FRs) | MVP-Infrastruktur: FR63-FR67, FR69-FR70 (7 FRs) | Growth: FR35-FR46 (12 FRs) | Vision: FR47-FR51 (5 FRs) | Pro Phase 2/3: FR68 (1 FR) | Phase 2 Community-Validation: FR71-FR80 (10 FRs)
+**Phasen-Zuordnung:** MVP: FR1-FR34 (34 FRs) | Post-MVP Visual Intelligence: FR52-FR62 (11 FRs) | MVP-Infrastruktur: FR63-FR67, FR69-FR70 (7 FRs, FR70 = direkte Polar.sh-Integration) | Growth: FR35-FR46 (12 FRs) | Vision: FR47-FR51 (5 FRs) | Pro Phase 2/3: FR68 (1 FR) | Phase 2 Community-Validation: FR71-FR80 (10 FRs)
 
 ## Non-Functional Requirements
 

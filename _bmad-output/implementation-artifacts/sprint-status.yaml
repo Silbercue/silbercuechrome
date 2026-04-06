@@ -124,7 +124,7 @@ development_status:
   9-5-dual-repo-code-trennung: done
   9-6-dom-snapshot-pro-feature-gate: done
   9-7-publish-pipeline: done
-  9-8-license-validation-server: done
+  9-8-license-validation-polar-sh-direct: done
   9-9-pro-feature-gates-switch-tab-virtual-desk-human-touch: done
   epic-9-retrospective: optional
 
@@ -162,6 +162,10 @@ development_status:
   12-3-token-budget-benchmark-test: done
   12-4-tool-definitions-token-zaehler: done
   epic-12-retrospective: optional
+
+  # Epic 13a: LLM Awareness (Ambient Page Context)
+  epic-13a: in-progress
+  13a-1-ambient-page-context: done
 
   # Epic 13: Visual Developer Intelligence (Phase 3)
   epic-13: backlog

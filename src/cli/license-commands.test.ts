@@ -15,7 +15,7 @@ vi.mock("../license/license-validator.js", async (importOriginal) => {
     ...original,
     loadLicenseConfig: () => ({
       licenseKey: undefined,
-      endpoint: "https://license.silbercuechrome.dev/validate",
+      endpoint: "https://api.polar.sh/v1/customer-portal/license-keys/validate",
       cacheDir: mockCacheDir,
     }),
   };
