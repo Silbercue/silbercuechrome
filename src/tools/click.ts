@@ -7,6 +7,7 @@ import { wrapCdpError } from "./error-utils.js";
 import type { HumanTouchConfig } from "../operator/human-touch.js";
 import { humanMouseMove } from "../operator/human-touch.js";
 import { a11yTree } from "../cache/a11y-tree.js";
+import { isHeadless } from "../cdp/emulation.js";
 
 // --- Schema (Task 2) ---
 
@@ -170,13 +171,27 @@ export async function clickHandler(
         beforeTabIds = new Set(targetInfos.filter(t => t.type === "page").map(t => t.targetId));
       } catch { /* non-critical */ }
 
-      // Reset scroll to origin (same as element click)
-      await cdpClient.send("Runtime.evaluate", { expression: "window.scrollTo(0,0)" }, sessionId);
+      // FR-H: Coordinate click — dispatch at the exact viewport position the LLM targeted.
+      // Headed mode: no emulation, Input.dispatchMouseEvent uses viewport coords directly.
+      // Headless mode: Emulation.setDeviceMetricsOverride causes hit-testing at document
+      // coords, so we add current scroll offset to convert viewport → document space.
+      // In both cases: NO scrollTo(0,0) — that destroys the viewport position (BUG c987ac11).
+      let dispatchX = x;
+      let dispatchY = y;
+      if (isHeadless()) {
+        const scrollSnap = await cdpClient.send<{ result: { value: { sx: number; sy: number } } }>(
+          "Runtime.evaluate",
+          { expression: "({sx:Math.round(window.scrollX),sy:Math.round(window.scrollY)})", returnByValue: true },
+          sessionId,
+        );
+        dispatchX += scrollSnap.result.value.sx;
+        dispatchY += scrollSnap.result.value.sy;
+      }
 
-      // Dispatch mouse events at exact coordinates via CDP
-      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 }, sessionId);
-      await cdpClient.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, sessionId);
-      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, sessionId);
+      // Dispatch mouse events at coordinates via CDP
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dispatchX, y: dispatchY, button: "none", buttons: 0 }, sessionId);
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mousePressed", x: dispatchX, y: dispatchY, button: "left", buttons: 1, clickCount: 1 }, sessionId);
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: dispatchX, y: dispatchY, button: "left", buttons: 0, clickCount: 1 }, sessionId);
 
       // FR-E: Check for new tabs after click
       const newTabHint = await detectNewTab(cdpClient, beforeTabIds);

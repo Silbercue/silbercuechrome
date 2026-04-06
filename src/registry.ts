@@ -63,6 +63,15 @@ import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 // Story 13.1: Tools whose response IS page context — no ambient injection needed
 const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot"]);
 
+// FR-H2: Fast content hash for ambient context dedup (djb2)
+function simpleHash(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
+  }
+  return hash.toString(36);
+}
+
 // FR-002: Action tools that mutate the DOM and benefit from post-action diff
 const ACTION_TOOLS = new Set(["click", "type", "fill_form"]);
 
@@ -71,8 +80,10 @@ export class ToolRegistry {
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
 
-  // Story 13.1: Ambient Page Context — track which cache version was last sent
-  private _lastSentCacheVersion = -1;
+  // Story 13.1: Ambient Page Context — track content hash of last sent snapshot
+  // FR-H2: Changed from version counter to content hash to avoid false positives
+  // when DomWatcher background refreshes bump the version without content change.
+  private _lastSentSnapshotHash = "";
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
@@ -84,6 +95,9 @@ export class ToolRegistry {
   private _sessionDefaults: SessionDefaults | undefined;
   // Story 13a.2: Callback to wait for Accessibility.nodesUpdated event
   private _waitForAXChange: ((timeoutMs: number) => Promise<boolean>) | null = null;
+
+  // FR-H: Track whether the LLM has checked browser context before acting
+  private _contextChecked = false;
 
   constructor(
     private server: McpServer,
@@ -203,7 +217,7 @@ export class ToolRegistry {
       const snapshot = a11yTree.getCompactSnapshot();
       if (!snapshot) return;
       result.content.push({ type: "text", text: snapshot });
-      this._lastSentCacheVersion = a11yTree.cacheVersion;
+      this._lastSentSnapshotHash = simpleHash(snapshot);
       return;
     }
 
@@ -241,7 +255,10 @@ export class ToolRegistry {
           if (diffText) {
             result.content.push({ type: "text", text: diffText });
           }
-          this._lastSentCacheVersion = a11yTree.cacheVersion;
+          // Update hash with the diff content (not full snapshot) so v1 fallback
+          // doesn't re-send the full snapshot if the diff already covered the change.
+          const postSnapshot = a11yTree.getCompactSnapshot();
+          if (postSnapshot) this._lastSentSnapshotHash = simpleHash(postSnapshot);
           return;
         }
 
@@ -257,15 +274,17 @@ export class ToolRegistry {
     // FR-004: type only returns its confirmation — no snapshot fallback
     if (toolName === "type") return;
 
-    // v1 fallback: inject compact snapshot if cache version changed
-    const currentVersion = a11yTree.cacheVersion;
-    if (currentVersion === this._lastSentCacheVersion) return;
-
+    // FR-H2: v1 fallback — inject compact snapshot only if CONTENT actually changed.
+    // Uses content hash instead of version counter to avoid false positives from
+    // DomWatcher background refreshes that bump cacheVersion without content change.
     const snapshot = a11yTree.getCompactSnapshot();
     if (!snapshot) return;
 
+    const hash = simpleHash(snapshot);
+    if (hash === this._lastSentSnapshotHash) return;
+
     result.content.push({ type: "text", text: snapshot });
-    this._lastSentCacheVersion = currentVersion;
+    this._lastSentSnapshotHash = hash;
   }
 
   /**
@@ -473,7 +492,12 @@ export class ToolRegistry {
         settle_ms: navigateSchema.shape.settle_ms,
       },
       wrap(async (params) => {
-        return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
+        const result = await navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
+        // FR-H: Remind LLM to check browser context if it hasn't yet
+        if (!this._contextChecked && result.content?.[0]?.type === "text") {
+          result.content[0].text += "\n\n⚠ Hint: You haven't called virtual_desk yet in this session. Call it to see all open tabs before navigating — you may be overwriting the user's active tab.";
+        }
+        return result;
       }, "navigate"),
     );
 
@@ -578,6 +602,7 @@ export class ToolRegistry {
       "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
       {},
       wrap(async (params) => {
+        this._contextChecked = true;
         return tabStatusHandler(
           params as unknown as TabStatusParams,
           this.cdpClient,
@@ -615,6 +640,7 @@ export class ToolRegistry {
       "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost.",
       {},
       wrap(this.wrapWithGate("virtual_desk", async (params) => {
+        this._contextChecked = true;
         return virtualDeskHandler(
           params as unknown as VirtualDeskParams,
           this.cdpClient,

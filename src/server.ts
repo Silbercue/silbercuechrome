@@ -135,10 +135,27 @@ export async function startServer(): Promise<void> {
   await domWatcher.init();
 
   // 6. Create MCP server and register tools
-  const server = new McpServer({
-    name: "silbercuechrome",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    {
+      name: "silbercuechrome",
+      version: "0.1.0",
+    },
+    {
+      instructions: [
+        "SilbercueChrome controls a real Chrome browser via CDP. Two key tools to understand:",
+        "",
+        "1. virtual_desk — Your spatial awareness. Lists ALL open tabs with IDs, URLs, titles, and state.",
+        "   ALWAYS call this first before any browser interaction to see what's already open.",
+        "   Use switch_tab to navigate to existing tabs instead of opening duplicates with navigate.",
+        "",
+        "2. read_page — Your eyes. Returns the page content as an accessibility tree with stable",
+        "   element refs (e.g. 'e5'). Use these refs with click, type, and other tools.",
+        "   Prefer ref-based interaction over CSS selectors — refs are stable across tool calls.",
+        "",
+        "Workflow: virtual_desk → switch_tab (or navigate if needed) → read_page → interact.",
+      ].join("\n"),
+    },
+  );
 
   // Story 9.2: License-Key Validierung
   const licenseConfig = loadLicenseConfig();

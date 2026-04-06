@@ -43,7 +43,7 @@ interface MockCdpSetup {
 
 function createMockCdp(overrides: Record<string, unknown> = {}): MockCdpSetup {
   const defaultResponses: Record<string, unknown> = {
-    "Runtime.evaluate": {},
+    "Runtime.evaluate": { result: { value: { sx: 0, sy: 0 } } },
     "DOM.scrollIntoViewIfNeeded": {},
     "DOM.getContentQuads": { quads: [[100, 100, 200, 100, 200, 200, 100, 200]] },
     "Input.dispatchMouseEvent": {},
