@@ -5,6 +5,13 @@ import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "../tools/visua
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
 import { debug } from "../cdp/debug.js";
 
+/** Strip hash fragment from URL for navigation comparison.
+ *  Hash-only changes (anchor navigation) should NOT reset refs. */
+function stripHash(url: string): string {
+  const idx = url.indexOf("#");
+  return idx === -1 ? url : url.slice(0, idx);
+}
+
 // --- CDP A11y Types ---
 
 interface AXValue {
@@ -112,6 +119,17 @@ const CONTEXT_ROLES = new Set([
 // Story 13a.2: Element classification for pre-click ambient context decision
 export type ElementClassification = "widget-state" | "clickable" | "disabled" | "static";
 
+// FR-002: DOM-Diff types for post-action change detection
+export interface DOMChange {
+  type: "added" | "removed" | "changed";
+  ref: string;        // e.g. "e42"
+  role: string;       // a11y role
+  before?: string;    // old text (for "changed")
+  after: string;      // new text (for "added" / "changed")
+}
+
+export type SnapshotMap = Map<number, string>;  // refNum → "role\0name"
+
 // --- Element Classification for Downsampling (D2Snap) ---
 
 type ElementClass = "interactive" | "content" | "container";
@@ -196,6 +214,8 @@ interface NodeInfo {
   disabled?: boolean;
   focusable?: boolean;
   level?: number;       // heading level (1-6)
+  htmlId?: string;      // FR-004: HTML id attribute for evaluate selectors
+  isClickable?: boolean; // FR-005: Has onclick handler (for non-interactive roles like columnheader)
 }
 
 export class A11yTreeProcessor {
@@ -249,17 +269,19 @@ export class A11yTreeProcessor {
     sessionId: string,
     sessionManager?: SessionManager,
   ): Promise<void> {
-    // 1. URL pruefen — wenn sich die URL geaendert hat, reset() aufrufen
+    // 1. URL pruefen — wenn sich die Basis-URL (ohne Hash) geaendert hat, reset() aufrufen
+    //    Hash-only-Aenderungen (z.B. /#step-alpha → /#step-beta) behalten Refs,
+    //    da das DOM bei Anchor-Navigation identisch bleibt.
     const urlResult = await cdpClient.send<{ result: { value: string } }>(
       "Runtime.evaluate",
       { expression: "document.URL", returnByValue: true },
       sessionId,
     );
     const currentUrl = urlResult.result.value;
-    if (currentUrl !== this.lastUrl) {
+    if (stripHash(currentUrl) !== stripHash(this.lastUrl)) {
       this.reset();
-      this.lastUrl = currentUrl;
     }
+    this.lastUrl = currentUrl;
 
     // 2. A11y-Tree via CDP laden (same depth as default getTree)
     const result = await cdpClient.send<{ nodes: AXNode[] }>(
@@ -300,6 +322,73 @@ export class A11yTreeProcessor {
     } catch {
       // Non-critical — nodesUpdated won't work but everything else still does
       debug("A11yTreeProcessor: getRootAXNode failed (nodesUpdated tracking disabled)");
+    }
+
+    // 6. FR-004 + FR-005: Batch-fetch HTML attributes and click listeners for relevant nodes.
+    // Phase 1: DOM.describeNode for HTML IDs (all relevant nodes) + inline onclick detection
+    // Phase 2: DOMDebugger.getEventListeners for non-interactive nodes (detects addEventListener, React, etc.)
+    const POTENTIALLY_CLICKABLE_ROLES = new Set(["columnheader", "rowheader", "cell", "generic", "listitem"]);
+    try {
+      const interactiveNodes: number[] = [];
+      const checkClickNodes: number[] = [];  // Non-interactive nodes to check for click listeners
+      for (const [backendNodeId, info] of this.nodeInfoMap) {
+        if (INTERACTIVE_ROLES.has(info.role) || CONTEXT_ROLES.has(info.role)) {
+          interactiveNodes.push(backendNodeId);
+        } else if (POTENTIALLY_CLICKABLE_ROLES.has(info.role)) {
+          interactiveNodes.push(backendNodeId);  // Also fetch ID for these
+          checkClickNodes.push(backendNodeId);    // And check click listeners
+        }
+      }
+
+      // Phase 1: Batch DOM.describeNode — extract HTML IDs + inline onclick
+      if (interactiveNodes.length > 0 && interactiveNodes.length <= 500) {
+        await Promise.allSettled(interactiveNodes.map(async (backendNodeId) => {
+          try {
+            const desc = await cdpClient.send<{ node: { attributes?: string[] } }>(
+              "DOM.describeNode", { backendNodeId, depth: 0 }, sessionId,
+            );
+            const attrs = desc.node?.attributes;
+            if (!attrs) return;
+            const info = this.nodeInfoMap.get(backendNodeId);
+            if (!info) return;
+            for (let i = 0; i < attrs.length; i += 2) {
+              if (attrs[i] === "id" && attrs[i + 1]) {
+                info.htmlId = attrs[i + 1];
+              }
+              if (attrs[i] === "onclick") {
+                info.isClickable = true;
+              }
+            }
+          } catch { /* ignore — text nodes etc. don't support describeNode */ }
+        }));
+      }
+
+      // Phase 2: DOMDebugger.getEventListeners for non-interactive nodes without onclick attribute.
+      // Detects addEventListener, React synthetic events, jQuery — anything that registered a click handler.
+      // 2 CDP calls per node (resolveNode + getEventListeners), but only for candidates not already marked.
+      const clickCandidates = checkClickNodes.filter(id => !this.nodeInfoMap.get(id)?.isClickable);
+      if (clickCandidates.length > 0 && clickCandidates.length <= 200) {
+        await Promise.allSettled(clickCandidates.map(async (backendNodeId) => {
+          try {
+            const resolved = await cdpClient.send<{ object: { objectId?: string } }>(
+              "DOM.resolveNode", { backendNodeId }, sessionId,
+            );
+            const objectId = resolved.object?.objectId;
+            if (!objectId) return;
+            const result = await cdpClient.send<{ listeners: Array<{ type: string }> }>(
+              "DOMDebugger.getEventListeners", { objectId }, sessionId,
+            );
+            if (result.listeners?.some(l => l.type === "click")) {
+              const info = this.nodeInfoMap.get(backendNodeId);
+              if (info) info.isClickable = true;
+            }
+            // Release the remote object to prevent leaks
+            await cdpClient.send("Runtime.releaseObject", { objectId }, sessionId).catch(() => {});
+          } catch { /* ignore — some nodes can't be resolved */ }
+        }));
+      }
+    } catch {
+      // Non-critical — IDs and clickability are nice-to-have
     }
 
     debug("A11yTreeProcessor: precomputed cache refreshed, %d nodes cached (v%d)", result.nodes.length, this._cacheVersion);
@@ -513,28 +602,31 @@ export class A11yTreeProcessor {
 
     // FR-002: Separate CDP fetch depth from display depth.
     // Interactive/visual filters need deeper fetch to find elements nested beyond display depth.
-    // "all" uses display depth (user explicitly wants that depth). "landmark" uses moderate depth.
+    // "all" fetches depth+2 so leaf nodes' text children (StaticText) are always included —
+    // without this, elements like <strong> at the depth limit appear empty.
+    // "landmark" uses moderate depth.
     const cdpFetchDepth = (filter === "interactive" || filter === "visual")
       ? Math.max(depth, 10)
       : filter === "landmark"
         ? Math.max(depth, 6)
-        : depth;
+        : depth + 2;
 
-    // Navigation detection — reset refs on URL change
+    // Navigation detection — reset refs on real navigation (path change),
+    // but preserve refs on hash-only changes (anchor navigation).
     const urlResult = await cdpClient.send<{ result: { value: string } }>(
       "Runtime.evaluate",
       { expression: "document.URL", returnByValue: true },
       sessionId,
     );
     const currentUrl = urlResult.result.value;
-    if (currentUrl !== this.lastUrl) {
+    if (stripHash(currentUrl) !== stripHash(this.lastUrl)) {
       this.refMap.clear();
       this.reverseMap.clear();
       this.nodeInfoMap.clear();
       this.nextRef = 1;
-      this.lastUrl = currentUrl;
       this.invalidatePrecomputed();
     }
+    this.lastUrl = currentUrl;
 
     // Precomputed cache check — bypass CDP call if cache is valid (Story 7.4)
     // Subtree queries (options.ref) always load fresh — cached tree may not have full depth
@@ -1389,6 +1481,11 @@ export class A11yTreeProcessor {
     if (filter === "landmark") return LANDMARK_ROLES.has(role);
     // interactive and visual filters use the same element selection
     if (INTERACTIVE_ROLES.has(role)) return true;
+    // FR-005: Elements with onclick handlers (e.g. sortable table headers)
+    if (node.backendDOMNodeId !== undefined) {
+      const info = this.nodeInfoMap.get(node.backendDOMNodeId);
+      if (info?.isClickable) return true;
+    }
     // Check focusable property
     if (node.properties) {
       for (const prop of node.properties) {
@@ -1399,7 +1496,11 @@ export class A11yTreeProcessor {
   }
 
   private formatLine(indent: string, refNum: number, role: string, node: AXNode, nodeMap?: Map<string, AXNode>): string {
-    let line = `${indent}[e${refNum}] ${role}`;
+    // FR-004: Append HTML id if available
+    const backendNodeId = node.backendDOMNodeId;
+    const htmlId = backendNodeId !== undefined ? this.nodeInfoMap.get(backendNodeId)?.htmlId : undefined;
+    const idSuffix = htmlId ? `#${htmlId}` : "";
+    let line = `${indent}[e${refNum}] ${role}${idSuffix}`;
 
     const name = node.name?.value as string | undefined;
     if (name) {
@@ -1500,7 +1601,7 @@ export class A11yTreeProcessor {
       || (info.hasPopup !== undefined && info.hasPopup !== "false")
       || info.checked !== undefined
       || info.pressed !== undefined) return "widget-state";
-    if (INTERACTIVE_ROLES.has(info.role)) return "clickable";
+    if (INTERACTIVE_ROLES.has(info.role) || info.isClickable) return "clickable";
     return "static";
   }
 
@@ -1517,13 +1618,117 @@ export class A11yTreeProcessor {
 
     for (const [refNum, backendNodeId] of sortedRefs) {
       const info = this.nodeInfoMap.get(backendNodeId);
-      if (!info || !INTERACTIVE_ROLES.has(info.role)) continue;
+      if (!info || !(INTERACTIVE_ROLES.has(info.role) || info.isClickable)) continue;
       const name = info.name ? ` '${info.name}'` : "";
-      lines.push(`[e${refNum}] ${info.role}${name}`);
+      const idSuffix = info.htmlId ? `#${info.htmlId}` : "";
+      lines.push(`[e${refNum}] ${info.role}${idSuffix}${name}`);
       if (lines.length >= limit) break;
     }
 
     return lines;
+  }
+
+  /**
+   * FR-002: Lightweight snapshot map for DOM-Diff.
+   * Returns Map<refNum, "role\0name"> for all nodes with a name.
+   * ZERO CDP calls — purely in-memory.
+   */
+  getSnapshotMap(): SnapshotMap {
+    const map: SnapshotMap = new Map();
+    for (const [refNum, backendNodeId] of this.reverseMap) {
+      const info = this.nodeInfoMap.get(backendNodeId);
+      if (!info || (!info.name && !CONTEXT_ROLES.has(info.role) && !INTERACTIVE_ROLES.has(info.role) && !info.isClickable)) continue;
+      map.set(refNum, `${info.role}\0${info.name ?? ""}`);
+    }
+    return map;
+  }
+
+  /**
+   * FR-002: Compute diff between two snapshot maps.
+   * Returns only meaningful changes (role+name), ignoring nodes without names.
+   */
+  static diffSnapshots(before: SnapshotMap, after: SnapshotMap): DOMChange[] {
+    const changes: DOMChange[] = [];
+
+    // Changed or removed
+    for (const [refNum, beforeVal] of before) {
+      const afterVal = after.get(refNum);
+      if (afterVal === undefined) {
+        // Node removed
+        const [role, name] = beforeVal.split("\0");
+        if (name) {  // Only report if it had visible content
+          changes.push({ type: "removed", ref: `e${refNum}`, role, after: "", before: name });
+        }
+      } else if (afterVal !== beforeVal) {
+        // Node changed
+        const [roleBefore, nameBefore] = beforeVal.split("\0");
+        const [roleAfter, nameAfter] = afterVal.split("\0");
+        // Only report if the *name* (visible text) actually changed
+        if (nameBefore !== nameAfter) {
+          changes.push({
+            type: "changed",
+            ref: `e${refNum}`,
+            role: roleAfter || roleBefore,
+            before: nameBefore,
+            after: nameAfter,
+          });
+        }
+      }
+    }
+
+    // Added
+    for (const [refNum, afterVal] of after) {
+      if (!before.has(refNum)) {
+        const [role, name] = afterVal.split("\0");
+        if (name) {  // Only report if it has visible content
+          changes.push({ type: "added", ref: `e${refNum}`, role, after: name });
+        }
+      }
+    }
+
+    return changes;
+  }
+
+  /**
+   * FR-002: Format DOM changes as compact context string for LLM.
+   * Prioritizes alerts/status, then shows changes near the action, caps at ~30 lines.
+   */
+  static formatDomDiff(changes: DOMChange[], url?: string): string | null {
+    if (changes.length === 0) return null;
+
+    // Sort: alerts/status first, then added, then changed, then removed
+    const priority = (c: DOMChange) => {
+      if (c.role === "alert" || c.role === "status") return 0;
+      if (c.type === "added") return 1;
+      if (c.type === "changed") return 2;
+      return 3;
+    };
+    changes.sort((a, b) => priority(a) - priority(b));
+
+    const lines: string[] = [];
+    const urlSuffix = url ? ` — ${shortenUrl(url)}` : "";
+    lines.push(`--- Action Result (${changes.length} changes)${urlSuffix} ---`);
+
+    const maxLines = 30;
+    for (const c of changes.slice(0, maxLines)) {
+      const refTag = INTERACTIVE_ROLES.has(c.role) || CONTEXT_ROLES.has(c.role)
+        ? `[${c.ref}] ` : "";
+
+      if (c.type === "added") {
+        const roleLabel = c.role === "alert" || c.role === "status" ? c.role : c.role;
+        lines.push(` NEW    ${refTag}${roleLabel} "${c.after}"`);
+      } else if (c.type === "changed") {
+        lines.push(` CHANGED ${refTag}${c.role} "${c.before}" → "${c.after}"`);
+      } else {
+        lines.push(` REMOVED ${refTag}${c.role} "${c.before}"`);
+      }
+    }
+
+    if (changes.length > maxLines) {
+      lines.push(`... (${changes.length - maxLines} more changes)`);
+    }
+
+    return lines.join("\n");
   }
 
   /**
@@ -1563,11 +1768,12 @@ export class A11yTreeProcessor {
         continue;
       }
 
-      // Interactive elements (existing behavior)
-      if (!INTERACTIVE_ROLES.has(info.role)) continue;
+      // Interactive elements (existing behavior) + FR-005: onclick-clickable elements
+      if (!INTERACTIVE_ROLES.has(info.role) && !info.isClickable) continue;
 
       const name = info.name ? ` '${info.name}'` : "";
-      line = `[e${refNum}] ${info.role}${name}`;
+      const idSuffix = info.htmlId ? `#${info.htmlId}` : "";
+      line = `[e${refNum}] ${info.role}${idSuffix}${name}`;
       const lineTokens = Math.ceil(line.length / 4);
 
       if (tokensSoFar + lineTokens > maxTokens) {

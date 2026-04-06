@@ -242,22 +242,23 @@ describe("evaluateHandler", () => {
 });
 
 describe("wrapInIIFE", () => {
-  it("should wrap code with top-level const", () => {
-    const code = 'const x = 1;\nx;';
-    const result = wrapInIIFE(code);
-    expect(result).toBe(`(() => {\n${code}\n})()`);
+  it("should wrap code with top-level const and return last expression", () => {
+    const result = wrapInIIFE('const x = 1;\nx;');
+    expect(result).toContain("(() => {");
+    expect(result).toContain("const x = 1;");
+    expect(result).toContain("return x;");
   });
 
-  it("should wrap code with top-level let", () => {
-    const code = 'let y = 2;\ny;';
-    const result = wrapInIIFE(code);
-    expect(result).toBe(`(() => {\n${code}\n})()`);
+  it("should wrap code with top-level let and return last expression", () => {
+    const result = wrapInIIFE('let y = 2;\ny;');
+    expect(result).toContain("(() => {");
+    expect(result).toContain("return y;");
   });
 
-  it("should wrap code with top-level class", () => {
-    const code = 'class Foo {}\nnew Foo();';
-    const result = wrapInIIFE(code);
-    expect(result).toBe(`(() => {\n${code}\n})()`);
+  it("should wrap code with top-level class and return last expression", () => {
+    const result = wrapInIIFE('class Foo {}\nnew Foo();');
+    expect(result).toContain("(() => {");
+    expect(result).toContain("return new Foo();");
   });
 
   it("should NOT wrap code without declarations", () => {
@@ -272,29 +273,138 @@ describe("wrapInIIFE", () => {
   });
 
   it("should wrap const that appears after other statements", () => {
-    const code = 'document.title;\nconst x = 1;';
-    const result = wrapInIIFE(code);
+    const result = wrapInIIFE('document.title;\nconst x = 1;');
     expect(result).toContain("(() => {");
+    // Last line is a const declaration — no return inserted (it's a statement, not an expression)
   });
 
   it("should wrap indented const/let declarations", () => {
-    const code = '  const x = 1;\n  x;';
-    const result = wrapInIIFE(code);
+    const result = wrapInIIFE('  const x = 1;\n  x;');
     expect(result).toContain("(() => {");
+    expect(result).toContain("return x;");
   });
 
   it("should handle the real-world benchmark scenario (repeated calls)", () => {
-    // Simulates the FR-007 scenario: two calls with const declarations
     const call1 = 'const container = document.querySelector("#t2-2-list");\ncontainer?.textContent;';
     const call2 = 'const section = document.querySelector("[data-test=\\"2.2\\"]");\nsection?.textContent;';
 
     const wrapped1 = wrapInIIFE(call1);
     const wrapped2 = wrapInIIFE(call2);
 
-    // Both should be wrapped independently — no shared-scope collision
     expect(wrapped1).toContain("(() => {");
     expect(wrapped2).toContain("(() => {");
-    expect(wrapped1).toContain("const container");
-    expect(wrapped2).toContain("const section");
+    expect(wrapped1).toContain("return container?.textContent;");
+    expect(wrapped2).toContain("return section?.textContent;");
+  });
+
+  it("should return JSON.stringify result", () => {
+    const code = 'const x = 42;\nJSON.stringify({x})';
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return JSON.stringify({x})");
+  });
+
+  it("should preserve indentation on return insertion", () => {
+    const code = '  const x = 1;\n  x + 1';
+    const result = wrapInIIFE(code);
+    expect(result).toContain("  return x + 1");
+  });
+
+  it("should skip trailing comments and blank lines", () => {
+    const code = 'const x = 1;\nx + 1\n// done\n';
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return x + 1");
+  });
+
+  it("should not insert return before closing brace", () => {
+    const code = 'const fn = () => { return 1; };\nfn()';
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return fn()");
+  });
+
+  it("should extract trailing expression from single-line const", () => {
+    const result = wrapInIIFE('const x = 42; x + 1');
+    expect(result).toContain("const x = 42;");
+    expect(result).toContain("return x + 1");
+  });
+
+  it("should handle single-line with JSON.stringify", () => {
+    const result = wrapInIIFE('const obj = {a: 1}; JSON.stringify(obj)');
+    expect(result).toContain("const obj = {a: 1};");
+    expect(result).toContain("return JSON.stringify(obj)");
+  });
+
+  // FR-001: Multi-line expression tests
+  it("should insert return at start of multi-line JSON.stringify, not at });", () => {
+    const code = `const card = document.querySelector('.card');
+JSON.stringify({
+  id: card?.id,
+  text: card?.textContent
+});`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return JSON.stringify({");
+    expect(result).not.toContain("return });");
+  });
+
+  it("should handle multi-line function call ending with })", () => {
+    const code = `const items = document.querySelectorAll('li');
+items.forEach(item => {
+  item.click();
+})`;
+    const result = wrapInIIFE(code);
+    // forEach returns undefined, but the return should be on forEach line, not })
+    expect(result).toContain("return items.forEach(");
+    expect(result).not.toContain("return })");
+  });
+
+  it("should handle nested brackets in multi-line expression", () => {
+    const code = `const el = document.body;
+JSON.stringify({
+  a: [1, 2, {nested: true}],
+  b: ({x: 1})
+});`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return JSON.stringify({");
+  });
+
+  // FR-001: Explicit return statement tests
+  it("should wrap code with explicit top-level return", () => {
+    const result = wrapInIIFE("return document.title;");
+    expect(result).toContain("(() => {");
+    expect(result).toContain("return document.title;");
+    expect(result).toContain("})()");
+  });
+
+  it("should wrap code with return after setup", () => {
+    const code = `const x = 1;
+const y = 2;
+return x + y;`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("(() => {");
+    expect(result).toContain("return x + y;");
+    // Should NOT double-insert return
+    expect(result).not.toContain("return return");
+  });
+
+  it("should NOT wrap return inside a callback (no declarations)", () => {
+    // return is inside an arrow function body, not at line start → no wrap needed
+    const code = "arr.map(x => { return x * 2; })";
+    const result = wrapInIIFE(code);
+    expect(result).toBe(code); // unchanged
+  });
+
+  it("should handle the exact T3.4 failure case from benchmark", () => {
+    const code = `const card = [...document.querySelectorAll('.test-card')].find(c => c.querySelector('.test-id')?.textContent === 'T3.4');
+const canvas = card?.querySelector('canvas');
+JSON.stringify({
+  canvasId: canvas?.id,
+  width: canvas?.width,
+  height: canvas?.height,
+  circlePos: typeof R !== 'undefined' ? {x: R.canvasX, y: R.canvasY, r: R.canvasR} : 'no R object'
+});`;
+    const result = wrapInIIFE(code);
+    expect(result).toContain("return JSON.stringify({");
+    expect(result).not.toContain("return });");
+    // Verify it's valid JS structure
+    expect(result).toMatch(/^\(\(\) => \{[\s\S]*\}\)\(\)$/);
   });
 });

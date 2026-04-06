@@ -12,17 +12,66 @@ import { wrapCdpError } from "./error-utils.js";
  * get the evaluation result.
  */
 export function wrapInIIFE(expression: string): string {
-  // Quick check: does the code contain any top-level const/let/class?
-  // We match at the beginning of a line (after optional whitespace) to avoid
-  // matching inside strings/comments in most practical cases.
-  const needsWrap = /^[ \t]*(const|let|class)\s/m.test(expression);
-  if (!needsWrap) return expression;
+  // Quick check: does the code need IIFE wrapping?
+  // - const/let/class declarations (would collide across repeated evaluate calls)
+  // - top-level return statements (illegal outside function body)
+  const hasDeclarations = /^[ \t]*(const|let|class)\s/m.test(expression);
+  const hasTopLevelReturn = /^[ \t]*return\s/m.test(expression);
+  if (!hasDeclarations && !hasTopLevelReturn) return expression;
 
   // Already wrapped in an IIFE? Don't double-wrap.
   const trimmed = expression.trim();
   if (/^\([\s\S]*\)\s*\(\s*\)\s*;?\s*$/.test(trimmed)) return expression;
 
-  return `(() => {\n${expression}\n})()`;
+  // If code already has explicit return statements, just wrap in IIFE — don't insert return.
+  if (hasTopLevelReturn) {
+    return `(() => {\n${expression}\n})()`;
+  }
+
+  // Insert `return` before the last expression statement so the IIFE
+  // returns its value (arrow function block bodies don't auto-return).
+  const lines = expression.split("\n");
+
+  // FR-001: Use bracket-depth tracking to find the START of the last multi-line expression.
+  // Walk backwards from the last line, tracking depth of () {} [].
+  // When depth reaches 0, we've found the start of the expression.
+  let depth = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith("//")) continue;
+
+    // Count brackets right-to-left (we're scanning backwards)
+    for (let c = line.length - 1; c >= 0; c--) {
+      const ch = line[c];
+      if (ch === ")" || ch === "}" || ch === "]") depth++;
+      else if (ch === "(" || ch === "{" || ch === "[") depth--;
+    }
+
+    // depth > 0 means we're still inside a multi-line expression — keep walking up
+    if (depth > 0) continue;
+
+    // Found the start of the last complete expression/statement.
+    if (/^(const|let|var|if|for|while|switch|try|throw|return|class|function)\b/.test(line)) {
+      // It's a statement keyword — check for trailing expression after last ;
+      const lastSemi = line.lastIndexOf(";");
+      if (lastSemi >= 0 && lastSemi < line.length - 1) {
+        const trailing = line.substring(lastSemi + 1).trim();
+        if (trailing && !/^(const|let|var|if|for|while|switch|try|throw|return|class|function)\b/.test(trailing)) {
+          const indent = lines[i].match(/^(\s*)/)?.[1] ?? "";
+          lines[i] = indent + line.substring(0, lastSemi + 1);
+          lines.splice(i + 1, 0, indent + "return " + trailing);
+        }
+      }
+      break;
+    }
+
+    // Pure expression — prepend return
+    const indent = lines[i].match(/^(\s*)/)?.[1] ?? "";
+    lines[i] = indent + "return " + lines[i].trimStart();
+    break;
+  }
+
+  return `(() => {\n${lines.join("\n")}\n})()`;
 }
 
 export const evaluateSchema = z.object({

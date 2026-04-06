@@ -100,10 +100,10 @@ describe("A11yTreeProcessor", () => {
     const result = await processor.getTree(cdp, "s1", { depth: 1, filter: "all" });
 
     expect(result.depth).toBe(1);
-    // FR-002: filter=all → CDP depth = display depth
+    // FR-002: filter=all → CDP depth = display depth + 2 (extra levels for leaf text)
     expect(cdp.send).toHaveBeenCalledWith(
       "Accessibility.getFullAXTree",
-      { depth: 1 },
+      { depth: 3 },
       "s1",
     );
   });
@@ -282,6 +282,80 @@ describe("A11yTreeProcessor", () => {
 
     // Refs reset — e1 = WebArea root, e2 = link
     expect(result.text).toContain("[e2]");
+  });
+
+  // Test 8b: Hash-only URL change preserves refs (anchor navigation)
+  it("should preserve refs when only the hash changes", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Click Me" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    // First call: page without hash
+    const cdp1 = mockCdpClient(nodes, "https://example.com/page");
+    await processor.getTree(cdp1, "s1");
+    expect(processor.resolveRef("e2")).toBe(101);
+
+    // Second call: same page with hash — should keep refs
+    const cdp2 = mockCdpClient(nodes, "https://example.com/page#section-2");
+    await processor.getTree(cdp2, "s1");
+    expect(processor.resolveRef("e2")).toBe(101); // ref still valid!
+  });
+
+  // Test 8c: Hash-only change still resets on real navigation
+  it("should reset refs when path changes even if both have hashes", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "OK" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+
+    // First: page-a#top
+    const cdp1 = mockCdpClient(nodes, "https://example.com/page-a#top");
+    await processor.getTree(cdp1, "s1");
+
+    // Second: page-b#top — different path → reset
+    const nodesB: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 200,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "link" },
+        name: { type: "computedString", value: "Back" },
+        backendDOMNodeId: 201,
+      }),
+    ];
+    const cdp2 = mockCdpClient(nodesB, "https://example.com/page-b#top");
+    const result = await processor.getTree(cdp2, "s1");
+
+    // Refs reset — new refs assigned
+    expect(processor.resolveRef("e2")).toBe(201);
   });
 
   // Test 9: New nodes get next ref number
@@ -1861,8 +1935,8 @@ describe("A11yTreeProcessor", () => {
       // Reset call count
       (cdp.send as ReturnType<typeof vi.fn>).mockClear();
 
-      // getTree should use cached nodes — use filter=all so cdpFetchDepth=3 matches cached depth=3
-      const result = await processor.getTree(cdp, "s1", { filter: "all" });
+      // getTree should use cached nodes — filter=all with depth=1 → cdpFetchDepth=3 matches cached depth=3
+      const result = await processor.getTree(cdp, "s1", { filter: "all", depth: 1 });
 
       // Should have called Runtime.evaluate (URL check) but NOT Accessibility.getFullAXTree
       const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
@@ -2001,14 +2075,13 @@ describe("A11yTreeProcessor", () => {
       await processor.refreshPrecomputed(cdp, "s1");
       (cdp.send as ReturnType<typeof vi.fn>).mockClear();
 
-      // FR-002: Use filter=all so cdpFetchDepth = display depth = 5
-      // Request with depth 5 — exceeds cached depth 3 → cache miss
+      // filter=all → cdpFetchDepth = depth + 2 = 7, exceeds cached depth 3 → cache miss
       await processor.getTree(cdp, "s1", { depth: 5, filter: "all" });
       const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
       const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
       expect(a11yCalls.length).toBeGreaterThan(0);
-      // Should have requested depth 5
-      expect(a11yCalls[0][1]).toEqual({ depth: 5 });
+      // Should have requested depth 5 + 2 = 7 (extra levels for leaf text)
+      expect(a11yCalls[0][1]).toEqual({ depth: 7 });
     });
 
     it("M1: Depth kleiner-gleich Cache-Depth ist Cache-Hit", async () => {
@@ -2033,9 +2106,8 @@ describe("A11yTreeProcessor", () => {
       await processor.refreshPrecomputed(cdp, "s1");
       (cdp.send as ReturnType<typeof vi.fn>).mockClear();
 
-      // FR-002: Use filter=all so cdpFetchDepth = display depth = 2
-      // Request with depth 2 — within cached depth → cache hit
-      await processor.getTree(cdp, "s1", { depth: 2, filter: "all" });
+      // filter=all → cdpFetchDepth = depth + 2 = 3, matches cached depth 3 → cache hit
+      await processor.getTree(cdp, "s1", { depth: 1, filter: "all" });
       const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
       const a11yCalls = calls.filter((c: unknown[]) => c[0] === "Accessibility.getFullAXTree");
       expect(a11yCalls).toHaveLength(0);
@@ -2453,6 +2525,122 @@ describe("A11yTreeProcessor", () => {
       const headingIdx = snapshot.indexOf('[h1] "Title"');
       const buttonIdx = snapshot.indexOf("button 'Click'");
       expect(headingIdx).toBeLessThan(buttonIdx);
+    });
+  });
+
+  describe("FR-002: getSnapshotMap", () => {
+    it("returns map with role and name for all relevant nodes", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2", "3"] }),
+        makeNode({ nodeId: "2", role: { type: "role", value: "button" }, name: { type: "string", value: "Submit" }, backendDOMNodeId: 2 }),
+        makeNode({ nodeId: "3", role: { type: "role", value: "heading" }, name: { type: "string", value: "Title" }, backendDOMNodeId: 3, properties: [{ name: "level", value: { type: "integer", value: 1 } }] }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      const map = processor.getSnapshotMap();
+      expect(map.size).toBe(2); // button + heading (WebArea has no name)
+      // Check that values encode role\0name
+      const values = [...map.values()];
+      expect(values).toContainEqual("button\0Submit");
+      expect(values).toContainEqual("heading\0Title");
+    });
+
+    it("returns empty map when no nodes", () => {
+      const map = processor.getSnapshotMap();
+      expect(map.size).toBe(0);
+    });
+  });
+
+  describe("FR-002: diffSnapshots", () => {
+    it("detects added nodes", () => {
+      const before = new Map<number, string>([[1, "button\0Submit"]]);
+      const after = new Map<number, string>([
+        [1, "button\0Submit"],
+        [2, "alert\0Success!"],
+      ]);
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toEqual({ type: "added", ref: "e2", role: "alert", after: "Success!" });
+    });
+
+    it("detects removed nodes", () => {
+      const before = new Map<number, string>([
+        [1, "button\0Submit"],
+        [2, "alert\0Error"],
+      ]);
+      const after = new Map<number, string>([[1, "button\0Submit"]]);
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toEqual({ type: "removed", ref: "e2", role: "alert", after: "", before: "Error" });
+    });
+
+    it("detects changed text", () => {
+      const before = new Map<number, string>([[1, "status\0PENDING"]]);
+      const after = new Map<number, string>([[1, "status\0PASS"]]);
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toEqual({ type: "changed", ref: "e1", role: "status", before: "PENDING", after: "PASS" });
+    });
+
+    it("ignores unchanged nodes", () => {
+      const before = new Map<number, string>([[1, "button\0Submit"], [2, "heading\0Title"]]);
+      const after = new Map<number, string>([[1, "button\0Submit"], [2, "heading\0Title"]]);
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(0);
+    });
+
+    it("ignores role-only changes when name stays same", () => {
+      const before = new Map<number, string>([[1, "generic\0text"]]);
+      const after = new Map<number, string>([[1, "paragraph\0text"]]);
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(0); // name didn't change
+    });
+
+    it("skips nodes without names in added/removed", () => {
+      const before = new Map<number, string>([[1, "generic\0"]]);
+      const after = new Map<number, string>();
+      const changes = A11yTreeProcessor.diffSnapshots(before, after);
+      expect(changes).toHaveLength(0); // empty name → skip
+    });
+  });
+
+  describe("FR-002: formatDomDiff", () => {
+    it("formats changes with header and type labels", () => {
+      const changes = [
+        { type: "added" as const, ref: "e5", role: "alert", after: "Saved!" },
+        { type: "changed" as const, ref: "e3", role: "status", before: "PENDING", after: "PASS" },
+      ];
+      const text = A11yTreeProcessor.formatDomDiff(changes, "https://example.com/page")!;
+      expect(text).toContain("--- Action Result (2 changes)");
+      expect(text).toContain("/page");
+      expect(text).toContain('NEW');
+      expect(text).toContain('"Saved!"');
+      expect(text).toContain('CHANGED');
+      expect(text).toContain('"PENDING" → "PASS"');
+    });
+
+    it("sorts alerts/status before other changes", () => {
+      const changes = [
+        { type: "changed" as const, ref: "e1", role: "button", before: "Old", after: "New" },
+        { type: "added" as const, ref: "e2", role: "alert", after: "Alert!" },
+      ];
+      const text = A11yTreeProcessor.formatDomDiff(changes)!;
+      const alertIdx = text.indexOf("Alert!");
+      const buttonIdx = text.indexOf("New");
+      expect(alertIdx).toBeLessThan(buttonIdx);
+    });
+
+    it("returns null for empty changes", () => {
+      expect(A11yTreeProcessor.formatDomDiff([])).toBeNull();
+    });
+
+    it("truncates at 30 lines", () => {
+      const changes = Array.from({ length: 35 }, (_, i) => ({
+        type: "added" as const, ref: `e${i}`, role: "button", after: `Button ${i}`,
+      }));
+      const text = A11yTreeProcessor.formatDomDiff(changes)!;
+      expect(text).toContain("5 more changes");
     });
   });
 });

@@ -54,10 +54,13 @@ import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hooks.js";
-import { a11yTree } from "./cache/a11y-tree.js";
+import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
 // Story 13.1: Tools whose response IS page context — no ambient injection needed
 const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot"]);
+
+// FR-002: Action tools that mutate the DOM and benefit from post-action diff
+const ACTION_TOOLS = new Set(["click", "type", "fill_form"]);
 
 export class ToolRegistry {
   private _sessionId: string;
@@ -170,10 +173,10 @@ export class ToolRegistry {
   }
 
   /**
-   * Story 13a.2: Ambient Page Context v2 — smart post-action detection.
-   * For action tools (click, type): uses pre-click classification to decide
-   * whether to wait for page changes before injecting context.
-   * For other tools: injects if cache version changed (v1 behavior).
+   * FR-002 + Story 13a.2: Ambient Page Context with DOM-Diff.
+   * For action tools (click, type, fill_form): captures pre/post snapshot,
+   * computes diff, and returns only the changes — not the whole page.
+   * Falls back to compact snapshot when diff is empty or for non-action tools.
    */
   private async _injectAmbientContext(result: ToolResponse, toolName: string): Promise<void> {
     if (PAGE_CONTEXT_TOOLS.has(toolName)) return;
@@ -199,39 +202,45 @@ export class ToolRegistry {
     // Story 13a.2: Pre-click classification — skip immediately for disabled/static
     if (elementClass === "disabled" || elementClass === "static") return;
 
-    // Story 13a.2: Widget-state or unknown clickable — wait for AX change
-    if (elementClass === "widget-state" || elementClass === "clickable") {
+    // FR-002: For action tools, use DOM-Diff approach
+    if (ACTION_TOOLS.has(toolName) && (elementClass === "widget-state" || elementClass === "clickable")) {
       if (this._waitForAXChange) {
-        // Story 13a.2 fix: Chrome has a 250ms throttle on nodesUpdated — use 350ms+ to avoid false negatives
+        // FR-002: Capture pre-action snapshot BEFORE refreshing the tree
+        const snapshotBefore = a11yTree.getSnapshotMap();
+
         const timeoutMs = elementClass === "widget-state" ? 500 : 350;
         const changed = await this._waitForAXChange(timeoutMs);
-        if (changed) {
-          // Refresh the precomputed cache to get fresh data
-          try {
-            await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
-          } catch {
-            // Refresh failed — fall through to version check below
-          }
-        } else if (elementClass === "clickable") {
-          // Hash-probe fallback: nodesUpdated didn't fire (CSS-only toggle?).
-          // Fetch fresh tree and compare snapshot — inject only if tree actually changed.
-          const snapshotBefore = a11yTree.getCompactSnapshot();
-          try {
-            await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
-          } catch {
-            return; // Refresh failed — can't determine if page changed
-          }
-          const snapshotAfter = a11yTree.getCompactSnapshot();
-          if (snapshotBefore === snapshotAfter) {
-            return; // Tree identical — nothing changed, skip injection
-          }
-          // Tree changed despite no nodesUpdated — fall through to inject
+
+        // Always refresh to get post-action state
+        try {
+          await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
+        } catch {
+          return; // Refresh failed — can't compute diff
         }
-        // widget-state: always inject even if no nodesUpdated (e.g. server-side toggle)
+
+        const snapshotAfter = a11yTree.getSnapshotMap();
+        const changes = A11yTreeProcessor.diffSnapshots(snapshotBefore, snapshotAfter);
+
+        if (changes.length > 0) {
+          // FR-002: Inject DOM diff — focused, compact, shows exactly what changed
+          const diffText = A11yTreeProcessor.formatDomDiff(changes, a11yTree.currentUrl || undefined);
+          if (diffText) {
+            result.content.push({ type: "text", text: diffText });
+          }
+          this._lastSentCacheVersion = a11yTree.cacheVersion;
+          return;
+        }
+
+        // No changes detected despite nodesUpdated event — skip
+        if (!changed && elementClass === "clickable") {
+          return; // CSS-only toggle, nothing meaningful changed
+        }
+        // widget-state: always inject even if no visible text changes
+        // Fall through to compact snapshot below
       }
     }
 
-    // v1 fallback: inject if cache version changed
+    // v1 fallback: inject compact snapshot if cache version changed
     const currentVersion = a11yTree.cacheVersion;
     if (currentVersion === this._lastSentCacheVersion) return;
 
