@@ -30,7 +30,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(14);
+    expect(toolFn).toHaveBeenCalledTimes(16);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
@@ -81,10 +81,12 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "click",
-      "Click an element by A11y-Tree ref (e.g. 'e5') or CSS selector. Dispatches the full pointer event chain (pointerdown/mousedown/pointerup/mouseup/click) — works with custom widgets that JS element.click() misses. Returns immediately after click — use wait_for if the click triggers navigation or async content loading.",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically.",
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
+        x: expect.anything(),
+        y: expect.anything(),
       }),
       expect.any(Function),
     );

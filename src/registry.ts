@@ -42,6 +42,10 @@ import type { NetworkMonitorParams } from "./tools/network-monitor.js";
 import type { NetworkCollector } from "./cdp/network-collector.js";
 import { configureSessionSchema, configureSessionHandler } from "./tools/configure-session.js";
 import type { ConfigureSessionParams } from "./tools/configure-session.js";
+import { pressKeySchema, pressKeyHandler } from "./tools/press-key.js";
+import type { PressKeyParams } from "./tools/press-key.js";
+import { scrollSchema, scrollHandler } from "./tools/scroll.js";
+import type { ScrollParams } from "./tools/scroll.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
@@ -515,10 +519,12 @@ export class ToolRegistry {
 
     this.server.tool(
       "click",
-      "Click an element by A11y-Tree ref (e.g. 'e5') or CSS selector. Dispatches the full pointer event chain (pointerdown/mousedown/pointerup/mouseup/click) — works with custom widgets that JS element.click() misses. Returns immediately after click — use wait_for if the click triggers navigation or async content loading.",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically.",
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
+        x: clickSchema.shape.x,
+        y: clickSchema.shape.y,
       },
       wrap(async (params) => {
         return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
@@ -537,6 +543,34 @@ export class ToolRegistry {
       wrap(async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
       }, "type"),
+    );
+
+    // FR-C: press_key — real CDP keyboard events (not JS dispatchEvent)
+    this.server.tool(
+      "press_key",
+      "Press a keyboard key or shortcut via CDP Input.dispatchKeyEvent. Supports modifiers (ctrl, shift, alt, meta). Use for keyboard shortcuts (Ctrl+K), navigation keys (Enter, Escape, Tab, arrows), or any key that JS dispatchEvent misses.",
+      {
+        key: pressKeySchema.shape.key,
+        modifiers: pressKeySchema.shape.modifiers,
+      },
+      wrap(async (params) => {
+        return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId);
+      }, "press_key"),
+    );
+
+    // FR-F: scroll — scroll page or element into view
+    this.server.tool(
+      "scroll",
+      "Scroll the page or an element into view. Use ref/selector to scroll an element into the viewport, or direction+amount to scroll the page (returns scroll position).",
+      {
+        ref: scrollSchema.shape.ref,
+        selector: scrollSchema.shape.selector,
+        direction: scrollSchema.shape.direction,
+        amount: scrollSchema.shape.amount,
+      },
+      wrap(async (params) => {
+        return scrollHandler(params as unknown as ScrollParams, this.cdpClient, this.sessionId, this._sessionManager);
+      }, "scroll"),
     );
 
     this.server.tool(

@@ -50,6 +50,7 @@ function createMockCdp(overrides: Record<string, unknown> = {}): MockCdpSetup {
     "DOM.getDocument": { root: { nodeId: 1 } },
     "DOM.querySelector": { nodeId: 42 },
     "DOM.describeNode": { node: { backendNodeId: 100 } },
+    "Target.getTargets": { targetInfos: [{ targetId: "t1", type: "page", url: "https://example.com", title: "Test" }] },
     ...overrides,
   };
 
@@ -239,16 +240,18 @@ describe("clickHandler", () => {
 
     await clickHandler({ ref: "e5" }, cdpClient, "s1");
 
-    // 6 CDP calls: scrollTo(0,0), scrollIntoView, getContentQuads, mouseMoved, mousePressed, mouseReleased
-    expect(sendFn).toHaveBeenCalledTimes(6);
+    // 8 CDP calls: Target.getTargets (before), scrollTo(0,0), scrollIntoView, getContentQuads, 3x mouse, Target.getTargets (after)
+    expect(sendFn).toHaveBeenCalledTimes(8);
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).toEqual([
+      "Target.getTargets",
       "Runtime.evaluate",
       "DOM.scrollIntoViewIfNeeded",
       "DOM.getContentQuads",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
+      "Target.getTargets",
     ]);
   });
 
@@ -559,16 +562,18 @@ describe("clickHandler", () => {
     );
 
     expect(result.isError).toBeUndefined();
-    // Exactly 6 CDP calls — mouseMoved + mousePressed + mouseReleased
-    expect(sendFn).toHaveBeenCalledTimes(6);
+    // 8 CDP calls: Target.getTargets (before), scrollTo, scrollIntoView, getContentQuads, 3x mouse, Target.getTargets (after)
+    expect(sendFn).toHaveBeenCalledTimes(8);
     const callMethods = sendFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(callMethods).toEqual([
+      "Target.getTargets",
       "Runtime.evaluate",
       "DOM.scrollIntoViewIfNeeded",
       "DOM.getContentQuads",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
       "Input.dispatchMouseEvent",
+      "Target.getTargets",
     ]);
   });
 
@@ -654,6 +659,97 @@ describe("clickHandler", () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toBe("click failed: Element not found for selector '.nonexistent'");
     expect(text).not.toContain("Available interactive elements");
+  });
+
+  // --- FR-D: Coordinate-based click tests ---
+
+  it("should click at viewport coordinates without element resolution (FR-D)", async () => {
+    const { cdpClient, sendFn } = createMockCdp();
+
+    const result = await clickHandler({ x: 250, y: 100 }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ type: "text", text: "Clicked at (250, 100)" }),
+    );
+    expect(result._meta?.clickMethod).toBe("coordinates");
+
+    // Should NOT call resolveElement
+    expect(mockResolveElement).not.toHaveBeenCalled();
+
+    // Should dispatch mouse events at exact coordinates
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(3);
+    expect(mouseEvents[0][1]).toEqual(expect.objectContaining({ type: "mouseMoved", x: 250, y: 100 }));
+    expect(mouseEvents[1][1]).toEqual(expect.objectContaining({ type: "mousePressed", x: 250, y: 100 }));
+    expect(mouseEvents[2][1]).toEqual(expect.objectContaining({ type: "mouseReleased", x: 250, y: 100 }));
+  });
+
+  it("should prefer coordinates over ref when both provided (FR-D)", async () => {
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ ref: "e5", x: 100, y: 200 }, cdpClient, "s1");
+
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ text: "Clicked at (100, 200)" }),
+    );
+    expect(mockResolveElement).not.toHaveBeenCalled();
+  });
+
+  // --- FR-E: New tab detection tests ---
+
+  it("should report new tab when click opens one (FR-E)", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "link",
+      name: "Open in new tab",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    let callCount = 0;
+    const { cdpClient } = createMockCdp({
+      "Target.getTargets": () => {
+        callCount++;
+        if (callCount === 1) {
+          return { targetInfos: [{ targetId: "t1", type: "page", url: "https://example.com", title: "Main" }] };
+        }
+        // After click: new tab appeared
+        return {
+          targetInfos: [
+            { targetId: "t1", type: "page", url: "https://example.com", title: "Main" },
+            { targetId: "t2", type: "page", url: "https://other.com", title: "Other" },
+          ],
+        };
+      },
+    });
+
+    const result = await clickHandler({ ref: "e5" }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("New tab opened");
+    expect(text).toContain("https://other.com");
+    expect(text).toContain("switch_tab");
+  });
+
+  it("should not report new tab when click stays on same page (FR-E)", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ ref: "e5" }, cdpClient, "s1");
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("New tab");
   });
 
   it("should not include element hints for non-selector errors (FR-008)", async () => {

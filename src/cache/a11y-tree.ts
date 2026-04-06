@@ -53,6 +53,8 @@ export interface TreeResult {
   text: string;
   refCount: number;
   depth: number;
+  tokenCount: number;
+  pageUrl: string;
   hasVisualData?: boolean;
   downsampled?: boolean;
   originalTokens?: number;
@@ -693,10 +695,13 @@ export class A11yTreeProcessor {
     }
 
     if (!nodes || nodes.length === 0) {
+      const emptyText = this.formatHeader("", 0, filter, depth);
       return {
-        text: this.formatHeader("", 0, filter, depth),
+        text: emptyText,
         refCount: 0,
         depth,
+        tokenCount: estimateTokens(emptyText),
+        pageUrl: this.lastUrl,
         ...(filter === "visual" ? { hasVisualData: false } : {}),
       };
     }
@@ -859,6 +864,8 @@ export class A11yTreeProcessor {
         text: dsText,
         refCount: downsampled.refCount,
         depth,
+        tokenCount: estimateTokens(dsText),
+        pageUrl: this.lastUrl,
         downsampled: true,
         originalTokens: currentTokens,
         downsampleLevel: downsampled.level,
@@ -870,6 +877,8 @@ export class A11yTreeProcessor {
       text,
       refCount,
       depth,
+      tokenCount: currentTokens,
+      pageUrl: this.lastUrl,
       ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
     };
   }
@@ -1380,6 +1389,8 @@ export class A11yTreeProcessor {
           text: dsText,
           refCount: downsampled.refCount,
           depth,
+          tokenCount: estimateTokens(dsText),
+          pageUrl: this.lastUrl,
           downsampled: true,
           originalTokens: currentTokens,
           downsampleLevel: downsampled.level,
@@ -1392,6 +1403,8 @@ export class A11yTreeProcessor {
       text,
       refCount,
       depth,
+      tokenCount: estimateTokens(text),
+      pageUrl: this.lastUrl,
       ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
     };
   }
