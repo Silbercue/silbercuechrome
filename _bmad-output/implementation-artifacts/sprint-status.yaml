@@ -148,7 +148,7 @@ development_status:
   11-1-level5-infrastruktur: done
   11-2-session-persistence-test: done
   11-3-cdp-fingerprint-test: done
-  11-4-console-log-capture-test: review
+  11-4-console-log-capture-test: done
   11-5-file-upload-test: backlog
   11-6-spa-navigation-test: backlog
   11-7-reconnect-recovery-test: done
