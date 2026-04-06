@@ -69,7 +69,7 @@ describe("tabStatusHandler", () => {
     const result = await tabStatusHandler({}, cdp, "s1", cache);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toBe("No active tab. Navigate to a page first.");
+    expect(result.content[0].text).toBe("No active tab. Use virtual_desk to discover available tabs, or navigate to a page first.");
     expect(result._meta?.method).toBe("tab_status");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
   });

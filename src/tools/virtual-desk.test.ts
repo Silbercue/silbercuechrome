@@ -63,13 +63,15 @@ describe("virtualDeskHandler", () => {
     const result = await virtualDeskHandler({}, cdp, undefined, cache);
     const lines = result.content[0].text.split("\n");
 
-    // T0001 should NOT have > prefix (inactive)
+    // T0001 should NOT have > prefix (inactive), but should have Tab index
     const line1 = lines.find((l: string) => l.includes("T0001"));
     expect(line1).toMatch(/^ /);
+    expect(line1).toContain("Tab 1:");
 
-    // T0002 should have > prefix (active)
+    // T0002 should have > prefix (active), with Tab index
     const line2 = lines.find((l: string) => l.includes("T0002"));
     expect(line2).toMatch(/^>/);
+    expect(line2).toContain("Tab 2:");
   });
 
   it("uses cached state when available", async () => {

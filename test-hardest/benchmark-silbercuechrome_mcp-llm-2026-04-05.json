@@ -1,0 +1,33 @@
+{
+  "name": "SilbercueChrome MCP",
+  "type": "llm-driven",
+  "timestamp": "2026-04-05T12:00:00Z",
+  "notes": "LLM-driven benchmark by Claude Opus 4.6 via MCP tools. Post Story 9.9 (Pro Feature Gates). Includes tab-switching discovery overhead (page uses tabbed layout for levels).",
+  "summary": { "total": 24, "passed": 24, "failed": 0, "duration_s": 350, "tool_uses": 71 },
+  "tests": {
+    "T1.1": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: click + verify" },
+    "T1.2": { "status": "pass", "tool_calls": 3, "notes": "inspect DOM, read secret, fill + verify" },
+    "T1.3": { "status": "pass", "tool_calls": 3, "notes": "fill partial, discover extra fields, complete + submit" },
+    "T1.4": { "status": "pass", "tool_calls": 3, "notes": "click 4/5, inspect missing, click 5th by ID" },
+    "T1.5": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: all nav calls + verify" },
+    "T1.6": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: sum rows + fill + verify" },
+    "T2.1": { "status": "pass", "tool_calls": 3, "notes": "start load, wait_for async, read + verify" },
+    "T2.2": { "status": "pass", "tool_calls": 11, "notes": "tab discovery overhead (display:none), scroll iterations, verify" },
+    "T2.3": { "status": "pass", "tool_calls": 4, "notes": "step1, step2+3, check step3, complete" },
+    "T2.4": { "status": "pass", "tool_calls": 5, "notes": "search+click, verify check, inspect, mousedown retry, confirm" },
+    "T2.5": { "status": "pass", "tool_calls": 5, "notes": "start, switch_tab open, read value, switch_tab close, fill+verify" },
+    "T2.6": { "status": "pass", "tool_calls": 2, "notes": "sort + fill, click verify" },
+    "T3.1": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: shadowRoot.querySelector + fill + verify" },
+    "T3.2": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: nested contentDocument access + fill + verify" },
+    "T3.3": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: sort items by data-value, appendChild reorder" },
+    "T3.4": { "status": "pass", "tool_calls": 5, "notes": "pixel scan for circle color (225,112,85 not pure red), click at centroid" },
+    "T3.5": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: 3x KeyboardEvent dispatch" },
+    "T3.6": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: innerHTML = 'Hello <b>World</b>'" },
+    "T4.1": { "status": "pass", "tool_calls": 3, "notes": "start challenge, wait_for button, click" },
+    "T4.2": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: MutationObserver + capture at value=8" },
+    "T4.3": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: generate 10K + querySelector[data-needle] + fill + verify" },
+    "T4.4": { "status": "pass", "tool_calls": 3, "notes": "first attempt wrong input ID, inspect HTML, fix + verify" },
+    "T4.5": { "status": "pass", "tool_calls": 1, "notes": "single evaluate: MutationObserver collects 3 values + fill + verify" },
+    "T4.6": { "status": "pass", "tool_calls": 2, "notes": "open modal + inspect, fill form + generate + read token + verify" }
+  }
+}

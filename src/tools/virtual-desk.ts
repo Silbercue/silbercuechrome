@@ -75,7 +75,8 @@ export async function virtualDeskHandler(
     const lines: string[] = [];
     lines.push(`Tabs (${pageTabs.length}):`);
 
-    for (const tab of pageTabs) {
+    for (let i = 0; i < pageTabs.length; i++) {
+      const tab = pageTabs[i];
       const isActive = tab.targetId === activeId;
       const cached = tabStateCache.get(tab.targetId);
 
@@ -85,7 +86,7 @@ export async function virtualDeskHandler(
       const status = cached?.loadingState ?? inferLoadingState(tab);
       const marker = isActive ? ">" : " ";
 
-      lines.push(`${marker} ${tab.targetId} | ${status} | ${title} | ${url}`);
+      lines.push(`${marker} Tab ${i + 1}: ${tab.targetId} | ${status} | ${title} | ${url}`);
     }
 
     return {

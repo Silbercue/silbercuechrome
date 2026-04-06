@@ -1,0 +1,199 @@
+{
+  "timestamp": "2026-04-06T07:38:18.837Z",
+  "elapsed_s": 613,
+  "runner": "LLM (Claude Opus 4.6 via SilbercueChrome MCP)",
+  "context": "Post-Friction-Fix Benchmark — after FR-001 through FR-008",
+  "summary": {
+    "total": 35,
+    "passed": 34,
+    "skipped": 1,
+    "failed": 0
+  },
+  "friction_fixes_verified": {
+    "FR-001": "PASS — switch_tab(close) returned to origin tab automatically",
+    "FR-002": "PASS — read_page(filter: interactive) found all form fields (T1.3, T2.4)",
+    "FR-003": "NOT TESTED — no invisible element scenario in benchmark",
+    "FR-004": "NOT TESTED — no stale ref scenario triggered naturally",
+    "FR-005": "NOT TESTED — no explicit emulation scenario in benchmark",
+    "FR-006": "NOT TESTED — no multi-select scenario in benchmark",
+    "FR-007": "OBSERVED — block-scope {} in evaluate worked without SyntaxError (T3.4)",
+    "FR-008": "NOT TESTED — no explicit DOM snapshot scenario in benchmark"
+  },
+  "tests": {
+    "T1.1": {
+      "status": "pass",
+      "duration_ms": 0,
+      "details": "Button clicked successfully"
+    },
+    "T1.2": {
+      "status": "pass",
+      "duration_ms": 21468,
+      "details": "Correct: VUY4-YQ2S"
+    },
+    "T1.3": {
+      "status": "pass",
+      "duration_ms": 4051,
+      "details": "Form submitted successfully"
+    },
+    "T1.4": {
+      "status": "pass",
+      "duration_ms": 27166,
+      "details": "All 5 selectors found and clicked"
+    },
+    "T1.5": {
+      "status": "pass",
+      "duration_ms": 35901,
+      "details": "Navigation sequence correct"
+    },
+    "T1.6": {
+      "status": "pass",
+      "duration_ms": 12710,
+      "details": "Correct sum: 255"
+    },
+    "T2.1": {
+      "status": "pass",
+      "duration_ms": 29763,
+      "details": "Async value correct"
+    },
+    "T2.2": {
+      "status": "pass",
+      "duration_ms": 6924,
+      "details": "Item 30 loaded"
+    },
+    "T2.3": {
+      "status": "pass",
+      "duration_ms": 13223,
+      "details": "Wizard completed: pro"
+    },
+    "T2.4": {
+      "status": "pass",
+      "duration_ms": 5526,
+      "details": "TypeScript selected!"
+    },
+    "T2.5": {
+      "status": "pass",
+      "duration_ms": 31765,
+      "details": "Tab value correct!"
+    },
+    "T2.6": {
+      "status": "pass",
+      "duration_ms": 5446,
+      "details": "Correct! Device Max is most expensive."
+    },
+    "T3.1": {
+      "status": "pass",
+      "duration_ms": 9502,
+      "details": "Shadow DOM value correct"
+    },
+    "T3.2": {
+      "status": "pass",
+      "duration_ms": 4418,
+      "details": "iFrame value correct"
+    },
+    "T3.3": {
+      "status": "pass",
+      "duration_ms": 9969,
+      "details": "Items in correct order!"
+    },
+    "T3.4": {
+      "status": "pass",
+      "duration_ms": 31341,
+      "details": "Hit! Distance: 0.9px"
+    },
+    "T3.5": {
+      "status": "pass",
+      "duration_ms": 6431,
+      "details": "All keyboard shortcuts executed correctly"
+    },
+    "T3.6": {
+      "status": "pass",
+      "duration_ms": 8588,
+      "details": "Hello World with bold detected"
+    },
+    "T4.1": {
+      "status": "pass",
+      "duration_ms": 41960,
+      "details": "Target caught!"
+    },
+    "T4.2": {
+      "status": "pass",
+      "duration_ms": 26328,
+      "details": "Captured at exactly 4!"
+    },
+    "T4.3": {
+      "status": "pass",
+      "duration_ms": 16134,
+      "details": "Needle found!"
+    },
+    "T4.4": {
+      "status": "pass",
+      "duration_ms": 7966,
+      "details": "State chain complete!"
+    },
+    "T4.5": {
+      "status": "pass",
+      "duration_ms": 13684,
+      "details": "All mutations captured!"
+    },
+    "T4.6": {
+      "status": "pass",
+      "duration_ms": 11363,
+      "details": "Token verified! Final boss defeated!"
+    },
+    "T4.7": {
+      "status": "pass",
+      "duration_ms": 51378,
+      "details": "all: 600 tokens OK, interactive: 200 tokens OK — both under budget"
+    },
+    "T5.1": {
+      "status": "pass",
+      "duration_ms": 23097,
+      "details": "Cookie + localStorage set and verified"
+    },
+    "T5.2": {
+      "status": "pass",
+      "duration_ms": 2,
+      "details": "navigator.webdriver: clean, chrome.cdc_*: clean, DOM cdc_* element: clean"
+    },
+    "T5.3": {
+      "status": "pass",
+      "duration_ms": 33556,
+      "details": "All 3 log levels captured: info, warning, error"
+    },
+    "T5.4": {
+      "status": "pass",
+      "duration_ms": 27256,
+      "details": "name: bench-upload.txt OK, content: OK"
+    },
+    "T5.5": {
+      "status": "pass",
+      "duration_ms": 35101,
+      "details": "pushState URL: OK, content update: OK"
+    },
+    "T5.6": {
+      "status": "skip",
+      "duration_ms": 7020,
+      "details": "SKIP: chrome://crash would destroy benchmark state"
+    },
+    "T5.7": {
+      "status": "pass",
+      "duration_ms": 8744,
+      "details": "Success toast shown (role=\"alert\", 5s TTL)"
+    },
+    "T5.8": {
+      "status": "pass",
+      "duration_ms": 12135,
+      "details": "Error toast shown (role=\"alert\", 5s TTL)"
+    },
+    "T5.9": {
+      "status": "pass",
+      "duration_ms": 1,
+      "details": "Warning banner shown (role=\"alert\" + aria-live=\"assertive\", persistent)"
+    },
+    "T5.10": {
+      "status": "pass",
+      "duration_ms": 1,
+      "details": "Quick toast shown (role=\"status\", aria-live=\"polite\", 2s TTL)"
+    }
+  }
+}

@@ -29,7 +29,7 @@ export async function tabStatusHandler(
   const activeTarget = tabStateCache.activeTargetId;
   if (!activeTarget) {
     return {
-      content: [{ type: "text", text: "No active tab. Navigate to a page first." }],
+      content: [{ type: "text", text: "No active tab. Use virtual_desk to discover available tabs, or navigate to a page first." }],
       isError: true,
       _meta: { elapsedMs: Math.round(performance.now() - start), method: "tab_status" },
     };

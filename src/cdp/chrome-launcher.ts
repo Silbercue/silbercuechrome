@@ -342,6 +342,10 @@ export class ChromeConnection {
     return this._childProcess;
   }
 
+  get headless(): boolean {
+    return this._headless;
+  }
+
   /** Register a callback to be invoked after successful reconnect for re-wiring */
   onReconnect(callback: (connection: ChromeConnection) => Promise<void>): void {
     this._onReconnect = callback;
@@ -613,6 +617,14 @@ export class ChromeLauncher {
     // Verify connection
     await cdpClient.send("Browser.getVersion");
 
+    // Auto-detect headless from /json/version Browser field.
+    // Headed Chrome reports "Chrome/...", headless reports "HeadlessChrome/...".
+    const browserString = typeof versionInfo.Browser === "string" ? versionInfo.Browser : "";
+    const detectedHeadless = browserString.includes("HeadlessChrome");
+    if (detectedHeadless !== this._headless) {
+      debug("Headless auto-detected=%s (Browser: %s), overriding env setting=%s", detectedHeadless, browserString, this._headless);
+    }
+
     if (this._profilePath) {
       debug("Connected via WebSocket to existing Chrome — profilePath ignored (only affects Auto-Launch)");
     } else {
@@ -626,7 +638,7 @@ export class ChromeLauncher {
       undefined,
       this,
       port,
-      this._headless,
+      detectedHeadless,
     );
   }
 }
