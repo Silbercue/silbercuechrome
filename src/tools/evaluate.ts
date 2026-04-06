@@ -15,17 +15,22 @@ export function wrapInIIFE(expression: string): string {
   // Quick check: does the code need IIFE wrapping?
   // - const/let/class declarations (would collide across repeated evaluate calls)
   // - top-level return statements (illegal outside function body)
+  // - top-level await (FR-H3: illegal outside async function)
   const hasDeclarations = /^[ \t]*(const|let|class)\s/m.test(expression);
   const hasTopLevelReturn = /^[ \t]*return\s/m.test(expression);
-  if (!hasDeclarations && !hasTopLevelReturn) return expression;
+  const hasTopLevelAwait = /(?:^|[;{}\n])\s*(?:(?:const|let|var)\s+\w+\s*=\s*)?await\s/m.test(expression);
+  if (!hasDeclarations && !hasTopLevelReturn && !hasTopLevelAwait) return expression;
 
   // Already wrapped in an IIFE? Don't double-wrap.
   const trimmed = expression.trim();
   if (/^\([\s\S]*\)\s*\(\s*\)\s*;?\s*$/.test(trimmed)) return expression;
 
+  // FR-H3: Use async IIFE when code contains await
+  const asyncPrefix = hasTopLevelAwait ? "async " : "";
+
   // If code already has explicit return statements, just wrap in IIFE — don't insert return.
   if (hasTopLevelReturn) {
-    return `(() => {\n${expression}\n})()`;
+    return `(${asyncPrefix}() => {\n${expression}\n})()`;
   }
 
   // Insert `return` before the last expression statement so the IIFE
@@ -71,7 +76,7 @@ export function wrapInIIFE(expression: string): string {
     break;
   }
 
-  return `(() => {\n${lines.join("\n")}\n})()`;
+  return `(${asyncPrefix}() => {\n${lines.join("\n")}\n})()`;
 }
 
 export const evaluateSchema = z.object({
