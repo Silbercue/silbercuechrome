@@ -328,75 +328,8 @@ export class A11yTreeProcessor {
       debug("A11yTreeProcessor: getRootAXNode failed (nodesUpdated tracking disabled)");
     }
 
-    // 6. FR-004 + FR-005: Batch-fetch HTML attributes and click listeners for relevant nodes.
-    // Phase 1: DOM.describeNode for HTML IDs (all relevant nodes) + inline onclick detection
-    // Phase 2: DOMDebugger.getEventListeners for non-interactive nodes (detects addEventListener, React, etc.)
-    const POTENTIALLY_CLICKABLE_ROLES = new Set(["columnheader", "rowheader", "cell", "generic", "listitem"]);
-    try {
-      const interactiveNodes: number[] = [];
-      const checkClickNodes: number[] = [];  // Non-interactive nodes to check for click listeners
-      for (const [backendNodeId, info] of this.nodeInfoMap) {
-        if (INTERACTIVE_ROLES.has(info.role) || CONTEXT_ROLES.has(info.role)) {
-          interactiveNodes.push(backendNodeId);
-        } else if (POTENTIALLY_CLICKABLE_ROLES.has(info.role)) {
-          interactiveNodes.push(backendNodeId);  // Also fetch ID for these
-          checkClickNodes.push(backendNodeId);    // And check click listeners
-        }
-      }
-
-      // Phase 1: Batch DOM.describeNode — extract HTML IDs + inline onclick
-      if (interactiveNodes.length > 0 && interactiveNodes.length <= 500) {
-        await Promise.allSettled(interactiveNodes.map(async (backendNodeId) => {
-          try {
-            const desc = await cdpClient.send<{ node: { attributes?: string[] } }>(
-              "DOM.describeNode", { backendNodeId, depth: 0 }, sessionId,
-            );
-            const attrs = desc.node?.attributes;
-            if (!attrs) return;
-            const info = this.nodeInfoMap.get(backendNodeId);
-            if (!info) return;
-            for (let i = 0; i < attrs.length; i += 2) {
-              if (attrs[i] === "id" && attrs[i + 1]) {
-                info.htmlId = attrs[i + 1];
-              }
-              if (attrs[i] === "onclick") {
-                info.isClickable = true;
-              }
-              if (attrs[i] === "target" && attrs[i + 1]) {
-                info.linkTarget = attrs[i + 1];
-              }
-            }
-          } catch { /* ignore — text nodes etc. don't support describeNode */ }
-        }));
-      }
-
-      // Phase 2: DOMDebugger.getEventListeners for non-interactive nodes without onclick attribute.
-      // Detects addEventListener, React synthetic events, jQuery — anything that registered a click handler.
-      // 2 CDP calls per node (resolveNode + getEventListeners), but only for candidates not already marked.
-      const clickCandidates = checkClickNodes.filter(id => !this.nodeInfoMap.get(id)?.isClickable);
-      if (clickCandidates.length > 0 && clickCandidates.length <= 200) {
-        await Promise.allSettled(clickCandidates.map(async (backendNodeId) => {
-          try {
-            const resolved = await cdpClient.send<{ object: { objectId?: string } }>(
-              "DOM.resolveNode", { backendNodeId }, sessionId,
-            );
-            const objectId = resolved.object?.objectId;
-            if (!objectId) return;
-            const result = await cdpClient.send<{ listeners: Array<{ type: string }> }>(
-              "DOMDebugger.getEventListeners", { objectId }, sessionId,
-            );
-            if (result.listeners?.some(l => l.type === "click")) {
-              const info = this.nodeInfoMap.get(backendNodeId);
-              if (info) info.isClickable = true;
-            }
-            // Release the remote object to prevent leaks
-            await cdpClient.send("Runtime.releaseObject", { objectId }, sessionId).catch(() => {});
-          } catch { /* ignore — some nodes can't be resolved */ }
-        }));
-      }
-    } catch {
-      // Non-critical — IDs and clickability are nice-to-have
-    }
+    // 6. FR-004 + FR-005: Enrich nodes with HTML attributes and click listeners
+    await this._enrichNodeMetadata(cdpClient, sessionId);
 
     // Phase 3: FR-001 — detect scrollable containers (1 CDP call total)
     try {
@@ -564,6 +497,101 @@ export class A11yTreeProcessor {
     }
 
     return visualMap;
+  }
+
+  /**
+   * FR-H5: Enrich nodeInfoMap with HTML attributes (IDs, onclick) and event listeners.
+   * Phase 1: DOM.describeNode for HTML IDs + inline onclick detection
+   * Phase 2: DOMDebugger.getEventListeners for non-interactive nodes (mousedown, click, pointerdown)
+   * Called from both refreshPrecomputed() and getTree() so read_page always has full data.
+   */
+  private async _enrichNodeMetadata(cdpClient: CdpClient, sessionId: string): Promise<void> {
+    const POTENTIALLY_CLICKABLE_ROLES = new Set(["columnheader", "rowheader", "cell", "generic", "listitem"]);
+    try {
+      const interactiveNodes: number[] = [];
+      const checkClickNodes: number[] = [];
+      for (const [backendNodeId, info] of this.nodeInfoMap) {
+        if (INTERACTIVE_ROLES.has(info.role) || CONTEXT_ROLES.has(info.role)) {
+          interactiveNodes.push(backendNodeId);
+        } else if (POTENTIALLY_CLICKABLE_ROLES.has(info.role)) {
+          interactiveNodes.push(backendNodeId);
+          checkClickNodes.push(backendNodeId);
+        }
+      }
+
+      // Phase 1: Batch DOM.describeNode — extract HTML IDs + inline onclick
+      if (interactiveNodes.length > 0 && interactiveNodes.length <= 500) {
+        await Promise.allSettled(interactiveNodes.map(async (backendNodeId) => {
+          try {
+            const desc = await cdpClient.send<{ node: { attributes?: string[] } }>(
+              "DOM.describeNode", { backendNodeId, depth: 0 }, sessionId,
+            );
+            const attrs = desc.node?.attributes;
+            if (!attrs) return;
+            const info = this.nodeInfoMap.get(backendNodeId);
+            if (!info) return;
+            for (let i = 0; i < attrs.length; i += 2) {
+              if (attrs[i] === "id" && attrs[i + 1]) {
+                info.htmlId = attrs[i + 1];
+              }
+              if (attrs[i] === "onclick") {
+                info.isClickable = true;
+              }
+              if (attrs[i] === "target" && attrs[i + 1]) {
+                info.linkTarget = attrs[i + 1];
+              }
+            }
+          } catch { /* ignore — text nodes etc. don't support describeNode */ }
+        }));
+      }
+
+      // Phase 2: DOMDebugger.getEventListeners for non-interactive nodes without onclick attribute.
+      // Detects addEventListener, React synthetic events, jQuery — anything that registered a click handler.
+      const clickCandidates = checkClickNodes.filter(id => !this.nodeInfoMap.get(id)?.isClickable);
+      if (clickCandidates.length > 0 && clickCandidates.length <= 200) {
+        await Promise.allSettled(clickCandidates.map(async (backendNodeId) => {
+          try {
+            const resolved = await cdpClient.send<{ object: { objectId?: string } }>(
+              "DOM.resolveNode", { backendNodeId }, sessionId,
+            );
+            const objectId = resolved.object?.objectId;
+            if (!objectId) return;
+            const result = await cdpClient.send<{ listeners: Array<{ type: string }> }>(
+              "DOMDebugger.getEventListeners", { objectId }, sessionId,
+            );
+            if (result.listeners?.some(l => l.type === "click" || l.type === "mousedown" || l.type === "pointerdown")) {
+              const info = this.nodeInfoMap.get(backendNodeId);
+              if (info) info.isClickable = true;
+            }
+            await cdpClient.send("Runtime.releaseObject", { objectId }, sessionId).catch(() => {});
+          } catch { /* ignore — some nodes can't be resolved */ }
+        }));
+      }
+      // Phase 3: FR-H5 — Enrich unnamed clickable generics with innerText.
+      // Separate pass with fresh resolveNode to avoid stale objectId issues.
+      const unnamedClickables = [...this.nodeInfoMap.entries()]
+        .filter(([, info]) => info.isClickable && !info.name && POTENTIALLY_CLICKABLE_ROLES.has(info.role));
+      if (unnamedClickables.length > 0 && unnamedClickables.length <= 100) {
+        await Promise.allSettled(unnamedClickables.map(async ([backendNodeId, info]) => {
+          try {
+            const resolved = await cdpClient.send<{ object: { objectId?: string } }>(
+              "DOM.resolveNode", { backendNodeId }, sessionId,
+            );
+            const oid = resolved.object?.objectId;
+            if (!oid) return;
+            const textResult = await cdpClient.send<{ result: { value?: string } }>(
+              "Runtime.callFunctionOn",
+              { functionDeclaration: "function(){return(this.innerText||this.textContent||'').slice(0,80)}", objectId: oid, returnByValue: true },
+              sessionId,
+            );
+            if (textResult.result.value) info.name = textResult.result.value;
+            await cdpClient.send("Runtime.releaseObject", { objectId: oid }, sessionId).catch(() => {});
+          } catch { /* non-critical */ }
+        }));
+      }
+    } catch {
+      // Non-critical — IDs and clickability are nice-to-have
+    }
   }
 
   private computeIsClickable(
@@ -784,6 +812,10 @@ export class A11yTreeProcessor {
         }
       }
     }
+
+    // FR-H5: Enrich nodes with HTML attributes + event listener detection.
+    // Runs in getTree() so read_page(filter: "interactive") sees clickable divs/listItems.
+    await this._enrichNodeMetadata(cdpClient, sessionId);
 
     // Fetch visual data only for "visual" filter — zero overhead for other filters
     let visualMap: Map<number, VisualInfo> | undefined;
@@ -1543,7 +1575,9 @@ export class A11yTreeProcessor {
     const idSuffix = htmlId ? `#${htmlId}` : "";
     let line = `${indent}[e${refNum}] ${role}${idSuffix}`;
 
-    const name = node.name?.value as string | undefined;
+    // FR-H5: Prefer AXNode name, fall back to nodeInfoMap (enriched by Phase 3 for clickable generics)
+    const name = (node.name?.value as string | undefined)
+      || (backendNodeId !== undefined ? this.nodeInfoMap.get(backendNodeId)?.name : undefined);
     if (name) {
       line += ` "${name}"`;
     }
