@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { waitForHandler, waitForSchema } from "./wait-for.js";
+import { waitForHandler, waitForSchema, extractSelector } from "./wait-for.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { WaitForParams } from "./wait-for.js";
 
@@ -419,5 +419,118 @@ describe("waitForHandler — error handling", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("CDP connection lost");
     expect(result._meta?.method).toBe("wait_for");
+  });
+});
+
+// --- extractSelector unit tests (FR-006) ---
+
+describe("extractSelector", () => {
+  it("should extract selector from querySelector with single quotes", () => {
+    expect(extractSelector("document.querySelector('#myId')?.textContent")).toBe("#myId");
+  });
+
+  it("should extract selector from querySelector with double quotes", () => {
+    expect(extractSelector('document.querySelector("[data-test] .async-result")')).toBe('[data-test] .async-result');
+  });
+
+  it("should extract selector from getElementById and prefix with #", () => {
+    expect(extractSelector("document.getElementById('loaded') !== null")).toBe("#loaded");
+  });
+
+  it("should return null when no querySelector or getElementById is present", () => {
+    expect(extractSelector("window.ready === true")).toBeNull();
+    expect(extractSelector("false")).toBeNull();
+  });
+});
+
+// --- JS timeout diagnostics tests (FR-006) ---
+
+describe("waitForHandler — js timeout diagnostics", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("should show 'element not found' diagnostic when querySelector target does not exist", async () => {
+    let callCount = 0;
+    const { cdpClient } = createMockCdp({});
+    (cdpClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (_method: string, params: Record<string, unknown>) => {
+      callCount++;
+      // Polling calls return false (expression never met)
+      if (params?.expression && typeof params.expression === "string" && params.expression.includes(".async-result")) {
+        return { result: { value: false } };
+      }
+      // Diagnostic call: element does not exist
+      if (params?.expression && typeof params.expression === "string" && params.expression.includes("!== null")) {
+        return { result: { value: false } };
+      }
+      return { result: { value: false } };
+    });
+
+    const params: WaitForParams = {
+      condition: "js",
+      expression: "document.querySelector('[data-test=\"2.1\"] .async-result')?.textContent?.length > 0",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Timeout after 500ms");
+    expect(result.content[0].text).toContain("element not found in DOM");
+    expect(result.content[0].text).toContain('[data-test="2.1"] .async-result');
+  });
+
+  it("should show 'element exists but condition not met' when element is present", async () => {
+    const { cdpClient } = createMockCdp({});
+    (cdpClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (_method: string, params: Record<string, unknown>) => {
+      if (params?.expression && typeof params.expression === "string" && params.expression.includes("!== null")) {
+        // Diagnostic call: element exists
+        return { result: { value: true } };
+      }
+      // Polling calls: condition never met
+      return { result: { value: false } };
+    });
+
+    const params: WaitForParams = {
+      condition: "js",
+      expression: "document.querySelector('#myEl')?.textContent === 'done'",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Timeout after 500ms");
+    expect(result.content[0].text).toContain("Element exists but condition not met");
+  });
+
+  it("should NOT add diagnostic when expression has no querySelector or getElementById", async () => {
+    const { cdpClient } = createMockCdp({
+      "Runtime.evaluate": { result: { value: false } },
+    });
+
+    const params: WaitForParams = {
+      condition: "js",
+      expression: "window.ready === true",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Timeout after 500ms");
+    expect(result.content[0].text).toContain("Last evaluation returned: false");
+    // No Debug line
+    expect(result.content[0].text).not.toContain("Debug:");
   });
 });

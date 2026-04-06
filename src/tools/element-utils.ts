@@ -156,16 +156,29 @@ export async function resolveElement(
  * Build a contextual "did you mean?" error message for a missing ref.
  * When roleFilter is provided, only suggests elements matching those roles.
  */
+// Roles that are useless as suggestions when their name is empty (BUG-013)
+const CONTAINER_ROLES = new Set(["generic", "group", "none", "Section", "div"]);
+
 export function buildRefNotFoundError(
   ref: string,
   roleFilter?: Set<string>,
 ): string {
   const suggestion = a11yTree.findClosestRef(ref, roleFilter);
-  let errorText = `Element ${ref} not found.`;
-  if (suggestion) {
-    errorText += ` Did you mean ${suggestion.ref} (${suggestion.role} '${suggestion.name}')?`;
+
+  // FR-004 + BUG-013: Detect stale / useless suggestions.
+  // — no suggestion at all
+  // — suggestion ref equals the requested ref (safety-net)
+  // — suggestion is an unnamed container (e.g. generic '') — not actionable
+  const isUseless =
+    !suggestion ||
+    suggestion.ref === ref ||
+    (!suggestion.name && CONTAINER_ROLES.has(suggestion.role));
+
+  if (isUseless) {
+    return `Element ${ref} not found — refs may be stale after page navigation or DOM changes. Use read_page to get fresh refs, or use a CSS selector instead.`;
   }
-  return errorText;
+
+  return `Element ${ref} not found. Did you mean ${suggestion.ref} (${suggestion.role} '${suggestion.name}')?`;
 }
 
 export { RefNotFoundError } from "../cache/a11y-tree.js";

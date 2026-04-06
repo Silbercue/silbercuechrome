@@ -19,9 +19,18 @@ vi.mock("./element-utils.js", () => {
   };
 });
 
+vi.mock("../cache/a11y-tree.js", () => ({
+  a11yTree: {
+    classifyRef: vi.fn().mockReturnValue("clickable"),
+    getInteractiveElements: vi.fn().mockReturnValue([]),
+  },
+}));
+
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
+import { a11yTree } from "../cache/a11y-tree.js";
 const mockResolveElement = vi.mocked(resolveElement);
 const mockBuildRefNotFoundError = vi.mocked(buildRefNotFoundError);
+const mockGetInteractiveElements = vi.mocked(a11yTree.getInteractiveElements);
 
 // --- Mock CDP client ---
 
@@ -605,5 +614,70 @@ describe("clickHandler", () => {
     expect(firstMoveIdx).toBeLessThan(pressedIdx);
 
     vi.useRealTimers();
+  });
+
+  // --- FR-008: Interactive element suggestions on CSS selector failure ---
+
+  it("should include available interactive elements when CSS selector not found (FR-008)", async () => {
+    mockResolveElement.mockRejectedValue(
+      new Error("Element not found for selector '#t2-1-verify'"),
+    );
+    mockGetInteractiveElements.mockReturnValue([
+      "[e52] button 'Load Data'",
+      "[e53] textbox 'Enter loaded value...'",
+      "[e54] button 'Verify'",
+    ]);
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ selector: "#t2-1-verify" }, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("Element not found for selector '#t2-1-verify'");
+    expect(text).toContain("Available interactive elements:");
+    expect(text).toContain("[e52] button 'Load Data'");
+    expect(text).toContain("[e53] textbox 'Enter loaded value...'");
+    expect(text).toContain("[e54] button 'Verify'");
+    expect(mockGetInteractiveElements).toHaveBeenCalledWith(8);
+  });
+
+  it("should not include element hints when no interactive elements are known (FR-008)", async () => {
+    mockResolveElement.mockRejectedValue(
+      new Error("Element not found for selector '.nonexistent'"),
+    );
+    mockGetInteractiveElements.mockReturnValue([]);
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ selector: ".nonexistent" }, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toBe("click failed: Element not found for selector '.nonexistent'");
+    expect(text).not.toContain("Available interactive elements");
+  });
+
+  it("should not include element hints for non-selector errors (FR-008)", async () => {
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 42,
+      objectId: "obj-42",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "css",
+      resolvedSessionId: "s1",
+    });
+    mockGetInteractiveElements.mockReturnValue([
+      "[e1] button 'Click me'",
+    ]);
+    const { cdpClient } = createMockCdp({
+      "DOM.scrollIntoViewIfNeeded": () => {
+        throw new Error("Could not find node with given id");
+      },
+    });
+
+    const result = await clickHandler({ selector: "#btn" }, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("Available interactive elements");
   });
 });

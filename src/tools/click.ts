@@ -197,8 +197,19 @@ export async function clickHandler(
     }
     const elapsedMs = Math.round(performance.now() - start);
     const elementHint = params.ref ?? params.selector;
+    let errorText = wrapCdpError(err, "click", elementHint);
+
+    // FR-008: When CSS selector not found, suggest available interactive elements
+    const message = err instanceof Error ? err.message : String(err);
+    if (params.selector && message.includes("Element not found for selector")) {
+      const elements = a11yTree.getInteractiveElements(8);
+      if (elements.length > 0) {
+        errorText += "\nAvailable interactive elements:\n  " + elements.join("\n  ");
+      }
+    }
+
     return {
-      content: [{ type: "text", text: wrapCdpError(err, "click", elementHint) }],
+      content: [{ type: "text", text: errorText }],
       isError: true,
       _meta: { elapsedMs, method: "click" },
     };

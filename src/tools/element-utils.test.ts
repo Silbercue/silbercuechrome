@@ -276,10 +276,91 @@ describe("buildRefNotFoundError", () => {
     expect(error).toContain("textbox");
   });
 
-  it("returns plain error message when no refs exist", () => {
+  it("returns stale-refs message when no refs exist (findClosestRef returns null)", () => {
     const error = buildRefNotFoundError("e1");
     expect(error).toContain("e1 not found");
+    expect(error).toContain("refs may be stale");
+    expect(error).toContain("read_page");
     expect(error).not.toContain("Did you mean");
+  });
+
+  it("returns stale-refs message when suggestion ref equals requested ref", async () => {
+    // This is a safety-net case — if the ref is in the reverseMap but
+    // resolveRef failed elsewhere, the suggestion would echo back the same ref.
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "OK" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const treeCdp = mockCdpForTree(nodes);
+    await a11yTree.getTree(treeCdp, "s1");
+
+    // e2 exists in the tree — findClosestRef("e2") returns { ref: "e2", ... }
+    const error = buildRefNotFoundError("e2");
+    expect(error).toContain("e2 not found");
+    expect(error).toContain("refs may be stale");
+    expect(error).not.toContain("Did you mean");
+  });
+
+  it("returns stale-refs message when suggestion is an unnamed container (generic '')", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "generic" },
+        name: { type: "computedString", value: "" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const treeCdp = mockCdpForTree(nodes);
+    await a11yTree.getTree(treeCdp, "s1");
+
+    // e99 doesn't exist — closest is e2 (generic '') which is useless
+    const error = buildRefNotFoundError("e99");
+    expect(error).toContain("e99 not found");
+    expect(error).toContain("refs may be stale");
+    expect(error).not.toContain("Did you mean");
+  });
+
+  it("returns 'Did you mean' when suggestion is a meaningful element", async () => {
+    const nodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 100,
+        childIds: ["2"],
+      }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "link" },
+        name: { type: "computedString", value: "Home" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const treeCdp = mockCdpForTree(nodes);
+    await a11yTree.getTree(treeCdp, "s1");
+
+    const error = buildRefNotFoundError("e99");
+    expect(error).toContain("e99 not found");
+    expect(error).toContain("Did you mean e2 (link 'Home')");
+    expect(error).not.toContain("stale");
   });
 });
 

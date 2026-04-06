@@ -1505,6 +1505,28 @@ export class A11yTreeProcessor {
   }
 
   /**
+   * FR-008: Return a compact list of known interactive elements for error hints.
+   * Used when a CSS selector fails to provide the LLM with actionable alternatives.
+   * ZERO CDP calls — purely in-memory from cached nodeInfoMap.
+   */
+  getInteractiveElements(limit = 8): string[] {
+    if (this.reverseMap.size === 0) return [];
+
+    const lines: string[] = [];
+    const sortedRefs = [...this.reverseMap.entries()].sort((a, b) => a[0] - b[0]);
+
+    for (const [refNum, backendNodeId] of sortedRefs) {
+      const info = this.nodeInfoMap.get(backendNodeId);
+      if (!info || !INTERACTIVE_ROLES.has(info.role)) continue;
+      const name = info.name ? ` '${info.name}'` : "";
+      lines.push(`[e${refNum}] ${info.role}${name}`);
+      if (lines.length >= limit) break;
+    }
+
+    return lines;
+  }
+
+  /**
    * Story 13a.2: Enriched compact snapshot with headings, alerts, status
    * plus interactive elements. ZERO CDP calls — purely in-memory.
    */

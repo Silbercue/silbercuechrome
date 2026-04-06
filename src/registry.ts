@@ -428,7 +428,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors.",
+      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
       {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,
@@ -493,7 +493,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "click",
-      "Click an element by A11y-Tree ref (e.g. 'e5') or CSS selector. Returns immediately after click — use wait_for if the click triggers navigation or async content loading.",
+      "Click an element by A11y-Tree ref (e.g. 'e5') or CSS selector. Dispatches the full pointer event chain (pointerdown/mousedown/pointerup/mouseup/click) — works with custom widgets that JS element.click() misses. Returns immediately after click — use wait_for if the click triggers navigation or async content loading.",
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,

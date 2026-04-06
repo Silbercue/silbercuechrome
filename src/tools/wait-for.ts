@@ -203,6 +203,56 @@ async function waitForJs(
   return { met: false, elapsedMs: Math.round(performance.now() - start), lastValue };
 }
 
+// --- JS timeout diagnostics (FR-006) ---
+
+/**
+ * Extract the first CSS selector from a querySelector/getElementById call in a JS expression.
+ * Returns the CSS selector string, or null if none found.
+ */
+export function extractSelector(expression: string): string | null {
+  // Match querySelector('...') or querySelector("...")
+  const qsMatch = expression.match(/querySelector\(\s*(['"])(.*?)\1\s*\)/);
+  if (qsMatch) return qsMatch[2];
+
+  // Match getElementById('...') or getElementById("...")
+  const idMatch = expression.match(/getElementById\(\s*(['"])(.*?)\1\s*\)/);
+  if (idMatch) return `#${idMatch[2]}`;
+
+  return null;
+}
+
+/**
+ * After a JS wait_for timeout, check if the extracted selector's element exists in the DOM.
+ * Returns a diagnostic line or empty string if no selector was found.
+ */
+async function jsTimeoutDiagnostic(
+  cdpClient: CdpClient,
+  sessionId: string,
+  expression: string,
+): Promise<string> {
+  const selector = extractSelector(expression);
+  if (!selector) return "";
+
+  try {
+    const result = await cdpClient.send<{ result: { value: boolean } }>(
+      "Runtime.evaluate",
+      {
+        expression: `document.querySelector(${JSON.stringify(selector)}) !== null`,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+
+    if (result.result.value === true) {
+      return `\nDebug: Element exists but condition not met (content may still be loading).`;
+    }
+    return `\nDebug: querySelector('${selector}') returned null — element not found in DOM.`;
+  } catch {
+    // If CDP call fails, skip diagnostics
+    return "";
+  }
+}
+
 // --- Main handler (Task 5) ---
 
 export async function waitForHandler(
@@ -324,11 +374,15 @@ export async function waitForHandler(
             _meta: { elapsedMs: result.elapsedMs, method: "wait_for", condition: "js" },
           };
         }
+
+        // FR-006: Append diagnostic info when a querySelector/getElementById is detected
+        const diagnostic = await jsTimeoutDiagnostic(cdpClient, sessionId!, params.expression!);
+
         return {
           content: [
             {
               type: "text",
-              text: `Timeout after ${params.timeout}ms waiting for JS expression to return true. Last evaluation returned: ${JSON.stringify(result.lastValue)}`,
+              text: `Timeout after ${params.timeout}ms waiting for JS expression to return true. Last evaluation returned: ${JSON.stringify(result.lastValue)}${diagnostic}`,
             },
           ],
           isError: true,
