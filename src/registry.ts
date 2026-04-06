@@ -54,11 +54,18 @@ import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hooks.js";
+import { a11yTree } from "./cache/a11y-tree.js";
+
+// Story 13.1: Tools whose response IS page context — no ambient injection needed
+const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot"]);
 
 export class ToolRegistry {
   private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
+
+  // Story 13.1: Ambient Page Context — track which cache version was last sent
+  private _lastSentCacheVersion = -1;
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
@@ -139,6 +146,8 @@ export class ToolRegistry {
     }
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
+    // Story 13.1: Ambient Page Context — inject after action, before metrics
+    this._injectAmbientContext(result, name);
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
       result._meta.suggestion = suggestionText;
@@ -154,6 +163,25 @@ export class ToolRegistry {
       }
     }
     return result;
+  }
+
+  /**
+   * Story 13.1: Ambient Page Context — inject compact page snapshot into response
+   * if the a11y cache has changed since the last response. Skips tools that ARE
+   * page context (read_page, dom_snapshot, screenshot) and error responses.
+   */
+  private _injectAmbientContext(result: ToolResponse, toolName: string): void {
+    if (PAGE_CONTEXT_TOOLS.has(toolName)) return;
+    if (result.isError) return;
+
+    const currentVersion = a11yTree.cacheVersion;
+    if (currentVersion === this._lastSentCacheVersion) return;
+
+    const snapshot = a11yTree.getCompactSnapshot();
+    if (!snapshot) return;
+
+    result.content.push({ type: "text", text: snapshot });
+    this._lastSentCacheVersion = currentVersion;
   }
 
   /**
@@ -294,6 +322,8 @@ export class ToolRegistry {
         // Story 12.1: Inject response_bytes even without sessionDefaults
         return async (params: T): Promise<ToolResponse> => {
           const result = await dialogWrapped(params);
+          // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
+          this._injectAmbientContext(result, toolName ?? "unknown");
           injectResponseBytes(result);
           return result;
         };
@@ -318,6 +348,8 @@ export class ToolRegistry {
         // Resolve defaults into params
         const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
         const result = await dialogWrapped(resolvedParams);
+        // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
+        this._injectAmbientContext(result, name);
         // Inject auto-promote suggestion into _meta
         if (suggestionText && result._meta) {
           result._meta.suggestion = suggestionText;

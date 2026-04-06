@@ -165,6 +165,16 @@ export class A11yTreeProcessor {
   private _precomputedSessionId = "";
   private _precomputedDepth = 3;
 
+  // Story 13.1: Ambient Page Context — cache version counter
+  // Increments on every cache change (refresh, reset, invalidation).
+  // Registry compares this against _lastSentVersion to decide whether to attach page context.
+  private _cacheVersion = 0;
+
+  /** Story 13.1: Current cache version — increments on every state change */
+  get cacheVersion(): number {
+    return this._cacheVersion;
+  }
+
   reset(): void {
     this.refMap.clear();
     this.reverseMap.clear();
@@ -172,6 +182,7 @@ export class A11yTreeProcessor {
     this.sessionNodeMap.clear();
     this.nextRef = 1;
     this.lastUrl = "";
+    this._cacheVersion++;
     this.invalidatePrecomputed();
   }
 
@@ -181,6 +192,7 @@ export class A11yTreeProcessor {
     this._precomputedUrl = "";
     this._precomputedSessionId = "";
     this._precomputedDepth = 3;
+    this._cacheVersion++;
   }
 
   /** Hintergrund-Refresh: Laedt A11y-Tree und speichert als Cache */
@@ -233,8 +245,9 @@ export class A11yTreeProcessor {
     this._precomputedUrl = currentUrl;
     this._precomputedSessionId = sessionId;
     this._precomputedDepth = 3;
+    this._cacheVersion++;
 
-    debug("A11yTreeProcessor: precomputed cache refreshed, %d nodes cached", result.nodes.length);
+    debug("A11yTreeProcessor: precomputed cache refreshed, %d nodes cached (v%d)", result.nodes.length, this._cacheVersion);
   }
 
   /** Prueft ob ein gueltiger Precomputed-Cache vorliegt */
@@ -1403,6 +1416,47 @@ export class A11yTreeProcessor {
       }
     }
     return `e${closest}`;
+  }
+
+  /**
+   * Story 13.1: Ambient Page Context — returns a compact snapshot of interactive
+   * elements from the cached nodeInfoMap. ZERO CDP calls — purely in-memory.
+   * Returns null if no cache is available.
+   *
+   * @param maxTokens - Token budget for the snapshot (default 2000)
+   */
+  getCompactSnapshot(maxTokens = 2000): string | null {
+    if (this.reverseMap.size === 0) return null;
+
+    const lines: string[] = [];
+    let tokensSoFar = 0;
+
+    // Iterate reverseMap (refNumber → backendNodeId) in ascending ref order
+    const sortedRefs = [...this.reverseMap.entries()].sort((a, b) => a[0] - b[0]);
+
+    for (const [refNum, backendNodeId] of sortedRefs) {
+      const info = this.nodeInfoMap.get(backendNodeId);
+      if (!info) continue;
+      // Only interactive elements for compact output
+      if (!INTERACTIVE_ROLES.has(info.role)) continue;
+
+      const name = info.name ? ` '${info.name}'` : "";
+      const line = `[e${refNum}] ${info.role}${name}`;
+      const lineTokens = Math.ceil(line.length / 4);
+
+      if (tokensSoFar + lineTokens > maxTokens) {
+        lines.push(`... (${sortedRefs.filter(([, id]) => INTERACTIVE_ROLES.has(this.nodeInfoMap.get(id)?.role ?? "")).length - lines.length} more)`);
+        break;
+      }
+
+      lines.push(line);
+      tokensSoFar += lineTokens;
+    }
+
+    if (lines.length === 0) return null;
+
+    const url = this.lastUrl ? ` — ${shortenUrl(this.lastUrl)}` : "";
+    return `--- Page Context (${lines.length} interactive)${url} ---\n${lines.join("\n")}`;
   }
 }
 

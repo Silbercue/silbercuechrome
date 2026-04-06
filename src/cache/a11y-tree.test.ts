@@ -2092,4 +2092,153 @@ describe("A11yTreeProcessor", () => {
       expect(processor.refCount).toBeGreaterThanOrEqual(2);
     });
   });
+
+  // --- Story 13.1: Ambient Page Context ---
+
+  describe("cacheVersion", () => {
+    it("starts at 0 and increments on reset()", () => {
+      const v0 = processor.cacheVersion;
+      processor.reset();
+      expect(processor.cacheVersion).toBeGreaterThan(v0);
+    });
+
+    it("increments on invalidatePrecomputed()", () => {
+      const v0 = processor.cacheVersion;
+      processor.invalidatePrecomputed();
+      expect(processor.cacheVersion).toBeGreaterThan(v0);
+    });
+
+    it("increments on refreshPrecomputed()", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test" },
+          backendDOMNodeId: 1,
+          childIds: [],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      const v0 = processor.cacheVersion;
+      await processor.refreshPrecomputed(cdp, "s1");
+      expect(processor.cacheVersion).toBeGreaterThan(v0);
+    });
+  });
+
+  describe("getCompactSnapshot", () => {
+    it("returns null for empty processor", () => {
+      expect(processor.getCompactSnapshot()).toBeNull();
+    });
+
+    it("returns compact snapshot of interactive elements after getTree()", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test Page" },
+          backendDOMNodeId: 1,
+          childIds: ["2", "3", "4"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Submit" },
+          backendDOMNodeId: 2,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "heading" },
+          name: { type: "computedString", value: "Title" },
+          backendDOMNodeId: 3,
+        }),
+        makeNode({
+          nodeId: "4",
+          parentId: "1",
+          role: { type: "role", value: "textbox" },
+          name: { type: "computedString", value: "Email" },
+          backendDOMNodeId: 4,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      const snapshot = processor.getCompactSnapshot();
+      expect(snapshot).not.toBeNull();
+      // Should contain interactive elements (button, textbox) but NOT heading
+      expect(snapshot).toContain("button 'Submit'");
+      expect(snapshot).toContain("textbox 'Email'");
+      expect(snapshot).not.toContain("heading");
+      // Should have header
+      expect(snapshot).toContain("Page Context");
+      expect(snapshot).toContain("interactive");
+    });
+
+    it("respects maxTokens budget", async () => {
+      // Create many interactive elements
+      const children: AXNode[] = [];
+      for (let i = 2; i <= 50; i++) {
+        children.push(
+          makeNode({
+            nodeId: `${i}`,
+            parentId: "1",
+            role: { type: "role", value: "button" },
+            name: { type: "computedString", value: `Button number ${i} with a longer name` },
+            backendDOMNodeId: i,
+          }),
+        );
+      }
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test" },
+          backendDOMNodeId: 1,
+          childIds: children.map((c) => c.nodeId),
+        }),
+        ...children,
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      // Very tight budget — should truncate
+      const snapshot = processor.getCompactSnapshot(20);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot).toContain("... (");
+      expect(snapshot).toContain("more)");
+    });
+
+    it("excludes non-interactive roles", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test" },
+          backendDOMNodeId: 1,
+          childIds: ["2", "3"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "paragraph" },
+          name: { type: "computedString", value: "Some text" },
+          backendDOMNodeId: 2,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "generic" },
+          name: { type: "computedString", value: "" },
+          backendDOMNodeId: 3,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      // No interactive elements → null
+      const snapshot = processor.getCompactSnapshot();
+      expect(snapshot).toBeNull();
+    });
+  });
 });
