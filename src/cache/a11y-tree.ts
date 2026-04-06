@@ -100,6 +100,16 @@ const INTERACTIVE_ROLES = new Set([
   "treeitem",
 ]);
 
+// Story 13a.2: Roles included in enriched compact snapshot for LLM orientation
+const CONTEXT_ROLES = new Set([
+  "heading",
+  "alert",
+  "status",
+]);
+
+// Story 13a.2: Element classification for pre-click ambient context decision
+export type ElementClassification = "widget-state" | "clickable" | "disabled" | "static";
+
 // --- Element Classification for Downsampling (D2Snap) ---
 
 type ElementClass = "interactive" | "content" | "container";
@@ -143,6 +153,28 @@ const LANDMARK_ROLES = new Set([
   "region",
 ]);
 
+// Story 13a.2: Extract NodeInfo from AXNode including widget-state properties
+function extractNodeInfo(node: AXNode): NodeInfo {
+  const info: NodeInfo = {
+    role: (node.role?.value as string) ?? "",
+    name: (node.name?.value as string) ?? "",
+  };
+  if (node.properties) {
+    for (const prop of node.properties) {
+      switch (prop.name) {
+        case "expanded": info.expanded = prop.value.value as boolean; break;
+        case "hasPopup": info.hasPopup = prop.value.value as string; break;
+        case "checked": info.checked = prop.value.value as boolean; break;
+        case "pressed": info.pressed = prop.value.value as boolean; break;
+        case "disabled": info.disabled = prop.value.value as boolean; break;
+        case "focusable": info.focusable = prop.value.value as boolean; break;
+        case "level": info.level = prop.value.value as number; break;
+      }
+    }
+  }
+  return info;
+}
+
 // --- A11yTreeProcessor ---
 
 export interface ClosestRefSuggestion {
@@ -151,10 +183,24 @@ export interface ClosestRefSuggestion {
   name: string;       // e.g. "Absenden"
 }
 
+// Story 13a.2: Extended node info for pre-click classification and enriched snapshots
+interface NodeInfo {
+  role: string;
+  name: string;
+  expanded?: boolean;
+  hasPopup?: string;    // e.g. "menu", "dialog", "listbox"
+  checked?: boolean;
+  pressed?: boolean;
+  disabled?: boolean;
+  focusable?: boolean;
+  level?: number;       // heading level (1-6)
+}
+
 export class A11yTreeProcessor {
   private refMap = new Map<number, number>(); // backendDOMNodeId → refNumber
   private reverseMap = new Map<number, number>(); // refNumber → backendDOMNodeId
-  private nodeInfoMap = new Map<number, { role: string; name: string }>(); // backendDOMNodeId → { role, name }
+  // Story 13a.2: Extended with widget-state props for pre-click classification
+  private nodeInfoMap = new Map<number, NodeInfo>(); // backendDOMNodeId → NodeInfo
   private sessionNodeMap = new Map<string, Set<number>>(); // sessionId → Set<backendDOMNodeId>
   private nextRef = 1;
   private lastUrl = "";
@@ -229,10 +275,7 @@ export class A11yTreeProcessor {
         this.refMap.set(node.backendDOMNodeId, refNum);
         this.reverseMap.set(refNum, node.backendDOMNodeId);
       }
-      this.nodeInfoMap.set(node.backendDOMNodeId, {
-        role: (node.role?.value as string) ?? "",
-        name: (node.name?.value as string) ?? "",
-      });
+      this.nodeInfoMap.set(node.backendDOMNodeId, extractNodeInfo(node));
       if (!this.sessionNodeMap.has(sessionId)) {
         this.sessionNodeMap.set(sessionId, new Set());
       }
@@ -529,10 +572,7 @@ export class A11yTreeProcessor {
         this.reverseMap.set(refNum, node.backendDOMNodeId);
       }
       // Always update nodeInfoMap with latest role/name
-      this.nodeInfoMap.set(node.backendDOMNodeId, {
-        role: (node.role?.value as string) ?? "",
-        name: (node.name?.value as string) ?? "",
-      });
+      this.nodeInfoMap.set(node.backendDOMNodeId, extractNodeInfo(node));
       // Track which session owns this node (H1: for cleanup on detach)
       if (!this.sessionNodeMap.has(sessionId)) {
         this.sessionNodeMap.set(sessionId, new Set());
@@ -1419,44 +1459,90 @@ export class A11yTreeProcessor {
   }
 
   /**
-   * Story 13.1: Ambient Page Context — returns a compact snapshot of interactive
-   * elements from the cached nodeInfoMap. ZERO CDP calls — purely in-memory.
-   * Returns null if no cache is available.
-   *
-   * @param maxTokens - Token budget for the snapshot (default 2000)
+   * Story 13a.2: Classify a ref for pre-click ambient context decision.
+   * Returns classification based on cached AXNode properties (0 CDP calls).
+   */
+  classifyRef(ref: string): ElementClassification {
+    const match = ref.match(/^e?(\d+)$/);
+    if (!match) return "static";
+    const refNum = parseInt(match[1], 10);
+    const backendNodeId = this.reverseMap.get(refNum);
+    if (backendNodeId === undefined) return "static";
+    const info = this.nodeInfoMap.get(backendNodeId);
+    if (!info) return "static";
+    if (info.disabled) return "disabled";
+    // hasPopup can be "false" (string) — only classify as widget-state for truthy popup types
+    if (info.expanded !== undefined
+      || (info.hasPopup !== undefined && info.hasPopup !== "false")
+      || info.checked !== undefined
+      || info.pressed !== undefined) return "widget-state";
+    if (INTERACTIVE_ROLES.has(info.role)) return "clickable";
+    return "static";
+  }
+
+  /**
+   * Story 13a.2: Enriched compact snapshot with headings, alerts, status
+   * plus interactive elements. ZERO CDP calls — purely in-memory.
    */
   getCompactSnapshot(maxTokens = 2000): string | null {
     if (this.reverseMap.size === 0) return null;
 
-    const lines: string[] = [];
+    const contextLines: string[] = [];
+    const interactiveLines: string[] = [];
     let tokensSoFar = 0;
 
-    // Iterate reverseMap (refNumber → backendNodeId) in ascending ref order
     const sortedRefs = [...this.reverseMap.entries()].sort((a, b) => a[0] - b[0]);
 
     for (const [refNum, backendNodeId] of sortedRefs) {
       const info = this.nodeInfoMap.get(backendNodeId);
       if (!info) continue;
-      // Only interactive elements for compact output
+
+      let line: string | null = null;
+
+      // Story 13a.2: Context roles (headings, alerts, status) for orientation
+      if (CONTEXT_ROLES.has(info.role)) {
+        if (info.role === "heading" && info.name) {
+          const lvl = info.level ?? 1;
+          line = `[h${lvl}] "${info.name}"`;
+        } else if ((info.role === "alert" || info.role === "status") && info.name) {
+          line = `[${info.role}] "${info.name}"`;
+        }
+        if (line) {
+          const lineTokens = Math.ceil(line.length / 4);
+          if (tokensSoFar + lineTokens <= maxTokens) {
+            contextLines.push(line);
+            tokensSoFar += lineTokens;
+          }
+        }
+        continue;
+      }
+
+      // Interactive elements (existing behavior)
       if (!INTERACTIVE_ROLES.has(info.role)) continue;
 
       const name = info.name ? ` '${info.name}'` : "";
-      const line = `[e${refNum}] ${info.role}${name}`;
+      line = `[e${refNum}] ${info.role}${name}`;
       const lineTokens = Math.ceil(line.length / 4);
 
       if (tokensSoFar + lineTokens > maxTokens) {
-        lines.push(`... (${sortedRefs.filter(([, id]) => INTERACTIVE_ROLES.has(this.nodeInfoMap.get(id)?.role ?? "")).length - lines.length} more)`);
+        const remaining = sortedRefs.filter(([, id]) => INTERACTIVE_ROLES.has(this.nodeInfoMap.get(id)?.role ?? "")).length - interactiveLines.length;
+        interactiveLines.push(`... (${remaining} more)`);
         break;
       }
 
-      lines.push(line);
+      interactiveLines.push(line);
       tokensSoFar += lineTokens;
     }
 
-    if (lines.length === 0) return null;
+    if (contextLines.length === 0 && interactiveLines.length === 0) return null;
 
     const url = this.lastUrl ? ` — ${shortenUrl(this.lastUrl)}` : "";
-    return `--- Page Context (${lines.length} interactive)${url} ---\n${lines.join("\n")}`;
+    const parts: string[] = [];
+    const counts = interactiveLines.length > 0 ? `${interactiveLines.length} interactive` : `${contextLines.length} context`;
+    parts.push(`--- Page Context (${counts})${url} ---`);
+    if (contextLines.length > 0) parts.push(...contextLines);
+    if (interactiveLines.length > 0) parts.push(...interactiveLines);
+    return parts.join("\n");
   }
 }
 

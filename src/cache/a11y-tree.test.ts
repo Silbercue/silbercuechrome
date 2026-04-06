@@ -2166,10 +2166,10 @@ describe("A11yTreeProcessor", () => {
 
       const snapshot = processor.getCompactSnapshot();
       expect(snapshot).not.toBeNull();
-      // Should contain interactive elements (button, textbox) but NOT heading
+      // Story 13a.2: Should contain interactive elements AND context roles (headings)
       expect(snapshot).toContain("button 'Submit'");
       expect(snapshot).toContain("textbox 'Email'");
-      expect(snapshot).not.toContain("heading");
+      expect(snapshot).toContain('[h1] "Title"'); // enriched: headings included
       // Should have header
       expect(snapshot).toContain("Page Context");
       expect(snapshot).toContain("interactive");
@@ -2236,9 +2236,220 @@ describe("A11yTreeProcessor", () => {
       const cdp = mockCdpClient(nodes);
       await processor.getTree(cdp, "s1");
 
-      // No interactive elements → null
+      // No interactive or context elements → null
       const snapshot = processor.getCompactSnapshot();
       expect(snapshot).toBeNull();
+    });
+  });
+
+  // --- Story 13a.2: classifyRef + Enriched Snapshot ---
+
+  describe("classifyRef", () => {
+    it("returns 'widget-state' for element with expanded property", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Toggle" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "expanded", value: { type: "boolean", value: false } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      // e1 = WebArea, e2 = button
+      expect(processor.classifyRef("e2")).toBe("widget-state");
+    });
+
+    it("returns 'disabled' for disabled element", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Disabled" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "disabled", value: { type: "boolean", value: true } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("disabled");
+    });
+
+    it("returns 'clickable' for interactive role without widget-state", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Simple" },
+          backendDOMNodeId: 2,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("clickable");
+    });
+
+    it("returns 'static' for non-interactive role", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "paragraph" },
+          name: { type: "computedString", value: "Text" },
+          backendDOMNodeId: 2,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("static");
+    });
+
+    it("returns 'widget-state' for element with hasPopup='menu'", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Menu" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "hasPopup", value: { type: "token", value: "menu" } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("widget-state");
+    });
+
+    it("returns 'clickable' (not widget-state) for hasPopup='false'", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "NoPopup" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "hasPopup", value: { type: "token", value: "false" } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("clickable");
+    });
+
+    it("returns 'widget-state' for element with checked property", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "checkbox" },
+          name: { type: "computedString", value: "Accept" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "checked", value: { type: "tristate", value: "false" } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("widget-state");
+    });
+
+    it("returns 'widget-state' for element with pressed property", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Toggle" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "pressed", value: { type: "tristate", value: "true" } }],
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+      expect(processor.classifyRef("e2")).toBe("widget-state");
+    });
+
+    it("returns 'static' for unknown ref", () => {
+      expect(processor.classifyRef("e999")).toBe("static");
+    });
+  });
+
+  describe("enriched getCompactSnapshot", () => {
+    it("includes alerts in snapshot", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2", "3"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "alert" },
+          name: { type: "computedString", value: "Error loading data" },
+          backendDOMNodeId: 2,
+        }),
+        makeNode({
+          nodeId: "3", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Retry" },
+          backendDOMNodeId: 3,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      const snapshot = processor.getCompactSnapshot();
+      expect(snapshot).toContain('[alert] "Error loading data"');
+      expect(snapshot).toContain("button 'Retry'");
+    });
+
+    it("includes heading with level", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2", "3"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "heading" },
+          name: { type: "computedString", value: "Dashboard" },
+          backendDOMNodeId: 2,
+          properties: [{ name: "level", value: { type: "integer", value: 2 } }],
+        }),
+        makeNode({
+          nodeId: "3", parentId: "1",
+          role: { type: "role", value: "link" },
+          name: { type: "computedString", value: "Home" },
+          backendDOMNodeId: 3,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      const snapshot = processor.getCompactSnapshot();
+      expect(snapshot).toContain('[h2] "Dashboard"');
+      expect(snapshot).toContain("link 'Home'");
+    });
+
+    it("context roles appear before interactive elements", async () => {
+      const nodes: AXNode[] = [
+        makeNode({ nodeId: "1", role: { type: "role", value: "WebArea" }, backendDOMNodeId: 1, childIds: ["2", "3"] }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Click" },
+          backendDOMNodeId: 2,
+        }),
+        makeNode({
+          nodeId: "3", parentId: "1",
+          role: { type: "role", value: "heading" },
+          name: { type: "computedString", value: "Title" },
+          backendDOMNodeId: 3,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.getTree(cdp, "s1");
+
+      const snapshot = processor.getCompactSnapshot()!;
+      const headingIdx = snapshot.indexOf('[h1] "Title"');
+      const buttonIdx = snapshot.indexOf("button 'Click'");
+      expect(headingIdx).toBeLessThan(buttonIdx);
     });
   });
 });

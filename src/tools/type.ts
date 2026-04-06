@@ -6,6 +6,7 @@ import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./eleme
 import { wrapCdpError } from "./error-utils.js";
 import type { HumanTouchConfig } from "../operator/human-touch.js";
 import { humanType } from "../operator/human-touch.js";
+import { a11yTree } from "../cache/a11y-tree.js";
 
 // --- Schema (Task 2) ---
 
@@ -171,7 +172,7 @@ export async function typeHandler(
           text: `Typed "${truncate(params.text, 50)}" into ${displayName}`,
         },
       ],
-      _meta: { elapsedMs, method: "type", cleared: params.clear },
+      _meta: { elapsedMs, method: "type", cleared: params.clear, elementClass: params.ref ? a11yTree.classifyRef(params.ref) : "clickable" },
     };
   } catch (err) {
     // RefNotFoundError — contextual error with input-field alternatives

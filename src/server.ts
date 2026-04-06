@@ -6,7 +6,7 @@ import { DialogHandler } from "./cdp/dialog-handler.js";
 import { ConsoleCollector } from "./cdp/console-collector.js";
 import { NetworkCollector } from "./cdp/network-collector.js";
 import { DomWatcher } from "./cdp/dom-watcher.js";
-import { DEVICE_METRICS_OVERRIDE, EMULATED_WIDTH, EMULATED_HEIGHT } from "./cdp/emulation.js";
+import { DEVICE_METRICS_OVERRIDE, EMULATED_WIDTH, EMULATED_HEIGHT, setHeadless } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
@@ -25,11 +25,14 @@ interface TargetInfo {
 export async function startServer(): Promise<void> {
   // 1. Connect to Chrome (Story 1.3: WebSocket first, then Auto-Launch)
   const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
-  const headless = process.env.SILBERCUE_CHROME_HEADLESS !== "false";
-  const autoLaunch = resolveAutoLaunch(process.env as Record<string, string | undefined>, headless);
-  const launcher = new ChromeLauncher({ profilePath, headless, autoLaunch });
+  const headlessEnv = process.env.SILBERCUE_CHROME_HEADLESS !== "false";
+  const autoLaunch = resolveAutoLaunch(process.env as Record<string, string | undefined>, headlessEnv);
+  const launcher = new ChromeLauncher({ profilePath, headless: headlessEnv, autoLaunch });
   const connection = await launcher.connect();
   const { cdpClient } = connection;
+  // Use detected headless from connection (auto-detected from Chrome's /json/version for WebSocket)
+  const headless = connection.headless;
+  setHeadless(headless);
 
   if (profilePath) {
     if (connection.transportType === "pipe") {
@@ -147,7 +150,8 @@ export async function startServer(): Promise<void> {
   }
   const freeTierConfig = loadFreeTierConfig();
 
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults);
+  // Story 13a.2: Pass waitForAXChange callback to Registry for post-click detection
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults, (ms) => domWatcher.waitForAXChange(ms));
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)

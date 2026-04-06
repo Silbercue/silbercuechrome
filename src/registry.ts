@@ -75,6 +75,8 @@ export class ToolRegistry {
   private _consoleCollector: ConsoleCollector | undefined;
   private _networkCollector: NetworkCollector | undefined;
   private _sessionDefaults: SessionDefaults | undefined;
+  // Story 13a.2: Callback to wait for Accessibility.nodesUpdated event
+  private _waitForAXChange: ((timeoutMs: number) => Promise<boolean>) | null = null;
 
   constructor(
     private server: McpServer,
@@ -89,6 +91,7 @@ export class ToolRegistry {
     consoleCollector?: ConsoleCollector,
     networkCollector?: NetworkCollector,
     sessionDefaults?: SessionDefaults,
+    waitForAXChange?: (timeoutMs: number) => Promise<boolean>,
   ) {
     this._sessionId = sessionId;
     this._getConnectionStatus = getConnectionStatus ?? null;
@@ -99,6 +102,7 @@ export class ToolRegistry {
     this._consoleCollector = consoleCollector;
     this._networkCollector = networkCollector;
     this._sessionDefaults = sessionDefaults;
+    this._waitForAXChange = waitForAXChange ?? null;
   }
 
   get sessionId(): string {
@@ -147,7 +151,7 @@ export class ToolRegistry {
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
     // Story 13.1: Ambient Page Context — inject after action, before metrics
-    this._injectAmbientContext(result, name);
+    await this._injectAmbientContext(result, name);
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
       result._meta.suggestion = suggestionText;
@@ -166,14 +170,41 @@ export class ToolRegistry {
   }
 
   /**
-   * Story 13.1: Ambient Page Context — inject compact page snapshot into response
-   * if the a11y cache has changed since the last response. Skips tools that ARE
-   * page context (read_page, dom_snapshot, screenshot) and error responses.
+   * Story 13a.2: Ambient Page Context v2 — smart post-action detection.
+   * For action tools (click, type): uses pre-click classification to decide
+   * whether to wait for page changes before injecting context.
+   * For other tools: injects if cache version changed (v1 behavior).
    */
-  private _injectAmbientContext(result: ToolResponse, toolName: string): void {
+  private async _injectAmbientContext(result: ToolResponse, toolName: string): Promise<void> {
     if (PAGE_CONTEXT_TOOLS.has(toolName)) return;
     if (result.isError) return;
 
+    const elementClass = result._meta?.elementClass as string | undefined;
+
+    // Story 13a.2: Pre-click classification — skip immediately for disabled/static
+    if (elementClass === "disabled" || elementClass === "static") return;
+
+    // Story 13a.2: Widget-state or unknown clickable — wait for AX change
+    if (elementClass === "widget-state" || elementClass === "clickable") {
+      if (this._waitForAXChange) {
+        const timeoutMs = elementClass === "widget-state" ? 300 : 100;
+        const changed = await this._waitForAXChange(timeoutMs);
+        if (changed) {
+          // Refresh the precomputed cache to get fresh data
+          try {
+            await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
+          } catch {
+            // Refresh failed — fall through to version check below
+          }
+        } else if (elementClass === "clickable") {
+          // No change detected for unknown element — skip injection
+          return;
+        }
+        // widget-state: always inject even if no nodesUpdated (e.g. server-side toggle)
+      }
+    }
+
+    // v1 fallback: inject if cache version changed
     const currentVersion = a11yTree.cacheVersion;
     if (currentVersion === this._lastSentCacheVersion) return;
 
@@ -323,7 +354,7 @@ export class ToolRegistry {
         return async (params: T): Promise<ToolResponse> => {
           const result = await dialogWrapped(params);
           // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-          this._injectAmbientContext(result, toolName ?? "unknown");
+          await this._injectAmbientContext(result, toolName ?? "unknown");
           injectResponseBytes(result);
           return result;
         };
@@ -349,7 +380,7 @@ export class ToolRegistry {
         const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
         const result = await dialogWrapped(resolvedParams);
         // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-        this._injectAmbientContext(result, name);
+        await this._injectAmbientContext(result, name);
         // Inject auto-promote suggestion into _meta
         if (suggestionText && result._meta) {
           result._meta.suggestion = suggestionText;
@@ -498,7 +529,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "virtual_desk",
-      "Compact overview of all open browser tabs with state (URL, title, loading status, active/inactive)",
+      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost.",
       {},
       wrap(this.wrapWithGate("virtual_desk", async (params) => {
         return virtualDeskHandler(

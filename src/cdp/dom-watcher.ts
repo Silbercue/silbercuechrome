@@ -19,6 +19,11 @@ export class DomWatcher {
   private _onMutationInvalidateCallback: (() => void) | null = null;
   private _refreshInProgress = false;
 
+  // Story 13a.2: Accessibility.nodesUpdated — resolves pending waitForAXChange promises
+  // Each entry: { resolve(changed), cancel() to clear timeout }
+  private _axChangeWaiters: Array<{ resolve: (changed: boolean) => void; cancel: () => void }> = [];
+  private _onNodesUpdated: ((params: unknown) => void) | null = null;
+
   // Bound callbacks for on/off
   private _onDocumentUpdated: ((params: unknown) => void) | null = null;
   private _onChildCountUpdated: ((params: unknown) => void) | null = null;
@@ -48,6 +53,27 @@ export class DomWatcher {
   }
 
 
+  /**
+   * Story 13a.2: Wait for Accessibility.nodesUpdated event within timeout.
+   * Returns true if AX tree changed, false on timeout.
+   */
+  waitForAXChange(timeoutMs: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          this._axChangeWaiters = this._axChangeWaiters.filter((w) => w.resolve !== resolve);
+          resolve(false);
+        }
+      }, timeoutMs);
+      this._axChangeWaiters.push({
+        resolve: (changed: boolean) => { if (!settled) { settled = true; clearTimeout(timer); resolve(changed); } },
+        cancel: () => clearTimeout(timer),
+      });
+    });
+  }
+
   /** Startet DOM-Beobachtung: DOM.enable + Event-Listener registrieren */
   async init(): Promise<void> {
     // DOM.enable ist idempotent — doppeltes Enable schadet nicht
@@ -59,11 +85,20 @@ export class DomWatcher {
     this._onChildRemoved = () => this._scheduleMutationRefresh();
     this._onFrameNavigated = (params: unknown) => this._handleNavigation(params);
 
+    // Story 13a.2: Subscribe to Accessibility.nodesUpdated for post-click detection
+    this._onNodesUpdated = () => {
+      debug("DomWatcher: Accessibility.nodesUpdated received");
+      const waiters = [...this._axChangeWaiters];
+      this._axChangeWaiters = [];
+      for (const w of waiters) w.resolve(true);
+    };
+
     this._cdpClient.on("DOM.documentUpdated", this._onDocumentUpdated, this._sessionId);
     this._cdpClient.on("DOM.childNodeCountUpdated", this._onChildCountUpdated, this._sessionId);
     this._cdpClient.on("DOM.childNodeInserted", this._onChildInserted, this._sessionId);
     this._cdpClient.on("DOM.childNodeRemoved", this._onChildRemoved, this._sessionId);
     this._cdpClient.on("Page.frameNavigated", this._onFrameNavigated, this._sessionId);
+    this._cdpClient.on("Accessibility.nodesUpdated", this._onNodesUpdated, this._sessionId);
 
     debug("DomWatcher initialized on session %s", this._sessionId);
   }
@@ -97,6 +132,15 @@ export class DomWatcher {
       this._cdpClient.off("Page.frameNavigated", this._onFrameNavigated);
       this._onFrameNavigated = null;
     }
+    if (this._onNodesUpdated) {
+      this._cdpClient.off("Accessibility.nodesUpdated", this._onNodesUpdated);
+      this._onNodesUpdated = null;
+    }
+
+    // Story 13a.2: Resolve any pending AX change waiters as false (detach = no change)
+    const waiters = [...this._axChangeWaiters];
+    this._axChangeWaiters = [];
+    for (const w of waiters) { w.cancel(); w.resolve(false); }
 
     // NICHT DOM.disable — andere Komponenten koennten es brauchen
     debug("DomWatcher detached");

@@ -91,7 +91,7 @@ describe("DomWatcher", () => {
     expect(mock.sendFn).toHaveBeenCalledWith("DOM.enable", {}, "test-session");
   });
 
-  it("init() registriert 4 DOM-Events und Page.frameNavigated", async () => {
+  it("init() registriert 4 DOM-Events, Page.frameNavigated und Accessibility.nodesUpdated", async () => {
     await watcher.init();
 
     const registeredEvents = [...mock.listeners.keys()];
@@ -100,6 +100,7 @@ describe("DomWatcher", () => {
     expect(registeredEvents).toContain("DOM.childNodeInserted");
     expect(registeredEvents).toContain("DOM.childNodeRemoved");
     expect(registeredEvents).toContain("Page.frameNavigated");
+    expect(registeredEvents).toContain("Accessibility.nodesUpdated");
   });
 
   // --- DOM mutation events trigger debounce ---
@@ -292,8 +293,8 @@ describe("DomWatcher", () => {
 
     watcher.detach();
 
-    // off should have been called for all 5 events
-    expect(mock.offFn).toHaveBeenCalledTimes(5);
+    // off should have been called for all 6 events (5 DOM + 1 Accessibility.nodesUpdated)
+    expect(mock.offFn).toHaveBeenCalledTimes(6);
 
     // Timer should be cancelled — no refresh after debounce
     await vi.advanceTimersByTimeAsync(1000);
@@ -308,8 +309,8 @@ describe("DomWatcher", () => {
     const mock2 = createMockCdp();
     await watcher.reinit(mock2.cdpClient, "new-session");
 
-    // Old client should have been detached (off called 5 times)
-    expect(mock.offFn).toHaveBeenCalledTimes(5);
+    // Old client should have been detached (off called 6 times: 5 DOM + 1 Accessibility.nodesUpdated)
+    expect(mock.offFn).toHaveBeenCalledTimes(6);
 
     // New client should have DOM.enable called
     expect(mock2.sendFn).toHaveBeenCalledWith("DOM.enable", {}, "new-session");
@@ -319,6 +320,7 @@ describe("DomWatcher", () => {
     expect(registeredEvents).toContain("DOM.documentUpdated");
     expect(registeredEvents).toContain("DOM.childNodeInserted");
     expect(registeredEvents).toContain("Page.frameNavigated");
+    expect(registeredEvents).toContain("Accessibility.nodesUpdated");
   });
 
   // --- Refresh callback error handling ---

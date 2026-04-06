@@ -6,6 +6,7 @@ import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./eleme
 import { wrapCdpError } from "./error-utils.js";
 import type { HumanTouchConfig } from "../operator/human-touch.js";
 import { humanMouseMove } from "../operator/human-touch.js";
+import { a11yTree } from "../cache/a11y-tree.js";
 
 // --- Schema (Task 2) ---
 
@@ -165,8 +166,9 @@ export async function clickHandler(
       cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId, humanTouch,
     );
 
-    // Success response — no settle, click returns immediately.
-    // If the click triggers navigation, use wait_for or navigate to wait for the page to load.
+    // Story 13a.2: Classify clicked element for ambient context decision
+    const elementClass = params.ref ? a11yTree.classifyRef(params.ref) : "clickable";
+
     const elapsedMs = Math.round(performance.now() - start);
     const suffix = clickMethod !== "cdp" ? `, fallback: ${clickMethod}` : "";
     return {
@@ -181,6 +183,7 @@ export async function clickHandler(
         method: "click",
         resolvedVia: element.resolvedVia,
         clickMethod,
+        elementClass,
       },
     };
   } catch (err) {
