@@ -512,6 +512,76 @@ describe("waitForHandler — js timeout diagnostics", () => {
     expect(result.content[0].text).toContain("Element exists but condition not met");
   });
 
+  // --- FR-H7: Element timeout diagnostics ---
+
+  it("FR-H7: should add diagnostic when element CSS selector not found in DOM", async () => {
+    const { cdpClient, sendFn } = createMockCdp({
+      "Runtime.evaluate": { result: { value: { exists: false, hidden: false, tag: "" } } },
+    });
+
+    const params: WaitForParams = {
+      condition: "element",
+      selector: "#nonexistent",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Timeout after 500ms");
+    expect(result.content[0].text).toContain("Debug:");
+    expect(result.content[0].text).toContain("element not in DOM");
+  });
+
+  it("FR-H7: should add diagnostic when element exists but is hidden", async () => {
+    let callCount = 0;
+    const { cdpClient } = createMockCdp({
+      "Runtime.evaluate": () => {
+        callCount++;
+        // During polling, return false (not visible)
+        // On diagnostic call, return exists+hidden
+        return { result: { value: callCount > 3 ? { exists: true, hidden: true, tag: "div" } : false } };
+      },
+    });
+
+    const params: WaitForParams = {
+      condition: "element",
+      selector: "#hidden-section",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Debug:");
+    expect(result.content[0].text).toContain("zero size");
+  });
+
+  it("FR-H7: should add diagnostic for stale ref", async () => {
+    vi.mocked(a11yTree.resolveRef).mockReturnValue(undefined);
+
+    const { cdpClient } = createMockCdp({});
+
+    const params: WaitForParams = {
+      condition: "element",
+      selector: "e99",
+      timeout: 500,
+    };
+
+    const promise = waitForHandler(params, cdpClient, "s1");
+    await vi.advanceTimersByTimeAsync(600);
+
+    const result = await promise;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Debug:");
+    expect(result.content[0].text).toContain("Ref not found");
+    expect(result.content[0].text).toContain("read_page");
+  });
+
   it("should NOT add diagnostic when expression has no querySelector or getElementById", async () => {
     const { cdpClient } = createMockCdp({
       "Runtime.evaluate": { result: { value: false } },

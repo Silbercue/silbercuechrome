@@ -702,4 +702,100 @@ describe("readPageHandler", () => {
       "s1",
     );
   });
+
+  // --- FR-H6: Hidden element hint ---
+
+  it("FR-H6: should append hidden-element hint when >= 5 interactive elements are hidden", async () => {
+    a11yTree.reset();
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, params?: Record<string, unknown>) => {
+        if (method === "Runtime.evaluate") {
+          const expr = (params?.expression as string) ?? "";
+          // Hidden element detect expression contains offsetParent
+          if (expr.includes("offsetParent")) {
+            return Promise.resolve({ result: { value: 12 } });
+          }
+          // URL evaluate
+          return Promise.resolve({ result: { value: "https://example.com/fr-h6" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes: sampleNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+    expect(result.content[0].text).toContain("12 interactive elements are hidden");
+    expect(result.content[0].text).toContain("Click tabs/buttons to reveal");
+  });
+
+  it("FR-H6: should NOT append hint when hidden count < 5", async () => {
+    a11yTree.reset();
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, params?: Record<string, unknown>) => {
+        if (method === "Runtime.evaluate") {
+          const expr = (params?.expression as string) ?? "";
+          if (expr.includes("offsetParent")) {
+            return Promise.resolve({ result: { value: 3 } });
+          }
+          return Promise.resolve({ result: { value: "https://example.com/fr-h6-low" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes: sampleNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+    expect(result.content[0].text).not.toContain("hidden");
+  });
+
+  it("FR-H6: should NOT run hidden detection for filter=all", async () => {
+    a11yTree.reset();
+    const cdp = mockCdpClient(sampleNodes, "https://example.com/fr-h6-all");
+    const result = await readPageHandler({ depth: 3, filter: "all" }, cdp, "s1");
+
+    // No hidden hint for non-interactive filters
+    expect(result.content[0].text).not.toContain("hidden");
+  });
+
+  it("FR-H6: should gracefully handle evaluate failure for hidden detection", async () => {
+    a11yTree.reset();
+    let evalCount = 0;
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string, params?: Record<string, unknown>) => {
+        if (method === "Runtime.evaluate") {
+          const expr = (params?.expression as string) ?? "";
+          if (expr.includes("offsetParent")) {
+            return Promise.reject(new Error("evaluate failed"));
+          }
+          return Promise.resolve({ result: { value: "https://example.com/fr-h6-err" } });
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return Promise.resolve({ nodes: sampleNodes });
+        }
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+    // Should still return valid result without hint
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("button");
+    expect(result.content[0].text).not.toContain("hidden");
+  });
 });

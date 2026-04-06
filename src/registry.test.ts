@@ -92,7 +92,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "type",
-      "Type text into an input field identified by ref or CSS selector",
+      "Type text into an input field identified by ref or CSS selector. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),

@@ -557,7 +557,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "type",
-      "Type text into an input field identified by ref or CSS selector",
+      "Type text into an input field identified by ref or CSS selector. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
       {
         ref: typeSchema.shape.ref,
         selector: typeSchema.shape.selector,

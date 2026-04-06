@@ -158,10 +158,12 @@ function classifyElement(role: string): ElementClass {
   return "container"; // Default: everything else is container
 }
 
-/** Conservative token estimation: ~4 chars per token for structured A11y output */
+/** Token estimation for structured A11y output.
+ *  Ratio ~3.5 chars/token accounts for short tokens (brackets, refs, keywords).
+ *  FR-H8: Tighter ratio ensures max_tokens is a reliable upper bound. */
 function estimateTokens(text: string): number {
   if (text.length === 0) return 0;
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / 3.5);
 }
 
 const LANDMARK_ROLES = new Set([
@@ -1622,6 +1624,16 @@ export class A11yTreeProcessor {
       for (const prop of node.properties) {
         if (prop.name === "disabled" && prop.value.value === true) {
           line += " (disabled)";
+          break;
+        }
+      }
+    }
+
+    // FR-H6: Tab selected state — helps LLM understand which tab panel is visible
+    if (role === "tab" && node.properties) {
+      for (const prop of node.properties) {
+        if (prop.name === "selected" && prop.value.value === true) {
+          line += " (selected)";
           break;
         }
       }

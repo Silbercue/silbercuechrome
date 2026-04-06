@@ -203,6 +203,50 @@ async function waitForJs(
   return { met: false, elapsedMs: Math.round(performance.now() - start), lastValue };
 }
 
+// --- Element timeout diagnostics (FR-H7) ---
+
+/**
+ * After an element wait_for timeout, check if the element exists in DOM.
+ * Returns a diagnostic string helping the LLM understand why the wait failed.
+ */
+async function elementTimeoutDiagnostic(
+  cdpClient: CdpClient,
+  sessionId: string,
+  selector: string,
+): Promise<string> {
+  const isRef = /^e\d+$/.test(selector);
+
+  if (isRef) {
+    const backendNodeId = a11yTree.resolveRef(selector);
+    if (backendNodeId === undefined) {
+      return "\nDebug: Ref not found in cache — page may have changed. Call read_page to get fresh refs.";
+    }
+    return "\nDebug: Ref exists in cache but element has zero size (hidden or not rendered).";
+  }
+
+  // CSS selector path
+  try {
+    const result = await cdpClient.send<{ result: { value: { exists: boolean; hidden: boolean; tag: string } } }>(
+      "Runtime.evaluate",
+      {
+        expression: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return { exists: false, hidden: false, tag: "" }; const r = el.getBoundingClientRect(); return { exists: true, hidden: r.width === 0 || r.height === 0, tag: el.tagName.toLowerCase() }; })()`,
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    const v = result.result.value;
+    if (!v.exists) {
+      return `\nDebug: querySelector('${selector}') returned null — element not in DOM.`;
+    }
+    if (v.hidden) {
+      return `\nDebug: <${v.tag}> exists but has zero size (display: none or collapsed). A preceding action may be needed to reveal it.`;
+    }
+    return `\nDebug: <${v.tag}> exists with size > 0 but visibility check failed.`;
+  } catch {
+    return "";
+  }
+}
+
 // --- JS timeout diagnostics (FR-006) ---
 
 /**
@@ -309,11 +353,14 @@ export async function waitForHandler(
             _meta: { elapsedMs: result.elapsedMs, method: "wait_for", condition: "element" },
           };
         }
+        // FR-H7: Append diagnostic info on timeout
+        const diagnostic = await elementTimeoutDiagnostic(cdpClient, sessionId!, params.selector!);
+
         return {
           content: [
             {
               type: "text",
-              text: `Timeout after ${params.timeout}ms waiting for element '${params.selector}' to become visible`,
+              text: `Timeout after ${params.timeout}ms waiting for element '${params.selector}' to become visible${diagnostic}`,
             },
           ],
           isError: true,

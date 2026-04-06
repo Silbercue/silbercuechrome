@@ -650,6 +650,50 @@
     </div>
     <span class="test-status pending" id="t5-6-status">PENDING</span>
   </div>
+
+  <div class="test-card" data-test="5.7">
+    <h3><span class="test-id">T5.7</span> Toast Detection — Success</h3>
+    <p class="test-desc">Klicke den Button. Ein gruener Success-Toast mit role="alert" erscheint fuer 5 Sekunden. Der MCP muss ihn in read_page oder click-Response erkennen.</p>
+    <div class="test-area">
+      <button class="action-btn" id="t5-7-btn" onclick="Tests.t5_7()">Show Success Toast</button>
+      <div id="t5-7-toast-zone"></div>
+      <div class="verify-output" id="t5-7-result"></div>
+    </div>
+    <span class="test-status pending" id="t5-7-status">PENDING</span>
+  </div>
+
+  <div class="test-card" data-test="5.8">
+    <h3><span class="test-id">T5.8</span> Toast Detection — Error</h3>
+    <p class="test-desc">Klicke den Button. Ein roter Error-Toast mit role="alert" erscheint fuer 5 Sekunden. Der MCP muss ihn erkennen und den Typ (error) unterscheiden.</p>
+    <div class="test-area">
+      <button class="action-btn" id="t5-8-btn" onclick="Tests.t5_8()">Show Error Toast</button>
+      <div id="t5-8-toast-zone"></div>
+      <div class="verify-output" id="t5-8-result"></div>
+    </div>
+    <span class="test-status pending" id="t5-8-status">PENDING</span>
+  </div>
+
+  <div class="test-card" data-test="5.9">
+    <h3><span class="test-id">T5.9</span> Toast Detection — Persistent Warning Banner</h3>
+    <p class="test-desc">Klicke den Button. Ein gelber Warning-Banner mit aria-live="assertive" erscheint oben im Test-Bereich und bleibt persistent. Der MCP muss ihn erkennen.</p>
+    <div class="test-area">
+      <div id="t5-9-banner-zone"></div>
+      <button class="action-btn" id="t5-9-btn" onclick="Tests.t5_9()">Show Warning</button>
+      <div class="verify-output" id="t5-9-result"></div>
+    </div>
+    <span class="test-status pending" id="t5-9-status">PENDING</span>
+  </div>
+
+  <div class="test-card" data-test="5.10">
+    <h3><span class="test-id">T5.10</span> Toast Detection — Quick Disappearing Toast</h3>
+    <p class="test-desc">Klicke den Button. Ein Toast erscheint fuer nur 2 Sekunden, dann verschwindet er. Teste ob der MCP ihn noch erkennt, bevor er weg ist.</p>
+    <div class="test-area">
+      <button class="action-btn" id="t5-10-btn" onclick="Tests.t5_10()">Show Quick Toast</button>
+      <div id="t5-10-toast-zone"></div>
+      <div class="verify-output" id="t5-10-result"></div>
+    </div>
+    <span class="test-status pending" id="t5-10-status">PENDING</span>
+  </div>
 </section>
 
 <!-- COMPARE -->
@@ -816,6 +860,8 @@ const Benchmark = {
     document.getElementById('m-time').textContent = '0s';
     document.querySelectorAll('.test-status').forEach(el => { el.textContent = 'PENDING'; el.className = 'test-status pending'; });
     document.querySelectorAll('.verify-output').forEach(el => { el.textContent = ''; el.className = 'verify-output'; });
+    // FR-H10: Re-init tests that remove their event listeners after completion
+    Tests._t3_5_init();
     this.updateUI();
   },
   toast(msg, type) {
@@ -1176,6 +1222,14 @@ const Tests = {
   },
   _t3_5_step: 0,
   _t3_5_init() {
+    document.removeEventListener('keydown', Tests._t3_5_handler);
+    Tests._t3_5_step = 0;
+    document.getElementById('t3-5-s1').textContent = 'waiting...';
+    document.getElementById('t3-5-s1').style.color = 'var(--muted)';
+    document.getElementById('t3-5-s2').textContent = 'waiting...';
+    document.getElementById('t3-5-s2').style.color = 'var(--muted)';
+    document.getElementById('t3-5-s3').textContent = 'waiting...';
+    document.getElementById('t3-5-s3').style.color = 'var(--muted)';
     document.addEventListener('keydown', Tests._t3_5_handler);
   },
   _t3_5_handler(e) {
@@ -1552,11 +1606,77 @@ const Tests = {
       return;
     }
     Benchmark.setResult('5.6', el, !!passed, detail || (passed ? 'Reconnect recovery successful' : 'Reconnect recovery failed'));
+  },
+
+  // T5.7 — Success Toast (role="alert", 5s)
+  t5_7() {
+    Benchmark.start('5.7');
+    const zone = document.getElementById('t5-7-toast-zone');
+    const el = document.getElementById('t5-7-result');
+    // Clear previous toast
+    while (zone.firstChild) zone.removeChild(zone.firstChild);
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'alert');
+    toast.className = 'toast success';
+    toast.style.cssText = 'position:relative;margin-top:12px;';
+    toast.textContent = 'Erfolgreich gespeichert';
+    zone.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+    Benchmark.setResult('5.7', el, true, 'Success toast shown (role="alert", 5s TTL). MCP should detect: [alert] "Erfolgreich gespeichert"');
+  },
+
+  // T5.8 — Error Toast (role="alert", 5s)
+  t5_8() {
+    Benchmark.start('5.8');
+    const zone = document.getElementById('t5-8-toast-zone');
+    const el = document.getElementById('t5-8-result');
+    while (zone.firstChild) zone.removeChild(zone.firstChild);
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'alert');
+    toast.className = 'toast error';
+    toast.style.cssText = 'position:relative;margin-top:12px;';
+    toast.textContent = 'Fehler beim Laden';
+    zone.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+    Benchmark.setResult('5.8', el, true, 'Error toast shown (role="alert", 5s TTL). MCP should detect: [alert] "Fehler beim Laden"');
+  },
+
+  // T5.9 — Persistent Warning Banner (aria-live="assertive")
+  t5_9() {
+    Benchmark.start('5.9');
+    const zone = document.getElementById('t5-9-banner-zone');
+    const el = document.getElementById('t5-9-result');
+    while (zone.firstChild) zone.removeChild(zone.firstChild);
+    const banner = document.createElement('div');
+    banner.setAttribute('role', 'alert');
+    banner.setAttribute('aria-live', 'assertive');
+    banner.style.cssText = 'background:rgba(253,203,110,0.15);border:1px solid var(--warn);border-left:3px solid var(--warn);color:var(--warn);padding:12px 18px;border-radius:var(--radius);font-size:0.85rem;margin-bottom:12px;';
+    banner.textContent = 'Achtung: Sitzung laeuft ab';
+    zone.appendChild(banner);
+    // Persistent — does not auto-remove
+    Benchmark.setResult('5.9', el, true, 'Warning banner shown (role="alert" + aria-live="assertive", persistent). MCP should detect: [alert] "Achtung: Sitzung laeuft ab"');
+  },
+
+  // T5.10 — Quick Disappearing Toast (role="status", aria-live="polite", 2s)
+  t5_10() {
+    Benchmark.start('5.10');
+    const zone = document.getElementById('t5-10-toast-zone');
+    const el = document.getElementById('t5-10-result');
+    while (zone.firstChild) zone.removeChild(zone.firstChild);
+    const toast = document.createElement('div');
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.className = 'toast success';
+    toast.style.cssText = 'position:relative;margin-top:12px;';
+    toast.textContent = 'Kurze Benachrichtigung';
+    zone.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+    Benchmark.setResult('5.10', el, true, 'Quick toast shown (role="status", aria-live="polite", 2s TTL). MCP must read page within 2s to detect it.');
   }
 };
 
-const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6','4.7','5.1','5.2','5.3','5.4','5.5','5.6'];
-const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token','4.7':'Token Budget','5.1':'Session Persistence','5.2':'CDP Fingerprint','5.3':'Console Log Capture','5.4':'File Upload','5.5':'SPA Navigation','5.6':'Reconnect Recovery'};
+const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6','4.7','5.1','5.2','5.3','5.4','5.5','5.6','5.7','5.8','5.9','5.10'];
+const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token','4.7':'Token Budget','5.1':'Session Persistence','5.2':'CDP Fingerprint','5.3':'Console Log Capture','5.4':'File Upload','5.5':'SPA Navigation','5.6':'Reconnect Recovery','5.7':'Toast Success','5.8':'Toast Error','5.9':'Warning Banner','5.10':'Quick Toast'};
 
 const PRELOADED_RUNS = [
   {"name":"SilbercueChrome Pro","timestamp":"2026-04-05T05:12:58.080Z","elapsed_s":555,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"},"4.7":{"status":"pass"}}},

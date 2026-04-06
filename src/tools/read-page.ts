@@ -6,7 +6,7 @@ import { a11yTree, RefNotFoundError } from "../cache/a11y-tree.js";
 import { wrapCdpError } from "./error-utils.js";
 
 export const readPageSchema = z.object({
-  depth: z.number().optional().default(3).describe("Display depth — how deep to show the tree structure (default: 3). Interactive elements are always found regardless of depth."),
+  depth: z.number().optional().default(3).describe("Nesting depth — how many tree levels to display (default: 3). Controls indentation, not visibility. Hidden sections (display: none) require clicking tabs/buttons to reveal."),
   ref: z.string().optional().describe("Element ref (e.g. 'e5') to get subtree for"),
   filter: z
     .enum(["interactive", "all", "landmark", "visual"])
@@ -36,10 +36,31 @@ export async function readPageHandler(
       fresh: true, // Story 13a.2 fix: always fetch fresh data — precomputed cache may be stale after SPA navigation
     }, sessionManager);
 
+    // FR-H6: Detect hidden interactive elements — hint when page has hidden sections
+    let responseText = result.text;
+    if (params.filter === "interactive" && result.refCount > 0) {
+      try {
+        const hiddenResult = await cdpClient.send<{ result: { value: number } }>(
+          "Runtime.evaluate",
+          {
+            expression: `(() => { let h = 0; for (const el of document.querySelectorAll('button,a[href],input:not([type="hidden"]),select,textarea,[role="button"],[role="tab"],[role="link"]')) { if (el.offsetParent === null) { const p = getComputedStyle(el).position; if (p !== "fixed" && p !== "sticky") h++; } } return h; })()`,
+            returnByValue: true,
+          },
+          sessionId,
+        );
+        const hiddenCount = hiddenResult?.result?.value;
+        if (typeof hiddenCount === "number" && hiddenCount >= 5) {
+          responseText += `\n\nNote: ${hiddenCount} interactive elements are hidden (display: none). Click tabs/buttons to reveal hidden sections.`;
+        }
+      } catch {
+        // Best-effort — ignore errors
+      }
+    }
+
     const elapsedMs = Math.round(performance.now() - start);
 
     return {
-      content: [{ type: "text", text: result.text }],
+      content: [{ type: "text", text: responseText }],
       _meta: {
         elapsedMs,
         method,

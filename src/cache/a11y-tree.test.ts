@@ -2634,6 +2634,51 @@ describe("A11yTreeProcessor", () => {
     it("returns null for empty changes", () => {
       expect(A11yTreeProcessor.formatDomDiff([])).toBeNull();
     });
+  });
+
+  // --- FR-H6: Tab selected state annotation ---
+  describe("FR-H6: tab selected annotation", () => {
+    it("should annotate selected tab with (selected)", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Tabs Page" },
+          backendDOMNodeId: 900,
+          childIds: ["2", "3", "4"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "tab" },
+          name: { type: "computedString", value: "Basics" },
+          backendDOMNodeId: 901,
+          properties: [{ name: "selected", value: { type: "boolean", value: true } }],
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "tab" },
+          name: { type: "computedString", value: "Advanced" },
+          backendDOMNodeId: 902,
+          properties: [{ name: "selected", value: { type: "boolean", value: false } }],
+        }),
+        makeNode({
+          nodeId: "4",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Submit" },
+          backendDOMNodeId: 903,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      expect(result.text).toContain('tab "Basics" (selected)');
+      expect(result.text).not.toContain('tab "Advanced" (selected)');
+      expect(result.text).toContain('tab "Advanced"');
+      expect(result.text).not.toContain('button "Submit" (selected)');
+    });
 
     it("truncates at 30 lines", () => {
       const changes = Array.from({ length: 35 }, (_, i) => ({
