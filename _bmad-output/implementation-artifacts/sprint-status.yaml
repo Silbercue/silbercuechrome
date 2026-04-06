@@ -152,7 +152,7 @@ development_status:
   11-5-file-upload-test: done
   11-6-spa-navigation-test: done
   11-7-reconnect-recovery-test: done
-  11-8-benchmark-runner-integration: backlog
+  11-8-benchmark-runner-integration: done
   epic-11-retrospective: optional
 
   # Epic 12: Token-Transparenz & Metriken
