@@ -1008,7 +1008,13 @@ export class A11yTreeProcessor {
       if (insideDialog) {
         dialogLines.push({ line, idx: i });
       } else if (/\[e\d+\]/.test(line) && INTERACTIVE_ROLES.has(role)) {
-        interactiveLines.push({ line, idx: i });
+        // Demote option elements to content priority — they fill token budget
+        // without adding actionable value (the combobox itself shows the current value)
+        if (role === "option") {
+          contentLines.push({ line, idx: i });
+        } else {
+          interactiveLines.push({ line, idx: i });
+        }
       } else {
         contentLines.push({ line, idx: i });
       }
