@@ -608,23 +608,27 @@ export class ToolRegistry {
     // FR-C: press_key — real CDP keyboard events (not JS dispatchEvent)
     this.server.tool(
       "press_key",
-      "Press a keyboard key or shortcut via CDP Input.dispatchKeyEvent. Supports modifiers (ctrl, shift, alt, meta). Use for keyboard shortcuts (Ctrl+K), navigation keys (Enter, Escape, Tab, arrows), or any key that JS dispatchEvent misses.",
+      "Press a keyboard key or shortcut. Optionally focus an element first via ref/selector. Use for Enter, Escape, Tab, arrows, shortcuts (Ctrl+K).",
       {
         key: pressKeySchema.shape.key,
+        ref: pressKeySchema.shape.ref,
+        selector: pressKeySchema.shape.selector,
         modifiers: pressKeySchema.shape.modifiers,
       },
       wrap(async (params) => {
-        return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId);
+        return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId, this._sessionManager);
       }, "press_key"),
     );
 
     // FR-F: scroll — scroll page or element into view
     this.server.tool(
       "scroll",
-      "Scroll the page or an element into view. Use ref/selector to scroll an element into the viewport, or direction+amount to scroll the page (returns scroll position).",
+      "Scroll the page, a container, or an element into view. Use ref/selector to scroll an element into the viewport. Use container_ref/container_selector + direction to scroll inside a specific container (e.g. sidebar, modal body).",
       {
         ref: scrollSchema.shape.ref,
         selector: scrollSchema.shape.selector,
+        container_ref: scrollSchema.shape.container_ref,
+        container_selector: scrollSchema.shape.container_selector,
         direction: scrollSchema.shape.direction,
         amount: scrollSchema.shape.amount,
       },

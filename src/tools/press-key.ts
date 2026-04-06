@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
+import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 
 // --- Schema ---
 
@@ -8,6 +10,14 @@ export const pressKeySchema = z.object({
   key: z
     .string()
     .describe("Key to press — e.g. 'Enter', 'Escape', 'Tab', 'a', 'ArrowDown', 'F1'. For printable characters use the character itself."),
+  ref: z
+    .string()
+    .optional()
+    .describe("Element ref to focus before pressing key (e.g. 'e5')"),
+  selector: z
+    .string()
+    .optional()
+    .describe("CSS selector to focus before pressing key (e.g. '#search-input')"),
   modifiers: z
     .array(z.enum(["ctrl", "shift", "alt", "meta"]))
     .optional()
@@ -104,8 +114,38 @@ export async function pressKeyHandler(
   params: PressKeyParams,
   cdpClient: CdpClient,
   sessionId?: string,
+  sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
+
+  // Focus target element if ref or selector provided
+  let effectiveSessionId = sessionId;
+  if (params.ref || params.selector) {
+    try {
+      const target = params.ref ? { ref: params.ref } : { selector: params.selector };
+      const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
+      effectiveSessionId = element.resolvedSessionId;
+
+      await cdpClient.send(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: "function() { this.focus(); }",
+          objectId: element.objectId,
+          returnByValue: false,
+        },
+        element.resolvedSessionId,
+      );
+    } catch (err) {
+      if (err instanceof RefNotFoundError && params.ref) {
+        return {
+          content: [{ type: "text", text: buildRefNotFoundError(params.ref) }],
+          isError: true,
+          _meta: { elapsedMs: Math.round(performance.now() - start), method: "press_key" },
+        };
+      }
+      throw err;
+    }
+  }
 
   const { key, def } = resolveKey(params.key);
   const modBits = (params.modifiers ?? []).reduce((acc, m) => acc | MODIFIER_BITS[m], 0);
@@ -125,7 +165,7 @@ export async function pressKeyHandler(
       windowsVirtualKeyCode: def.keyCode,
       ...(text ? { text } : {}),
     },
-    sessionId,
+    effectiveSessionId,
   );
 
   // char event for printable characters (without modifiers)
@@ -139,7 +179,7 @@ export async function pressKeyHandler(
         code: def.code,
         text,
       },
-      sessionId,
+      effectiveSessionId,
     );
   }
 
@@ -153,13 +193,14 @@ export async function pressKeyHandler(
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
     },
-    sessionId,
+    effectiveSessionId,
   );
 
   const elapsedMs = Math.round(performance.now() - start);
   const modStr = params.modifiers?.length ? params.modifiers.join("+") + "+" : "";
+  const targetStr = params.ref ? ` on ${params.ref}` : params.selector ? ` on ${params.selector}` : "";
   return {
-    content: [{ type: "text", text: `Pressed ${modStr}${params.key}` }],
+    content: [{ type: "text", text: `Pressed ${modStr}${params.key}${targetStr}` }],
     _meta: { elapsedMs, method: "press_key" },
   };
 }
