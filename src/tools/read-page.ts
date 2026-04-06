@@ -45,6 +45,8 @@ export async function readPageHandler(
         method,
         refCount: result.refCount,
         depth: result.depth,
+        tokenCount: result.tokenCount,
+        pageUrl: result.pageUrl,
         ...(result.hasVisualData !== undefined ? { hasVisualData: result.hasVisualData } : {}),
         ...(result.downsampled ? {
           downsampled: true,

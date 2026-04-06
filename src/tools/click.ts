@@ -19,13 +19,28 @@ export const clickSchema = z.object({
     .string()
     .optional()
     .describe("CSS selector (e.g. '#submit-btn') — fallback when ref is not available"),
+  x: z
+    .number()
+    .optional()
+    .describe("X coordinate (viewport pixels) — for canvas or pixel-precise clicks. Use with y instead of ref/selector."),
+  y: z
+    .number()
+    .optional()
+    .describe("Y coordinate (viewport pixels) — for canvas or pixel-precise clicks. Use with x instead of ref/selector."),
 });
 
 export type ClickParams = z.infer<typeof clickSchema>;
 
 // --- Click dispatch (Task 4) ---
 
-export type ClickMethod = "cdp" | "js-rect" | "js-click";
+export type ClickMethod = "cdp" | "js-rect" | "js-click" | "coordinates";
+
+interface TargetInfo {
+  targetId: string;
+  type: string;
+  url: string;
+  title: string;
+}
 
 async function dispatchClick(
   cdpClient: CdpClient,
@@ -142,13 +157,52 @@ export async function clickHandler(
 ): Promise<ToolResponse> {
   const start = performance.now();
 
+  // FR-D: Coordinate-based click — skip element resolution entirely
+  if (params.x !== undefined && params.y !== undefined) {
+    try {
+      const x = params.x;
+      const y = params.y;
+
+      // Snapshot tab count before click (FR-E: new tab detection)
+      let beforeTabIds: Set<string> | undefined;
+      try {
+        const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
+        beforeTabIds = new Set(targetInfos.filter(t => t.type === "page").map(t => t.targetId));
+      } catch { /* non-critical */ }
+
+      // Reset scroll to origin (same as element click)
+      await cdpClient.send("Runtime.evaluate", { expression: "window.scrollTo(0,0)" }, sessionId);
+
+      // Dispatch mouse events at exact coordinates via CDP
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 }, sessionId);
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, sessionId);
+      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, sessionId);
+
+      // FR-E: Check for new tabs after click
+      const newTabHint = await detectNewTab(cdpClient, beforeTabIds);
+
+      const elapsedMs = Math.round(performance.now() - start);
+      return {
+        content: [{ type: "text", text: `Clicked at (${x}, ${y})${newTabHint}` }],
+        _meta: { elapsedMs, method: "click", clickMethod: "coordinates" as ClickMethod },
+      };
+    } catch (err) {
+      const elapsedMs = Math.round(performance.now() - start);
+      return {
+        content: [{ type: "text", text: wrapCdpError(err, "click", `(${params.x}, ${params.y})`) }],
+        isError: true,
+        _meta: { elapsedMs, method: "click" },
+      };
+    }
+  }
+
   // Validation (Task 2.4)
   if (!params.ref && !params.selector) {
     return {
       content: [
         {
           type: "text",
-          text: "click requires either 'ref' (e.g. 'e5') or 'selector' (e.g. '#submit-btn')",
+          text: "click requires either 'ref' (e.g. 'e5'), 'selector' (e.g. '#submit-btn'), or coordinates (x + y)",
         },
       ],
       isError: true,
@@ -157,6 +211,13 @@ export async function clickHandler(
   }
 
   try {
+    // FR-E: Snapshot tab count before click (new tab detection)
+    let beforeTabIds: Set<string> | undefined;
+    try {
+      const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
+      beforeTabIds = new Set(targetInfos.filter(t => t.type === "page").map(t => t.targetId));
+    } catch { /* non-critical */ }
+
     // Resolve element via shared utility (with OOPIF routing)
     const target = params.ref ? { ref: params.ref } : { selector: params.selector };
     const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
@@ -165,6 +226,9 @@ export async function clickHandler(
     const clickMethod = await dispatchClick(
       cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId, humanTouch,
     );
+
+    // FR-E: Check for new tabs after click
+    const newTabHint = await detectNewTab(cdpClient, beforeTabIds);
 
     // Story 13a.2: Classify clicked element for ambient context decision
     const elementClass = params.ref ? a11yTree.classifyRef(params.ref) : "clickable";
@@ -175,7 +239,7 @@ export async function clickHandler(
       content: [
         {
           type: "text",
-          text: `Clicked ${params.ref ?? params.selector} (${element.resolvedVia}${suffix})`,
+          text: `Clicked ${params.ref ?? params.selector} (${element.resolvedVia}${suffix})${newTabHint}`,
         },
       ],
       _meta: {
@@ -214,4 +278,22 @@ export async function clickHandler(
       _meta: { elapsedMs, method: "click" },
     };
   }
+}
+
+// --- FR-E: New tab detection ---
+
+async function detectNewTab(
+  cdpClient: CdpClient,
+  beforeTabIds?: Set<string>,
+): Promise<string> {
+  if (!beforeTabIds) return "";
+  try {
+    const { targetInfos } = await cdpClient.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
+    const newTabs = targetInfos.filter(t => t.type === "page" && !beforeTabIds.has(t.targetId));
+    if (newTabs.length > 0) {
+      const tab = newTabs[0];
+      return `\n⮕ New tab opened: ${tab.url || "about:blank"} — use switch_tab to access it`;
+    }
+  } catch { /* non-critical */ }
+  return "";
 }
