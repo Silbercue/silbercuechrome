@@ -13,7 +13,7 @@ export const readPageSchema = z.object({
     .optional()
     .default("interactive")
     .describe("Filter mode: interactive (default), all, landmark, or visual (adds bounds/click/visibility)"),
-  max_tokens: z.number().int().min(500).optional().describe("Token budget — page content is automatically downsampled to fit. Omit for full output."),
+  max_tokens: z.number().int().optional().transform(v => v !== undefined && v < 500 ? 500 : v).describe("Token budget — page content is automatically downsampled to fit. Omit for full output."),
 });
 
 export type ReadPageParams = z.infer<typeof readPageSchema>;

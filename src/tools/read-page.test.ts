@@ -155,10 +155,10 @@ describe("readPageSchema", () => {
     expect(parsed.max_tokens).toBeUndefined();
   });
 
-  // Test: max_tokens min 500
-  it("should reject max_tokens below 500", () => {
-    expect(() => readPageSchema.parse({ max_tokens: 100 })).toThrow();
-    expect(() => readPageSchema.parse({ max_tokens: 499 })).toThrow();
+  // Test: max_tokens clamp to 500 (BUG-014)
+  it("should clamp max_tokens below 500 to 500", () => {
+    expect(readPageSchema.parse({ max_tokens: 100 }).max_tokens).toBe(500);
+    expect(readPageSchema.parse({ max_tokens: 499 }).max_tokens).toBe(500);
   });
 
   // Test: max_tokens must be int
@@ -197,15 +197,15 @@ describe("readPageHandler", () => {
     );
   });
 
-  // Test 6b: filter=all passes display depth directly to CDP
-  it("should pass display depth directly to CDP for filter=all", async () => {
+  // Test 6b: filter=all fetches depth + 2 (extra levels for leaf text content)
+  it("should pass display depth + 2 to CDP for filter=all", async () => {
     a11yTree.reset();
     const cdp = mockCdpClient(sampleNodes, "https://example.com/all-depth");
     await readPageHandler({ depth: 5, filter: "all" }, cdp, "s1");
 
     expect(cdp.send).toHaveBeenCalledWith(
       "Accessibility.getFullAXTree",
-      { depth: 5 },
+      { depth: 7 },
       "s1",
     );
   });
@@ -661,15 +661,15 @@ describe("readPageHandler", () => {
     );
   });
 
-  // FR-002: filter=all with depth=3 does NOT fetch deeper than 3 (behavior unchanged)
-  it("FR-002: filter=all with depth=3 should NOT fetch deeper than 3", async () => {
+  // FR-001: filter=all with depth=3 fetches depth+2=5 (extra levels for leaf text)
+  it("FR-001: filter=all with depth=3 should fetch at depth 5", async () => {
     a11yTree.reset();
     const cdp = mockCdpClient(sampleNodes, "https://example.com/fr002-all");
     await readPageHandler({ depth: 3, filter: "all" }, cdp, "s1");
 
     expect(cdp.send).toHaveBeenCalledWith(
       "Accessibility.getFullAXTree",
-      { depth: 3 },
+      { depth: 5 },
       "s1",
     );
   });

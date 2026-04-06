@@ -216,6 +216,8 @@ interface NodeInfo {
   level?: number;       // heading level (1-6)
   htmlId?: string;      // FR-004: HTML id attribute for evaluate selectors
   isClickable?: boolean; // FR-005: Has onclick handler (for non-interactive roles like columnheader)
+  linkTarget?: string;  // FR-002: target attribute for links (e.g. "_blank")
+  isScrollable?: boolean; // FR-001: Container has overflow-y auto/scroll and scrollHeight > clientHeight
 }
 
 export class A11yTreeProcessor {
@@ -358,6 +360,9 @@ export class A11yTreeProcessor {
               if (attrs[i] === "onclick") {
                 info.isClickable = true;
               }
+              if (attrs[i] === "target" && attrs[i + 1]) {
+                info.linkTarget = attrs[i + 1];
+              }
             }
           } catch { /* ignore — text nodes etc. don't support describeNode */ }
         }));
@@ -389,6 +394,29 @@ export class A11yTreeProcessor {
       }
     } catch {
       // Non-critical — IDs and clickability are nice-to-have
+    }
+
+    // Phase 3: FR-001 — detect scrollable containers (1 CDP call total)
+    try {
+      const scrollResult = await cdpClient.send<{ result: { value: string } }>(
+        "Runtime.evaluate",
+        {
+          expression: `JSON.stringify([...document.querySelectorAll('*')].filter(el => { const s = getComputedStyle(el); return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight; }).map(el => el.id).filter(Boolean))`,
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      const scrollableIds: string[] = JSON.parse(scrollResult.result.value || "[]");
+      for (const id of scrollableIds) {
+        for (const [backendNodeId, info] of this.nodeInfoMap) {
+          if (info.htmlId === id) {
+            info.isScrollable = true;
+            break;
+          }
+        }
+      }
+    } catch {
+      // Non-critical — scrollable annotation is nice-to-have
     }
 
     debug("A11yTreeProcessor: precomputed cache refreshed, %d nodes cached (v%d)", result.nodes.length, this._cacheVersion);
@@ -1520,12 +1548,24 @@ export class A11yTreeProcessor {
       }
     }
 
+    // FR-003: iframe content hint
+    if (role === "Iframe") {
+      line += " (use evaluate to access iframe content)";
+    }
+
     // URL for links — shorten to path to save tokens
     if (role === "link" && node.properties) {
       for (const prop of node.properties) {
         if (prop.name === "url" && prop.value.value) {
           line += ` → ${shortenUrl(String(prop.value.value))}`;
           break;
+        }
+      }
+      // FR-002: target=_blank annotation
+      if (backendNodeId !== undefined) {
+        const linkInfo = this.nodeInfoMap.get(backendNodeId);
+        if (linkInfo?.linkTarget === "_blank") {
+          line += " (opens new tab)";
         }
       }
     }
@@ -1537,6 +1577,24 @@ export class A11yTreeProcessor {
           line += " (disabled)";
           break;
         }
+      }
+    }
+
+    // FR-006: contenteditable annotation
+    if (node.properties) {
+      for (const prop of node.properties) {
+        if (prop.name === "editable" && prop.value.value && prop.value.value !== "inherit") {
+          line += " (editable)";
+          break;
+        }
+      }
+    }
+
+    // FR-001: scrollable container annotation
+    if (backendNodeId !== undefined) {
+      const scrollInfo = this.nodeInfoMap.get(backendNodeId);
+      if (scrollInfo?.isScrollable) {
+        line += " (scrollable)";
       }
     }
 

@@ -182,6 +182,12 @@ export class ToolRegistry {
     if (PAGE_CONTEXT_TOOLS.has(toolName)) return;
     if (result.isError) return;
 
+    // FR-007: Navigate invalidates all refs — reset immediately so next tool gets clear stale error
+    if (toolName === "navigate") {
+      a11yTree.reset();
+      return;
+    }
+
     // Tab switch/open: session changed → force-refresh a11yTree for the new tab
     if (toolName === "switch_tab") {
       try {
@@ -203,7 +209,11 @@ export class ToolRegistry {
     if (elementClass === "disabled" || elementClass === "static") return;
 
     // FR-002: For action tools, use DOM-Diff approach
-    if (ACTION_TOOLS.has(toolName) && (elementClass === "widget-state" || elementClass === "clickable")) {
+    // FR-004: type only diffs for widget-state (combobox/autocomplete) — textbox typing doesn't need context
+    const shouldDiff = toolName === "type"
+      ? elementClass === "widget-state"
+      : (elementClass === "widget-state" || elementClass === "clickable");
+    if (ACTION_TOOLS.has(toolName) && shouldDiff) {
       if (this._waitForAXChange) {
         // FR-002: Capture pre-action snapshot BEFORE refreshing the tree
         const snapshotBefore = a11yTree.getSnapshotMap();
@@ -239,6 +249,9 @@ export class ToolRegistry {
         // Fall through to compact snapshot below
       }
     }
+
+    // FR-004: type only returns its confirmation — no snapshot fallback
+    if (toolName === "type") return;
 
     // v1 fallback: inject compact snapshot if cache version changed
     const currentVersion = a11yTree.cacheVersion;
@@ -437,7 +450,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
+      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
       {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,
