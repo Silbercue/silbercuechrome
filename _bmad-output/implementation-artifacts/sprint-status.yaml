@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-07  # Story 13.2 review
+last_updated: 2026-04-07  # Story 15.1 ready-for-dev (Operator-Modul Pro-Repo)
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -169,7 +169,34 @@ development_status:
   13a-2-ambient-page-context-v2: done
 
   # Epic 13: Visual Developer Intelligence (Phase 3)
-  epic-13: in-progress
-  13-1-inspect-element-tool: review
-  13-2-visual-feedback-nach-edits: review
+  epic-13: done
+  13-1-inspect-element-tool: done
+  13-2-visual-feedback-nach-edits: done
+  13-3-visual-feedback-nach-evaluate: done
   epic-13-retrospective: optional
+
+  # Epic 14: Session Overlay & Visual Branding
+  epic-14: done
+  14-1-session-overlay: done
+  # Logo + Tier + Response-Zeit + Aktions-Anzeige am unteren Rand
+  # Click-Indikator an Klick-Position
+  # Klickbares Lizenz-Panel (Logo-Klick -> PRO | Datum | Key | Name)
+  # Self-Healing bei SPA-Navigation
+  # Shadow DOM + CSS Custom Properties
+  epic-14-retrospective: optional
+
+  # ═══════════════════════════════════════════════════════════
+  # Phase 3: Pro-Code-Extraktion & IP-Schutz (Sprint Change 2026-04-07)
+  # Trigger: Alle Pro-Features im oeffentlichen Repo — kein IP-Schutz vor npm-Publish
+  # Proposal: sprint-change-proposal-2026-04-07.md
+  # ═══════════════════════════════════════════════════════════
+
+  # Epic 15: Pro-Code-Extraktion & IP-Schutz
+  epic-15: in-progress
+  15-1-operator-modul-pro-repo-click-hook: ready-for-dev
+  15-2-inspect-element-visual-feedback-pro-repo: backlog
+  15-3-ambient-context-on-tool-result-hook: backlog
+  15-4-execute-parallel-pro-repo: backlog
+  15-5-license-validator-pro-repo: done
+  15-6-regressions-tests-free-tier-benchmark: backlog
+  epic-15-retrospective: optional

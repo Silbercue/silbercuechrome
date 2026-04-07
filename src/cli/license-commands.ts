@@ -1,15 +1,21 @@
 /**
  * CLI commands for license management.
- * Story 9.4: Thin CLI layer over the existing LicenseValidator.
+ * Story 9.4: Thin CLI layer — reads/deletes cache directly.
+ * Story 15.5: LicenseValidator entfernt, activate gibt Pro-Feature-Hinweis.
  */
 import * as fs from "fs";
 import * as path from "path";
-import { LicenseValidator, loadLicenseConfig } from "../license/license-validator.js";
+import * as os from "os";
 
-/** Grace period constant (7 days) — duplicated from LicenseValidator (private). */
+/** Grace period constant (7 days). */
 const GRACE_PERIOD_MS = 604_800_000;
 
-/** Shape of the local cache file (mirrors LicenseValidator's private interface). */
+/** Default cache directory. */
+function getCacheDir(): string {
+  return path.join(os.homedir(), ".silbercuechrome");
+}
+
+/** Shape of the local cache file. */
 interface LicenseCache {
   key: string;
   valid: boolean;
@@ -67,7 +73,7 @@ export function maskKey(key: string): string {
 
 /** `license status` — read-only, no remote call. */
 async function licenseStatus(): Promise<void> {
-  const { cacheDir } = loadLicenseConfig();
+  const cacheDir = getCacheDir();
   const cache = readCacheDirectly(cacheDir);
 
   console.log("SilbercueChrome License Status");
@@ -104,45 +110,22 @@ async function licenseStatus(): Promise<void> {
   }
 }
 
-/** `license activate <key>` — validates key remotely, writes cache. */
-async function licenseActivate(key: string | undefined): Promise<void> {
-  if (!key) {
-    console.log("Bitte Key angeben: silbercuechrome license activate <key>");
-    process.exit(1);
-    return; // for type narrowing (process.exit is mocked in tests)
-  }
-
-  try {
-    const config = loadLicenseConfig();
-    config.licenseKey = key; // Override with CLI argument
-    const validator = new LicenseValidator(config);
-    await validator.validate();
-
-    if (validator.isPro()) {
-      console.log("License aktiviert — Pro-Features verfuegbar.");
-      process.exit(0);
-    } else {
-      // Distinguish: key invalid (server responded → cache written with valid:false)
-      // vs network error (no cache update for this key).
-      const cache = readCacheDirectly(config.cacheDir);
-      if (cache && cache.key === key && cache.valid === false) {
-        // Server responded with invalid
-        console.log("License-Key ungueltig. Pruefe den Key und versuche es erneut.");
-      } else {
-        // No cache update → network error / timeout
-        console.log("Validierung fehlgeschlagen (Netzwerkfehler). Key wurde gespeichert — Validierung beim naechsten Server-Start.");
-      }
-      process.exit(1);
-    }
-  } catch {
-    console.log("Validierung fehlgeschlagen — Netzwerkverbindung pruefen.");
-    process.exit(1);
-  }
+/**
+ * `license activate <key>` — Pro-Feature: Hinweis auf SilbercueChrome Pro.
+ * Story 15.5: LicenseValidator ist im Pro-Repo, activate ist nur dort verfuegbar.
+ */
+async function licenseActivate(_key: string | undefined): Promise<void> {
+  console.log("License-Aktivierung ist ein Pro-Feature.");
+  console.log("Installiere SilbercueChrome Pro fuer License-Key-Validierung:");
+  console.log("  npm install silbercuechrome-pro");
+  console.log("");
+  console.log("Mehr Infos: https://silbercuechrome.com/pro");
+  process.exit(1);
 }
 
 /** `license deactivate` — deletes cache file. */
 function licenseDeactivate(): void {
-  const { cacheDir } = loadLicenseConfig();
+  const cacheDir = getCacheDir();
   const cachePath = path.join(cacheDir, "license-cache.json");
 
   try {

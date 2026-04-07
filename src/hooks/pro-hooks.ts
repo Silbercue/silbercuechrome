@@ -1,4 +1,5 @@
 import type { ToolResponse } from "../types.js";
+import type { LicenseStatus } from "../license/license-status.js";
 
 /** Erweiterungspunkte fuer Pro-Features. */
 export interface ProHooks {
@@ -8,6 +9,8 @@ export interface ProHooks {
   enhanceTool?: (toolName: string, params: Record<string, unknown>) => Record<string, unknown> | null;
   /** Modifiziert die Tool-Response nach der Ausfuehrung. */
   onToolResult?: (toolName: string, result: ToolResponse) => ToolResponse;
+  /** Liefert den LicenseStatus — Pro-Repo injiziert hier den LicenseValidator. */
+  provideLicenseStatus?: () => Promise<LicenseStatus>;
 }
 
 let _hooks: ProHooks = {};

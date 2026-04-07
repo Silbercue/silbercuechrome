@@ -13,9 +13,10 @@ import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { a11yTree } from "./cache/a11y-tree.js";
 import { selectorCache } from "./cache/selector-cache.js";
-import { LicenseValidator } from "./license/license-validator.js";
-import { loadLicenseConfig } from "./license/license-validator.js";
+import { FreeTierLicenseStatus } from "./license/license-status.js";
+import type { LicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
+import { getProHooks } from "./hooks/pro-hooks.js";
 
 interface TargetInfo {
   targetId: string;
@@ -167,22 +168,24 @@ export async function startServer(): Promise<void> {
     },
   );
 
-  // Story 9.2: License-Key Validierung
-  const licenseConfig = loadLicenseConfig();
-  const licenseValidator = new LicenseValidator(licenseConfig);
-  try {
-    await licenseValidator.validate();
-  } catch {
-    // validate() should never throw, but if it does — Free Tier is fine
+  // Story 15.5: License status via ProHooks (Pro-Repo injiziert LicenseValidator)
+  const hooks = getProHooks();
+  let licenseStatus: LicenseStatus = new FreeTierLicenseStatus();
+  if (hooks.provideLicenseStatus) {
+    try {
+      licenseStatus = await hooks.provideLicenseStatus();
+    } catch {
+      // Fallback to Free Tier
+    }
   }
   const freeTierConfig = loadFreeTierConfig();
 
   // Set overlay tier label and license info
-  setTierLabel(licenseValidator.isPro());
-  setLicenseInfo(licenseConfig.licenseKey, licenseValidator.getLastCheck(), licenseValidator.getCustomerName());
+  setTierLabel(licenseStatus.isPro());
+  setLicenseInfo(undefined, undefined, undefined);
 
   // Story 13a.2: Pass waitForAXChange callback to Registry for post-click detection
-  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults, (ms) => domWatcher.waitForAXChange(ms));
+  const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseStatus, freeTierConfig, consoleCollector, networkCollector, sessionDefaults, (ms) => domWatcher.waitForAXChange(ms));
   registry.registerAll();
 
   // 5. Register reconnect handler for automatic re-wiring (Story 5.2)

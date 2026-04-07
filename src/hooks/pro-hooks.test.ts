@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { registerProHooks, getProHooks, proFeatureError } from "./pro-hooks.js";
 import type { ProHooks } from "./pro-hooks.js";
+import type { LicenseStatus } from "../license/license-status.js";
 
 describe("ProHooks", () => {
   // Reset between tests — clean state
@@ -134,5 +135,45 @@ describe("ProHooks", () => {
     expect(result.isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toContain("some_future_tool ist ein Pro-Feature");
     expect(result._meta!.method).toBe("some_future_tool");
+  });
+
+  // --- Story 15.5: provideLicenseStatus Hook ---
+
+  it("provideLicenseStatus is undefined by default", () => {
+    const hooks = getProHooks();
+    expect(hooks.provideLicenseStatus).toBeUndefined();
+  });
+
+  it("provideLicenseStatus can be registered and retrieved", async () => {
+    const mockStatus: LicenseStatus = { isPro: () => true };
+    const provider = async () => mockStatus;
+
+    registerProHooks({ provideLicenseStatus: provider });
+
+    const hooks = getProHooks();
+    expect(hooks.provideLicenseStatus).toBe(provider);
+
+    const status = await hooks.provideLicenseStatus!();
+    expect(status.isPro()).toBe(true);
+  });
+
+  it("provideLicenseStatus works alongside other hooks", () => {
+    const gate = () => ({ allowed: true });
+    const provider = async (): Promise<LicenseStatus> => ({ isPro: () => false });
+
+    registerProHooks({ featureGate: gate, provideLicenseStatus: provider });
+
+    const hooks = getProHooks();
+    expect(hooks.featureGate).toBe(gate);
+    expect(hooks.provideLicenseStatus).toBe(provider);
+  });
+
+  it("provideLicenseStatus is cleared when hooks are reset", async () => {
+    const provider = async (): Promise<LicenseStatus> => ({ isPro: () => true });
+    registerProHooks({ provideLicenseStatus: provider });
+    expect(getProHooks().provideLicenseStatus).toBeDefined();
+
+    registerProHooks({});
+    expect(getProHooks().provideLicenseStatus).toBeUndefined();
   });
 });
