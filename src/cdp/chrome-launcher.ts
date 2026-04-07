@@ -130,6 +130,10 @@ const CHROME_FLAGS = [
   "--disable-default-apps",
   "--disable-extensions",
   "--disable-background-networking",
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
+  "--enable-features=CDPScreenshotNewSurface",
   "--disable-sync",
   "--mute-audio",
 ];

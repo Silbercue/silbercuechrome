@@ -20,6 +20,10 @@ export const clickSchema = z.object({
     .string()
     .optional()
     .describe("CSS selector (e.g. '#submit-btn') — fallback when ref is not available"),
+  text: z
+    .string()
+    .optional()
+    .describe("Visible text to match (e.g. 'Submit'). Finds element by name in the A11y tree — no prior read_page needed. Prefers interactive elements (buttons, links)."),
   x: z
     .number()
     .optional()
@@ -171,21 +175,42 @@ export async function clickHandler(
         beforeTabIds = new Set(targetInfos.filter(t => t.type === "page").map(t => t.targetId));
       } catch { /* non-critical */ }
 
-      // FR-H: Coordinate click — dispatch at the exact viewport position the LLM targeted.
-      // Headed mode: no emulation, Input.dispatchMouseEvent uses viewport coords directly.
-      // Headless mode: Emulation.setDeviceMetricsOverride causes hit-testing at document
-      // coords, so we add current scroll offset to convert viewport → document space.
-      // In both cases: NO scrollTo(0,0) — that destroys the viewport position (BUG c987ac11).
-      let dispatchX = x;
-      let dispatchY = y;
+      // FR-01: Auto-scroll + headless adjustment in a single atomic evaluate.
+      // If coordinates exceed viewport dimensions, the LLM passed document/page
+      // coordinates (e.g. from a full_page screenshot). Scroll to center the target,
+      // then return the final scroll position for coordinate adjustment.
+      const snap = await cdpClient.send<{ result: { value: { sx: number; sy: number; w: number; h: number; oob: boolean } } }>(
+        "Runtime.evaluate",
+        {
+          expression: `((x,y)=>{const w=window.innerWidth,h=window.innerHeight,oob=x<0||y<0||x>=w||y>=h;if(oob)window.scrollTo(Math.max(0,x-Math.round(w/2)),Math.max(0,y-Math.round(h/2)));return{sx:Math.round(window.scrollX),sy:Math.round(window.scrollY),w,h,oob}})(${x},${y})`,
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      const { sx, sy, w: vw, h: vh, oob: autoScrolled } = snap.result.value;
+
+      // Viewport-relative coordinates (subtract scroll offset applied by auto-scroll)
+      const viewportX = autoScrolled ? x - sx : x;
+      const viewportY = autoScrolled ? y - sy : y;
+
+      // FR-01 fallback: if viewport coords are still out of bounds after scroll
+      // (page shorter than expected, overflow:hidden, etc.), warn immediately.
+      if (autoScrolled && (viewportX < 0 || viewportY < 0 || viewportX >= vw || viewportY >= vh)) {
+        const elapsedMs = Math.round(performance.now() - start);
+        return {
+          content: [{ type: "text", text: `click at (${x}, ${y}) failed: coordinates are outside page bounds (page scrolled to ${sy}px but target is at ${y}px). The page may be shorter than expected — use read_page or screenshot to verify element positions.` }],
+          isError: true,
+          _meta: { elapsedMs, method: "click", clickMethod: "coordinates" as ClickMethod, autoScrolled },
+        };
+      }
+
+      // FR-H: Headless mode — Emulation.setDeviceMetricsOverride causes hit-testing
+      // at document coords, so add scroll offset to convert viewport → document space.
+      let dispatchX = viewportX;
+      let dispatchY = viewportY;
       if (isHeadless()) {
-        const scrollSnap = await cdpClient.send<{ result: { value: { sx: number; sy: number } } }>(
-          "Runtime.evaluate",
-          { expression: "({sx:Math.round(window.scrollX),sy:Math.round(window.scrollY)})", returnByValue: true },
-          sessionId,
-        );
-        dispatchX += scrollSnap.result.value.sx;
-        dispatchY += scrollSnap.result.value.sy;
+        dispatchX += sx;
+        dispatchY += sy;
       }
 
       // Dispatch mouse events at coordinates via CDP
@@ -197,9 +222,10 @@ export async function clickHandler(
       const newTabHint = await detectNewTab(cdpClient, beforeTabIds);
 
       const elapsedMs = Math.round(performance.now() - start);
+      const scrollHint = autoScrolled ? ` (auto-scrolled from page position)` : "";
       return {
-        content: [{ type: "text", text: `Clicked at (${x}, ${y})${newTabHint}` }],
-        _meta: { elapsedMs, method: "click", clickMethod: "coordinates" as ClickMethod },
+        content: [{ type: "text", text: `Clicked at (${x}, ${y})${scrollHint}${newTabHint}` }],
+        _meta: { elapsedMs, method: "click", clickMethod: "coordinates" as ClickMethod, autoScrolled },
       };
     } catch (err) {
       const elapsedMs = Math.round(performance.now() - start);
@@ -211,13 +237,37 @@ export async function clickHandler(
     }
   }
 
+  // UX-001: Resolve text to ref before validation
+  if (params.text && !params.ref && !params.selector) {
+    // Ensure a11y tree is populated — fetch fresh if needed
+    if (!a11yTree.hasRefs()) {
+      try {
+        await a11yTree.getTree(cdpClient, sessionId!, { depth: 3, filter: "interactive", fresh: true }, sessionManager);
+      } catch { /* best-effort — findByText will return null */ }
+    }
+    const match = a11yTree.findByText(params.text);
+    if (match) {
+      params.ref = match.ref;
+    } else {
+      const elements = a11yTree.getInteractiveElements(8);
+      const hint = elements.length > 0
+        ? "\nAvailable interactive elements:\n  " + elements.join("\n  ")
+        : "\nNo interactive elements found — try read_page first.";
+      return {
+        content: [{ type: "text", text: `No element found with text "${params.text}".${hint}` }],
+        isError: true,
+        _meta: { elapsedMs: Math.round(performance.now() - start), method: "click" },
+      };
+    }
+  }
+
   // Validation (Task 2.4)
   if (!params.ref && !params.selector) {
     return {
       content: [
         {
           type: "text",
-          text: "click requires either 'ref' (e.g. 'e5'), 'selector' (e.g. '#submit-btn'), or coordinates (x + y)",
+          text: "click requires either 'ref' (e.g. 'e5'), 'selector' (e.g. '#submit-btn'), 'text' (e.g. 'Submit'), or coordinates (x + y)",
         },
       ],
       isError: true,

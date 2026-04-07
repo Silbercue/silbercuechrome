@@ -286,13 +286,7 @@ könnte er noch besser sein um dir das zu ermöglichen würde wäre es schon get
 
 
 ## Prompt für Verbesserungen
-###  wir versuchen den MTP so anzupassen, dass er perfekt mit einem LLM            
-zusammenarbeitet. Schau dir den gesamten Testverlauf           
-an und finde Fictions, wo wir die Zusammenarbeit zwischen   
-LLM und MCP verbessern können. Der MCP muss so eingestellt sein, dass es LLM sich   
-sofort auskennt. Wir müssen nicht das LLM dazu bringen, den MCP richtig zu bedienen 
- umgekehrt. Wir müssen schauen, wo das LLM Umwege gemacht hat, beziehungsweise      
-nicht sofort weitergekommen ist und noch mal einen anderen Weg gesucht hat finde    
-solche Fractions und Liste sicher auf.
+###  Verbinde dich mit Session 9254a969-1fcb-4203-9fae-12679ce7363e das ist eine Session, in der wir mit der aktuellen Version des SilbercueChrome MCP unseren Testparcour (http://localhost:4242/) durchlauden haben. wir versuchen den MTC so anzupassen, dass er perfekt mit einem LLM zusammenarbeitet. Schau dir den gesamten Testverlauf an und finde Fictions Points, an denen wir die Zusammenarbeit zwischen   
+LLM und MCP verbessern können. Immer mit der Premissie, dass der MCP so eingestellt sein muss, dass das LLM sich sofort auskennt. Wir müssen nicht das LLM dazu bringen, den MCP richtig zu bedienen. Umgekehrt. Wir müssen schauen, wo das LLM Umwege gemacht hat, beziehungsweise nicht sofort weitergekommen ist und noch mal einen anderen Weg gesucht hat finde solche Fractions und Liste sicher auf.
 
 

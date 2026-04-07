@@ -23,6 +23,9 @@ vi.mock("../cache/a11y-tree.js", () => ({
   a11yTree: {
     classifyRef: vi.fn().mockReturnValue("clickable"),
     getInteractiveElements: vi.fn().mockReturnValue([]),
+    findByText: vi.fn().mockReturnValue(null),
+    hasRefs: vi.fn().mockReturnValue(true),
+    getTree: vi.fn().mockResolvedValue({ text: "", tokenCount: 0, refCount: 0 }),
   },
 }));
 
@@ -31,6 +34,8 @@ import { a11yTree } from "../cache/a11y-tree.js";
 const mockResolveElement = vi.mocked(resolveElement);
 const mockBuildRefNotFoundError = vi.mocked(buildRefNotFoundError);
 const mockGetInteractiveElements = vi.mocked(a11yTree.getInteractiveElements);
+const mockFindByText = vi.mocked(a11yTree.findByText);
+const mockHasRefs = vi.mocked(a11yTree.hasRefs);
 
 // --- Mock CDP client ---
 
@@ -56,10 +61,10 @@ function createMockCdp(overrides: Record<string, unknown> = {}): MockCdpSetup {
 
   const listeners = new Map<string, Set<{ callback: EventCallback; sessionId?: string }>>();
 
-  const sendFn = vi.fn(async (method: string) => {
+  const sendFn = vi.fn(async (method: string, args?: unknown) => {
     if (method in defaultResponses) {
       const val = defaultResponses[method];
-      if (typeof val === "function") return (val as () => unknown)();
+      if (typeof val === "function") return (val as (a?: unknown) => unknown)(args);
       return val;
     }
     return {};
@@ -663,8 +668,20 @@ describe("clickHandler", () => {
 
   // --- FR-D: Coordinate-based click tests ---
 
+  // Helper: mock for the combined FR-01 viewport-check-and-scroll evaluate
+  function coordMock(sx: number, sy: number, oob: boolean, w = 1280, h = 800) {
+    return {
+      "Runtime.evaluate": (args: { expression: string }) => {
+        // Combined FR-01 expression (contains innerWidth)
+        if (args.expression.includes("innerWidth")) return { result: { value: { sx, sy, w, h, oob } } };
+        // Ref-based click path (scrollTo(0,0))
+        return { result: { value: undefined } };
+      },
+    };
+  }
+
   it("should click at viewport coordinates without element resolution (FR-D)", async () => {
-    const { cdpClient, sendFn } = createMockCdp();
+    const { cdpClient, sendFn } = createMockCdp(coordMock(0, 0, false));
 
     const result = await clickHandler({ x: 250, y: 100 }, cdpClient, "s1");
 
@@ -673,6 +690,7 @@ describe("clickHandler", () => {
       expect.objectContaining({ type: "text", text: "Clicked at (250, 100)" }),
     );
     expect(result._meta?.clickMethod).toBe("coordinates");
+    expect(result._meta?.autoScrolled).toBe(false);
 
     // Should NOT call resolveElement
     expect(mockResolveElement).not.toHaveBeenCalled();
@@ -688,7 +706,7 @@ describe("clickHandler", () => {
   });
 
   it("should prefer coordinates over ref when both provided (FR-D)", async () => {
-    const { cdpClient } = createMockCdp();
+    const { cdpClient } = createMockCdp(coordMock(0, 0, false));
 
     const result = await clickHandler({ ref: "e5", x: 100, y: 200 }, cdpClient, "s1");
 
@@ -696,6 +714,86 @@ describe("clickHandler", () => {
       expect.objectContaining({ text: "Clicked at (100, 200)" }),
     );
     expect(mockResolveElement).not.toHaveBeenCalled();
+  });
+
+  // --- FR-01: Auto-scroll for out-of-viewport coordinates ---
+
+  it("should auto-scroll when y exceeds viewport height (FR-01)", async () => {
+    // After scrollTo, page is at sy=1200. Viewport coord = 1600-1200 = 400.
+    // Headless adds scroll back: 400+1200 = 1600 (document coords for dispatch).
+    const { cdpClient, sendFn } = createMockCdp(coordMock(0, 1200, true));
+
+    const result = await clickHandler({ x: 300, y: 1600 }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ type: "text", text: "Clicked at (300, 1600) (auto-scrolled from page position)" }),
+    );
+    expect(result._meta?.autoScrolled).toBe(true);
+
+    // Only 1 Runtime.evaluate call (combined viewport-check + scroll + read position)
+    const evalCalls = sendFn.mock.calls.filter(
+      (c: unknown[]) => c[0] === "Runtime.evaluate",
+    );
+    expect(evalCalls).toHaveLength(1);
+
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(3);
+    expect(mouseEvents[0][1]).toEqual(expect.objectContaining({ type: "mouseMoved", x: 300, y: 1600 }));
+  });
+
+  it("should auto-scroll when x exceeds viewport width (FR-01)", async () => {
+    const { cdpClient } = createMockCdp(coordMock(500, 0, true));
+
+    const result = await clickHandler({ x: 1500, y: 300 }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result._meta?.autoScrolled).toBe(true);
+  });
+
+  it("should return isError for negative coordinates that can't be scrolled into view (FR-01)", async () => {
+    // x=-10 → scrollTo(0,...) → viewportX = -10-0 = -10 → still out of bounds
+    const { cdpClient } = createMockCdp(coordMock(0, 0, true));
+
+    const result = await clickHandler({ x: -10, y: 100 }, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("outside page bounds");
+    expect(result._meta?.autoScrolled).toBe(true);
+  });
+
+  it("should return isError when auto-scroll fails to bring coords into viewport (FR-01 fallback)", async () => {
+    // Page is only 1000px tall, LLM asks click at y=5000.
+    // scrollTo lands at sy=202 (max scroll), viewportY = 5000-202 = 4798 >> 800 → still out.
+    const { cdpClient, sendFn } = createMockCdp(coordMock(0, 202, true));
+
+    const result = await clickHandler({ x: 300, y: 5000 }, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("outside page bounds");
+    expect(text).toContain("read_page");
+    expect(result._meta?.autoScrolled).toBe(true);
+
+    // Should NOT have dispatched any mouse events
+    const mouseEvents = sendFn.mock.calls.filter(
+      (call: unknown[]) => call[0] === "Input.dispatchMouseEvent",
+    );
+    expect(mouseEvents).toHaveLength(0);
+  });
+
+  it("should not auto-scroll when coordinates are within viewport (FR-01)", async () => {
+    const { cdpClient, sendFn } = createMockCdp(coordMock(0, 0, false));
+
+    const result = await clickHandler({ x: 640, y: 400 }, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result._meta?.autoScrolled).toBe(false);
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ type: "text", text: "Clicked at (640, 400)" }),
+    );
   });
 
   // --- FR-E: New tab detection tests ---
@@ -775,5 +873,60 @@ describe("clickHandler", () => {
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).not.toContain("Available interactive elements");
+  });
+
+  // --- UX-001: Text-based click ---
+
+  it("should resolve text to ref via findByText and click", async () => {
+    mockFindByText.mockReturnValue({ ref: "e10", backendNodeId: 100 });
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 100,
+      objectId: "obj-100",
+      role: "button",
+      name: "Submit",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ text: "Submit" } as ClickParams, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({ type: "text", text: "Clicked e10 (ref)" }),
+    );
+    expect(mockFindByText).toHaveBeenCalledWith("Submit");
+  });
+
+  it("should return error with available elements when text not found", async () => {
+    mockFindByText.mockReturnValue(null);
+    mockGetInteractiveElements.mockReturnValue(["[e1] button 'OK'", "[e2] link 'Home'"]);
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ text: "Nonexistent" } as ClickParams, cdpClient, "s1");
+
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('No element found with text "Nonexistent"');
+    expect(text).toContain("[e1] button 'OK'");
+  });
+
+  it("should fetch a11y tree when refs not yet populated", async () => {
+    mockHasRefs.mockReturnValue(false);
+    mockFindByText.mockReturnValue({ ref: "e5", backendNodeId: 50 });
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 50,
+      objectId: "obj-50",
+      role: "link",
+      name: "Home",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ text: "Home" } as ClickParams, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    expect(a11yTree.getTree).toHaveBeenCalled();
   });
 });

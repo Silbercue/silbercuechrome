@@ -16,9 +16,15 @@ node build/index.js    # Stdio-Transport, verbindet sich zu Chrome via CDP
 Der Server verbindet sich automatisch zu einer laufenden Chrome-Instanz (WebSocket auf Port 9222) oder startet Chrome als Child-Prozess. Chrome muss mit Remote Debugging laufen fuer manuelle Verbindung:
 
 ```bash
-# Chrome mit Remote Debugging starten (macOS)
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+# Chrome mit Remote Debugging starten (macOS) — alle Flags fuer zuverlaessige Screenshots
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --disable-backgrounding-occluded-windows \
+  --disable-renderer-backgrounding \
+  --disable-background-timer-throttling
 ```
+
+**Wichtig:** Ohne `--disable-backgrounding-occluded-windows` liefert `screenshot` schwarze Bilder wenn das Chrome-Fenster verdeckt oder auf einem anderen Monitor ist. Bei Auto-Launch werden diese Flags automatisch gesetzt.
 
 ### Connection Modes
 

@@ -38,9 +38,26 @@ export async function readPageHandler(
 
     let responseText = result.text;
 
+    // FR-016: Warn when a subtree request returns a single leaf node — likely stale ref
+    if (params.ref && result.refCount <= 1) {
+      const trimmed = result.text.trim();
+      const isLeaf = /^(\[e\d+\]\s+)?(StaticText|img|separator|none)\b/.test(trimmed) ||
+        trimmed.split("\n").length <= 2;
+      if (isLeaf) {
+        responseText += `\n\n⚠ This ref points to a single leaf node — the DOM may have changed since read_page was last called. Consider calling read_page without ref for a fresh view.`;
+      }
+    }
+
+    // FR-03: Token metadata as structured footer — prevents LLM from needing extra calls
+    const metaParts = [`~${result.tokenCount} tokens`, `${result.refCount} refs`];
+    if (result.downsampled) {
+      metaParts.push(`downsampled from ~${result.originalTokens}`);
+    }
+    responseText += `\n\n[${metaParts.join(" | ")}]`;
+
     // Truncation warning — when downsampled, hint that overlays may be hidden
     if (result.downsampled && params.max_tokens) {
-      responseText += `\n\n⚠ Truncated to ~${params.max_tokens} tokens (full page: ~${result.originalTokens}). Overlays/modals are prioritized but some elements may be hidden — retry without max_tokens or use screenshot to check for modals.`;
+      responseText += `\n⚠ Truncated to ~${params.max_tokens} tokens. Overlays/modals are prioritized but some elements may be hidden — retry without max_tokens or use screenshot to check for modals.`;
     }
 
     // FR-H6: Detect hidden interactive elements — hint when page has hidden sections

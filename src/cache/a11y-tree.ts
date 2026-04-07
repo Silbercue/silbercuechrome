@@ -395,6 +395,44 @@ export class A11yTreeProcessor {
     return this.nodeInfoMap.get(backendNodeId);
   }
 
+  /**
+   * UX-001: Find an element by visible text (name). Returns ref string and backendNodeId.
+   * Matching priority: exact → case-insensitive exact → partial substring.
+   * Within each tier, interactive roles (button, link, etc.) are preferred.
+   */
+  findByText(text: string): { ref: string; backendNodeId: number } | null {
+    if (!text || this.reverseMap.size === 0) return null;
+
+    const lower = text.toLowerCase();
+    type Candidate = { refNum: number; backendNodeId: number; interactive: boolean };
+    const exact: Candidate[] = [];
+    const iexact: Candidate[] = [];
+    const partial: Candidate[] = [];
+
+    for (const [refNum, backendNodeId] of this.reverseMap) {
+      const info = this.nodeInfoMap.get(backendNodeId);
+      if (!info || !info.name) continue;
+      const interactive = INTERACTIVE_ROLES.has(info.role) || !!info.isClickable;
+      if (info.name === text) {
+        exact.push({ refNum, backendNodeId, interactive });
+      } else if (info.name.toLowerCase() === lower) {
+        iexact.push({ refNum, backendNodeId, interactive });
+      } else if (info.name.toLowerCase().includes(lower)) {
+        partial.push({ refNum, backendNodeId, interactive });
+      }
+    }
+
+    // Pick best candidate: prefer interactive, then lowest refNum (most stable)
+    const pick = (candidates: Candidate[]) => {
+      const interactive = candidates.filter(c => c.interactive);
+      const best = (interactive.length > 0 ? interactive : candidates)
+        .sort((a, b) => a.refNum - b.refNum)[0];
+      return best ? { ref: `e${best.refNum}`, backendNodeId: best.backendNodeId } : null;
+    };
+
+    return pick(exact) ?? pick(iexact) ?? pick(partial);
+  }
+
   /** Returns true if the ref map has been populated (i.e. getTree was called at least once). */
   hasRefs(): boolean {
     return this.refMap.size > 0;
@@ -1633,6 +1671,11 @@ export class A11yTreeProcessor {
     // FR-003: iframe content hint
     if (role === "Iframe") {
       line += " (use evaluate to access iframe content)";
+    }
+
+    // FR-008: Canvas is opaque — direct LLM to use screenshot(som: true)
+    if (role === "canvas" || role === "Canvas") {
+      line += " ⚠ Canvas content is pixels, not DOM. Use screenshot(som: true) to see what's inside.";
     }
 
     // URL for links — shorten to path to save tokens
