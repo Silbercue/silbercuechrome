@@ -112,12 +112,10 @@ export async function runPlanHandler(
   // Multi-Tab-Parallel-Engine lebt im Pro-Repo und wird via executeParallel-Hook injiziert.
   if (params.parallel) {
     // Pro-Feature-Gate: parallel requires Pro license
+    // H1-Fix (Code-Review 15.6): zentralen proFeatureError-Helper nutzen statt
+    // Inline-String, damit der Wortlaut nicht gegen den Helper-Vertrag driftet.
     if (!resolvedLicense.isPro()) {
-      return {
-        content: [{ type: "text", text: "parallel ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'" }],
-        isError: true,
-        _meta: { elapsedMs: 0, method: "run_plan" },
-      };
+      return proFeatureError("parallel");
     }
 
     if (params.parallel.length === 0) {
