@@ -557,7 +557,10 @@ export class ToolRegistry {
         const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
         // Hint: nudge LLM toward read_page for interaction
         if (!result.isError && result.content?.length > 0) {
-          result.content.push({ type: "text", text: "Tip: Use read_page for element refs — it's faster and cheaper than screenshots for interaction." });
+          const somHint = (params as unknown as ScreenshotParams).som
+            ? ""
+            : " Add som: true to overlay labeled element refs on the image.";
+          result.content.push({ type: "text", text: `Tip: Use read_page for element refs — it's faster and cheaper than screenshots.${somHint}` });
         }
         return result;
       }, "screenshot"),
@@ -583,6 +586,7 @@ export class ToolRegistry {
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
+        text: clickSchema.shape.text,
         x: clickSchema.shape.x,
         y: clickSchema.shape.y,
       },
