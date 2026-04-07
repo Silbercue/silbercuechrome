@@ -55,9 +55,114 @@ import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
+import { z } from "zod";
 import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hooks.js";
 import type { ToolRegistryPublic } from "./hooks/pro-hooks.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
+
+/**
+ * Story 16.4: Konvertiert ein JSON-Schema-Literal in eine Zod Raw Shape,
+ * damit der MCP-SDK `server.tool()` Aufruf den Schema-Check besteht.
+ *
+ * Unterstuetzte Typen:
+ * - `string` (inkl. `enum` → `z.enum`)
+ * - `boolean`
+ * - `number`
+ * - `integer` → `z.number().int()`
+ * - `array` (mit `items.type` string|number|boolean|object — verschachtelt)
+ * - `object` (rekursiv ueber `properties`/`required`)
+ * - Type-Arrays wie `["string", "null"]` → `z.union([...])`
+ * - Unbekannte Typen → `z.unknown()` als Fallback
+ *
+ * Default-Handling: Wenn ein Feld einen `default` hat, wird ausschliesslich
+ * `.default(value)` angewendet. Zod behandelt Felder mit Default in einem
+ * `z.object()` automatisch als optional (wenn der Input `undefined` ist,
+ * wird der Default eingesetzt). Erst wenn KEIN Default existiert UND das
+ * Feld nicht in `required` steht, wird `.optional()` angehaengt.
+ */
+export function jsonSchemaToZodShape(schema: Record<string, unknown>): Record<string, z.ZodTypeAny> {
+  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = new Set((schema.required ?? []) as string[]);
+  const shape: Record<string, z.ZodTypeAny> = {};
+
+  for (const [key, prop] of Object.entries(properties)) {
+    let zodType = jsonSchemaPropToZod(prop);
+
+    if (prop.description) {
+      zodType = zodType.describe(prop.description as string);
+    }
+
+    if (prop.default !== undefined) {
+      // Default impliziert in Zod automatisch optional — kein zusaetzliches
+      // .optional() noetig (waere semantisch falsch: .default().optional()
+      // veraendert den Output-Typ zu T | undefined).
+      zodType = zodType.default(prop.default);
+    } else if (!required.has(key)) {
+      zodType = zodType.optional();
+    }
+
+    shape[key] = zodType;
+  }
+
+  return shape;
+}
+
+/**
+ * Story 16.4: Konvertiert ein einzelnes JSON-Schema-Property in einen Zod-Typ.
+ * Wird sowohl von `jsonSchemaToZodShape` als auch rekursiv von sich selbst
+ * (fuer `array.items` und `object.properties`) aufgerufen.
+ */
+function jsonSchemaPropToZod(prop: Record<string, unknown>): z.ZodTypeAny {
+  const propType = prop.type;
+
+  // Type-Array (z.B. `["string", "null"]`) → Union
+  if (Array.isArray(propType)) {
+    const variants = propType.map((t) => jsonSchemaPropToZod({ ...prop, type: t }));
+    if (variants.length === 0) return z.unknown();
+    if (variants.length === 1) return variants[0]!;
+    return z.union(variants as [z.ZodTypeAny, z.ZodTypeAny, ...z.ZodTypeAny[]]);
+  }
+
+  if (propType === "null") {
+    return z.null();
+  }
+
+  if (propType === "string") {
+    const enumValues = prop.enum as string[] | undefined;
+    if (Array.isArray(enumValues) && enumValues.length > 0) {
+      return z.enum(enumValues as [string, ...string[]]);
+    }
+    return z.string();
+  }
+
+  if (propType === "boolean") {
+    return z.boolean();
+  }
+
+  if (propType === "number") {
+    return z.number();
+  }
+
+  if (propType === "integer") {
+    return z.number().int();
+  }
+
+  if (propType === "array") {
+    const items = prop.items as Record<string, unknown> | undefined;
+    if (items && typeof items === "object") {
+      return z.array(jsonSchemaPropToZod(items));
+    }
+    return z.array(z.unknown());
+  }
+
+  if (propType === "object") {
+    // Rekursiver Aufruf fuer verschachtelte Objekte
+    const nestedShape = jsonSchemaToZodShape(prop);
+    return z.object(nestedShape);
+  }
+
+  return z.unknown();
+}
 
 export class ToolRegistry implements ToolRegistryPublic {
   private _sessionId: string;
@@ -125,7 +230,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
   constructor(
     private server: McpServer,
-    private cdpClient: CdpClient,
+    public cdpClient: CdpClient,
     sessionId: string,
     private _tabStateCache: TabStateCache,
     getConnectionStatus?: () => ConnectionStatus,
@@ -152,6 +257,11 @@ export class ToolRegistry implements ToolRegistryPublic {
 
   get sessionId(): string {
     return this._sessionId;
+  }
+
+  /** Story 16.4: Public getter fuer OOPIF SessionManager (ToolRegistryPublic). */
+  get sessionManager(): SessionManager | undefined {
+    return this._sessionManager;
   }
 
   updateSession(sessionId: string): void {
@@ -479,6 +589,9 @@ export class ToolRegistry implements ToolRegistryPublic {
     this._registerProToolDelegate = (name, description, schema, handler) => {
       // Register in the internal handlers map (for executeTool / run_plan)
       this._handlers.set(name, handler);
+      // Story 16.4: Pro-Repo liefert JSON-Schema-Literale (kein zod).
+      // MCP SDK erwartet Zod — konvertieren wir hier in der Free-Repo-Schicht.
+      const zodShape = jsonSchemaToZodShape(schema);
       // Register with the MCP server (for tools/list). Reuse the same
       // `wrap()` closure as Free-Tools so Pro-Tools inherit the same
       // cross-cutting concerns (dialog injection, response_bytes,
@@ -486,7 +599,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       this.server.tool(
         name,
         description,
-        schema,
+        zodShape,
         wrap(async (params) => handler(params as Record<string, unknown>), name),
       );
     };

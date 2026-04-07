@@ -429,6 +429,9 @@ describe("ProHooks", () => {
     // Simulate Free-Repo calling the hook with a fake registry
     const fakeRegistry: ToolRegistryPublic = {
       registerTool: vi.fn(),
+      cdpClient: { send: vi.fn() } as unknown as CdpClient,
+      sessionId: "session-1",
+      sessionManager: undefined,
     };
     hooks.registerProTools!(fakeRegistry);
     expect(impl).toHaveBeenCalledWith(fakeRegistry);

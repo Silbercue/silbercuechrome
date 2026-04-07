@@ -25,6 +25,13 @@ export interface ToolRegistryPublic {
       sessionIdOverride?: string,
     ) => Promise<ToolResponse>,
   ): void;
+
+  /** Story 16.4: CDP-Client fuer Pro-Tool-Handler (z.B. inspect_element). */
+  readonly cdpClient: CdpClient;
+  /** Story 16.4: Aktuelle SessionId — aendert sich bei Tab-Wechsel/Reconnect. */
+  readonly sessionId: string;
+  /** Story 16.4: SessionManager fuer OOPIF-Support (optional). */
+  readonly sessionManager?: SessionManager;
 }
 
 /**
