@@ -2441,6 +2441,202 @@ describe("ToolRegistry", () => {
       expect((result._meta!.response_bytes as number) > 0).toBe(true);
     });
   });
+
+  // --- Story 16.5: enhanceTool hook wiring ---
+  describe("enhanceTool hook", () => {
+    it("enhanceTool hook is invoked during wrap() path (server.tool direct call)", async () => {
+      const enhanceToolSpy = vi.fn().mockReturnValue(null);
+      registerProHooks({ enhanceTool: enhanceToolSpy });
+
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
+      } as never;
+      let registeredEvaluateHandler:
+        | ((params: Record<string, unknown>) => Promise<unknown>)
+        | null = null;
+      const toolFn = vi.fn((name: string, _desc: string, _schema: unknown, handler: unknown) => {
+        if (name === "evaluate") {
+          registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
+        }
+      });
+      const mockServer = { tool: toolFn } as never;
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      expect(registeredEvaluateHandler).not.toBeNull();
+      // Invoke via the server.tool()-registered wrap() closure (MCP direct path)
+      await registeredEvaluateHandler!({
+        expression: "1",
+        await_promise: false,
+      });
+
+      expect(enhanceToolSpy).toHaveBeenCalled();
+      const call = enhanceToolSpy.mock.calls[0];
+      expect(call[0]).toBe("evaluate");
+      expect(call[1]).toEqual(
+        expect.objectContaining({ expression: "1", await_promise: false }),
+      );
+    });
+
+    it("enhanceTool return value replaces params passed to handler (wrap path)", async () => {
+      // The hook substitutes the expression entirely. We assert that the
+      // substituted expression — NOT the original — reaches the CDP layer,
+      // which proves that the new params object returned by the hook was
+      // actually forwarded to the handler.
+      const enhanceToolSpy = vi
+        .fn()
+        .mockImplementation((name: string, params: Record<string, unknown>) => {
+          if (name !== "evaluate") return null;
+          return { ...params, expression: "ENHANCED_EXPR" };
+        });
+      registerProHooks({ enhanceTool: enhanceToolSpy });
+
+      const sendSpy = vi.fn().mockResolvedValue({
+        result: { type: "number", value: 1 },
+      });
+      const mockCdpClient = { send: sendSpy } as never;
+      let registeredEvaluateHandler:
+        | ((params: Record<string, unknown>) => Promise<unknown>)
+        | null = null;
+      const toolFn = vi.fn((name: string, _d: string, _s: unknown, handler: unknown) => {
+        if (name === "evaluate") {
+          registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
+        }
+      });
+      const mockServer = { tool: toolFn } as never;
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registeredEvaluateHandler!({
+        expression: "ORIGINAL_EXPR",
+        await_promise: false,
+      });
+
+      expect(enhanceToolSpy).toHaveBeenCalled();
+      // The handler MUST have been called with the enhanced params:
+      // Runtime.evaluate is dispatched with the substituted expression.
+      // (Filter to user-driven evaluate calls — internal session-overlay sniffs
+      // also use Runtime.evaluate but pass different shape.)
+      const evaluateCalls = sendSpy.mock.calls.filter(
+        (c) =>
+          c[0] === "Runtime.evaluate" &&
+          typeof (c[1] as { expression?: string }).expression === "string" &&
+          ((c[1] as { expression: string }).expression === "ENHANCED_EXPR" ||
+            (c[1] as { expression: string }).expression === "ORIGINAL_EXPR"),
+      );
+      expect(evaluateCalls.length).toBe(1);
+      const evalArgs = evaluateCalls[0][1] as { expression: string };
+      expect(evalArgs.expression).toBe("ENHANCED_EXPR");
+      // And NOT with the original expression — proving substitution happened.
+      const calledWithOriginal = sendSpy.mock.calls.some(
+        (c) =>
+          c[0] === "Runtime.evaluate" &&
+          (c[1] as { expression?: string }).expression === "ORIGINAL_EXPR",
+      );
+      expect(calledWithOriginal).toBe(false);
+    });
+
+    it("enhanceTool returning null leaves params unchanged (wrap path)", async () => {
+      const enhanceToolSpy = vi.fn().mockReturnValue(null);
+      registerProHooks({ enhanceTool: enhanceToolSpy });
+
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
+      } as never;
+      let registeredEvaluateHandler:
+        | ((params: Record<string, unknown>) => Promise<unknown>)
+        | null = null;
+      const toolFn = vi.fn((name: string, _d: string, _s: unknown, handler: unknown) => {
+        if (name === "evaluate") {
+          registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
+        }
+      });
+      const mockServer = { tool: toolFn } as never;
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registeredEvaluateHandler!({
+        expression: "1",
+        await_promise: false,
+      });
+
+      expect(enhanceToolSpy).toHaveBeenCalled();
+      expect(result).toBeDefined();
+    });
+
+    it("enhanceTool hook is invoked during executeTool() path (run_plan)", async () => {
+      const enhanceToolSpy = vi.fn().mockReturnValue(null);
+      registerProHooks({ enhanceTool: enhanceToolSpy });
+
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registry.executeTool("evaluate", {
+        expression: "1",
+        await_promise: false,
+      });
+
+      // Must have been called at least once for evaluate (ignore featureGate etc.)
+      const evaluateCalls = enhanceToolSpy.mock.calls.filter(
+        (c) => c[0] === "evaluate",
+      );
+      expect(evaluateCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("executeTool runs normally when no enhanceTool hook is registered", async () => {
+      // Default empty hooks — no enhanceTool
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 7 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool("evaluate", {
+        expression: "7",
+        await_promise: false,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.isError).toBeFalsy();
+    });
+  });
 });
 
 // Story 16.4 H2/H3/M1: Unit-Tests fuer den JSON-Schema → Zod-Shape Konverter,

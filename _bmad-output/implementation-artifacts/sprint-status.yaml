@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-07
+# last_updated: 2026-04-08
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-07  # Story 15.1 ready-for-dev (Operator-Modul Pro-Repo)
+last_updated: 2026-04-07  # Story 16.5 done
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -156,12 +156,15 @@ development_status:
   epic-11-retrospective: optional
 
   # Epic 12: Token-Transparenz & Metriken
-  epic-12: done
+  epic-12: in-progress
   12-1-meta-response-bytes: done
   12-2-meta-estimated-tokens: done
   12-3-token-budget-benchmark-test: done
   12-4-tool-definitions-token-zaehler: done
+  12-6-ambient-context-token-delta-messung: backlog
   epic-12-retrospective: optional
+  # 12-5 (Auto-Context navigate/click) ist im epics.md spezifiziert aber nicht eingeplant — bewusst uebersprungen
+  # 12-6 reaktiviert das Epic: misst echte Ambient-Context-Token-Ersparnis (Vorbedingung fuer 14.2-Phase-4)
 
   # Epic 13a: LLM Awareness (Ambient Page Context)
   epic-13a: done
@@ -176,13 +179,17 @@ development_status:
   epic-13-retrospective: optional
 
   # Epic 14: Session Overlay & Visual Branding
-  epic-14: done
+  epic-14: in-progress
   14-1-session-overlay: done
-  # Logo + Tier + Response-Zeit + Aktions-Anzeige am unteren Rand
-  # Click-Indikator an Klick-Position
-  # Klickbares Lizenz-Panel (Logo-Klick -> PRO | Datum | Key | Name)
-  # Self-Healing bei SPA-Navigation
-  # Shadow DOM + CSS Custom Properties
+  14-2-session-overlay-free-mode-upsell-panel: ready-for-dev
+  # 14-1: Logo + Tier + Response-Zeit + Aktions-Anzeige am unteren Rand
+  #       Click-Indikator an Klick-Position
+  #       Klickbares Lizenz-Panel (Logo-Klick -> PRO | Datum | Key | Name)
+  #       Self-Healing bei SPA-Navigation
+  #       Shadow DOM + CSS Custom Properties
+  # 14-2: Klick-Rotation Idle -> Session-Stats-Panel -> Lizenz-Panel
+  #       Echte Session-Tokens/Time/Calls + Pro-Gating-Counter (kein Heuristik-Marketing)
+  #       Vorbereitet fuer Story 12.6 Phase 4 (echte Ambient-Token-Saved-Anzeige)
   epic-14-retrospective: optional
 
   # ═══════════════════════════════════════════════════════════
@@ -192,11 +199,28 @@ development_status:
   # ═══════════════════════════════════════════════════════════
 
   # Epic 15: Pro-Code-Extraktion & IP-Schutz
-  epic-15: in-progress
-  15-1-operator-modul-pro-repo-click-hook: ready-for-dev
-  15-2-inspect-element-visual-feedback-pro-repo: backlog
-  15-3-ambient-context-on-tool-result-hook: backlog
-  15-4-execute-parallel-pro-repo: backlog
+  epic-15: done
+  15-1-operator-modul-pro-repo-click-hook: done
+  15-2-inspect-element-visual-feedback-pro-repo: done
+  15-3-ambient-context-on-tool-result-hook: done
+  15-4-execute-parallel-pro-repo: done
   15-5-license-validator-pro-repo: done
-  15-6-regressions-tests-free-tier-benchmark: backlog
+  15-6-regressions-tests-free-tier-benchmark: done
   epic-15-retrospective: optional
+
+  # ═══════════════════════════════════════════════════════════
+  # Phase 3b: Pro-Repo Implementierung (Sprint Change 2026-04-08)
+  # Trigger: Epic 15 hat Pro-Code aus Free-Repo entfernt — Pro-Repo existiert nur konzeptuell
+  # Proposal: sprint-change-proposal-2026-04-08-epic16.md
+  # ═══════════════════════════════════════════════════════════
+
+  # Epic 16: Pro-Repo Implementierung
+  epic-16: in-progress
+  16-1-pro-repo-bootstrap: done
+  16-2-license-validator-pro-repo: done
+  16-3-execute-parallel-pro-repo: done
+  16-4-inspect-element-visual-feedback-pro-repo: done
+  16-5-operator-modul-pro-repo: done
+  16-6-ambient-context-pro-repo: ready-for-dev
+  16-7-pro-repo-integration-benchmark: backlog
+  epic-16-retrospective: optional

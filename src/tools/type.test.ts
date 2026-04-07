@@ -611,4 +611,45 @@ describe("typeHandler", () => {
       mockSessionManager,
     );
   });
+
+  // --- Story 16.5: humanType callback delegation ---
+
+  describe("Story 16.5 — humanType callback", () => {
+    it("delegates text insertion to humanType callback when provided", async () => {
+      mockResolveElement.mockResolvedValue(mockTextbox());
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const humanType = vi.fn().mockResolvedValue(undefined);
+      const params = {
+        ref: "e42",
+        text: "hello",
+        clear: false,
+        humanType,
+      } as unknown as TypeParams;
+
+      const result = await typeHandler(params, cdpClient, "s1");
+
+      expect(result.isError).toBeUndefined();
+      expect(humanType).toHaveBeenCalledWith(cdpClient, "s1", "hello");
+      // Raw Input.insertText should NOT have been issued
+      const insertCalls = sendFn.mock.calls.filter((c) => c[0] === "Input.insertText");
+      expect(insertCalls.length).toBe(0);
+    });
+
+    it("falls back to raw Input.insertText when humanType is absent", async () => {
+      mockResolveElement.mockResolvedValue(mockTextbox());
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const result = await typeHandler(
+        { ref: "e42", text: "hello", clear: false } as TypeParams,
+        cdpClient,
+        "s1",
+      );
+
+      expect(result.isError).toBeUndefined();
+      const insertCalls = sendFn.mock.calls.filter((c) => c[0] === "Input.insertText");
+      expect(insertCalls.length).toBe(1);
+      expect(insertCalls[0][1]).toEqual({ text: "hello" });
+    });
+  });
 });
