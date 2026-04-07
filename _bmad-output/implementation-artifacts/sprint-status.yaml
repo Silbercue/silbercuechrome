@@ -144,7 +144,7 @@ development_status:
   epic-10-retrospective: optional
 
   # Epic 11: Benchmark-Suite v2 — Community Pain Points
-  epic-11: in-progress
+  epic-11: done
   11-1-level5-infrastruktur: done
   11-2-session-persistence-test: done
   11-3-cdp-fingerprint-test: done
@@ -164,11 +164,12 @@ development_status:
   epic-12-retrospective: optional
 
   # Epic 13a: LLM Awareness (Ambient Page Context)
-  epic-13a: in-progress
+  epic-13a: done
   13a-1-ambient-page-context: done
+  13a-2-ambient-page-context-v2: done
 
   # Epic 13: Visual Developer Intelligence (Phase 3)
-  epic-13: backlog
-  13-1-inspect-element-tool: backlog
+  epic-13: in-progress
+  13-1-inspect-element-tool: ready-for-dev
   13-2-visual-feedback-nach-edits: backlog
   epic-13-retrospective: optional
