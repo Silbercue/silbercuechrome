@@ -51,6 +51,7 @@ import type { ObserveParams } from "./tools/observe.js";
 import { inspectElementSchema, inspectElementHandler } from "./tools/inspect-element.js";
 import type { InspectElementParams } from "./tools/inspect-element.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
+import { injectOverlay, updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
 import { Captain } from "./operator/captain.js";
@@ -423,55 +424,87 @@ export class ToolRegistry {
       }
     };
 
+    // Session overlay: show status before tool, clear after (with elapsed time)
+    const overlayBefore = async (name: string) => {
+      await updateOverlayStatus(this.cdpClient, this._sessionId, getToolLabel(name));
+    };
+    const overlayAfter = async (elapsedMs?: number, meta?: Record<string, unknown>) => {
+      if (elapsedMs !== undefined && elapsedMs > 0) setLastElapsed(elapsedMs);
+      // Show click indicator at click position
+      if (meta?.clickX !== undefined && meta?.clickY !== undefined) {
+        showClickIndicator(this.cdpClient, this._sessionId, meta.clickX as number, meta.clickY as number);
+      }
+      await updateOverlayStatus(this.cdpClient, this._sessionId, "");
+    };
+
     const wrap = <T>(fn: (params: T) => Promise<ToolResponse>, toolName?: string) => {
       const dialogWrapped = this._wrapWithDialogInjection(fn);
       if (!sessionDefaults) {
         // Story 12.1: Inject response_bytes even without sessionDefaults
         return async (params: T): Promise<ToolResponse> => {
-          const result = await dialogWrapped(params);
-          // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-          await this._injectAmbientContext(result, toolName ?? "unknown");
-          injectResponseBytes(result);
-          return result;
+          const name = toolName ?? "unknown";
+          await overlayBefore(name);
+          let elapsed: number | undefined;
+          let meta: Record<string, unknown> | undefined;
+          try {
+            const result = await dialogWrapped(params);
+            elapsed = result._meta?.elapsedMs as number | undefined;
+            meta = result._meta as Record<string, unknown> | undefined;
+            // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
+            await this._injectAmbientContext(result, name);
+            injectResponseBytes(result);
+            return result;
+          } finally {
+            await overlayAfter(elapsed, meta);
+          }
         };
       }
       return async (params: T): Promise<ToolResponse> => {
         const name = toolName ?? "unknown";
-        // H2 fix: Skip trackCall/resolveParams for meta-tools
-        if (name === "configure_session") {
-          const result = await dialogWrapped(params);
-          injectResponseBytes(result);
-          return result;
-        }
-        // Track call for auto-promote analysis
-        sessionDefaults.trackCall(name, params as unknown as Record<string, unknown>);
-        // H1 fix: Read suggestions immediately after trackCall (atomic with tracking)
-        let suggestionText: string | undefined;
-        const suggestions = sessionDefaults.getSuggestions();
-        if (suggestions.length > 0) {
-          const s = suggestions[0];
-          suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
-        }
-        // Resolve defaults into params
-        const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
-        const result = await dialogWrapped(resolvedParams);
-        // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-        await this._injectAmbientContext(result, name);
-        // Inject auto-promote suggestion into _meta
-        if (suggestionText && result._meta) {
-          result._meta.suggestion = suggestionText;
-        }
-        // Story 12.1: Inject response_bytes into _meta
-        // Story 12.2: Inject estimated_tokens for text-heavy tools
-        if (result._meta) {
-          const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
-          result._meta.response_bytes = responseBytes;
-          const method = result._meta.method;
-          if (method === "read_page" || method === "dom_snapshot") {
-            result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
+        await overlayBefore(name);
+        let elapsed: number | undefined;
+        let meta: Record<string, unknown> | undefined;
+        try {
+          // H2 fix: Skip trackCall/resolveParams for meta-tools
+          if (name === "configure_session") {
+            const result = await dialogWrapped(params);
+            injectResponseBytes(result);
+            return result;
           }
+          // Track call for auto-promote analysis
+          sessionDefaults.trackCall(name, params as unknown as Record<string, unknown>);
+          // H1 fix: Read suggestions immediately after trackCall (atomic with tracking)
+          let suggestionText: string | undefined;
+          const suggestions = sessionDefaults.getSuggestions();
+          if (suggestions.length > 0) {
+            const s = suggestions[0];
+            suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
+          }
+          // Resolve defaults into params
+          const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
+          const result = await dialogWrapped(resolvedParams);
+          // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
+          await this._injectAmbientContext(result, name);
+          // Inject auto-promote suggestion into _meta
+          if (suggestionText && result._meta) {
+            result._meta.suggestion = suggestionText;
+          }
+          // Story 12.1: Inject response_bytes into _meta
+          // Story 12.2: Inject estimated_tokens for text-heavy tools
+          if (result._meta) {
+            const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
+            result._meta.response_bytes = responseBytes;
+            const method = result._meta.method;
+            if (method === "read_page" || method === "dom_snapshot") {
+              result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
+            }
+          }
+          elapsed = result._meta?.elapsedMs as number | undefined;
+          meta = result._meta as Record<string, unknown> | undefined;
+          return result;
+        } finally {
+          await overlayAfter(elapsed, meta);
         }
-        return result;
       };
     };
 

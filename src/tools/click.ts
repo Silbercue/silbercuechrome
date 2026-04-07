@@ -47,13 +47,15 @@ interface TargetInfo {
   title: string;
 }
 
+interface ClickResult { method: ClickMethod; x: number; y: number }
+
 async function dispatchClick(
   cdpClient: CdpClient,
   sessionId: string,
   backendNodeId: number,
   objectId: string,
   humanTouch?: HumanTouchConfig,
-): Promise<ClickMethod> {
+): Promise<ClickResult> {
   // Step 1: Reset scroll to origin before clicking.
   // When Emulation.setDeviceMetricsOverride is active, Input.dispatchMouseEvent
   // hit-tests at document coordinates (viewport + scrollY) instead of viewport
@@ -121,7 +123,7 @@ async function dispatchClick(
         },
         sessionId,
       );
-      return "js-click";
+      return { method: "js-click" as ClickMethod, x: 0, y: 0 };
     }
   }
 
@@ -148,7 +150,7 @@ async function dispatchClick(
     sessionId,
   );
 
-  return clickMethod;
+  return { method: clickMethod, x, y };
 }
 
 // --- Main handler (Task 6) ---
@@ -288,7 +290,7 @@ export async function clickHandler(
     const element = await resolveElement(cdpClient, sessionId!, target, sessionManager);
 
     // Dispatch click using the resolved session (may be OOPIF or main)
-    const clickMethod = await dispatchClick(
+    const clickResult = await dispatchClick(
       cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId, humanTouch,
     );
 
@@ -299,7 +301,7 @@ export async function clickHandler(
     const elementClass = params.ref ? a11yTree.classifyRef(params.ref) : "clickable";
 
     const elapsedMs = Math.round(performance.now() - start);
-    const suffix = clickMethod !== "cdp" ? `, fallback: ${clickMethod}` : "";
+    const suffix = clickResult.method !== "cdp" ? `, fallback: ${clickResult.method}` : "";
     return {
       content: [
         {
@@ -311,7 +313,9 @@ export async function clickHandler(
         elapsedMs,
         method: "click",
         resolvedVia: element.resolvedVia,
-        clickMethod,
+        clickMethod: clickResult.method,
+        clickX: clickResult.x,
+        clickY: clickResult.y,
         elementClass,
       },
     };

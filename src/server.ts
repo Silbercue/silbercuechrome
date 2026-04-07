@@ -8,6 +8,7 @@ import { NetworkCollector } from "./cdp/network-collector.js";
 import { DomWatcher } from "./cdp/dom-watcher.js";
 import { DEVICE_METRICS_OVERRIDE, EMULATED_WIDTH, EMULATED_HEIGHT, setHeadless } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
+import { injectOverlay, removeOverlay, setTierLabel } from "./overlay/session-overlay.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { a11yTree } from "./cache/a11y-tree.js";
@@ -85,6 +86,9 @@ export async function startServer(): Promise<void> {
       await cdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, sessionId);
     }
   }
+
+  // 3b. Inject session overlay (visual indicator for controlled tab)
+  await injectOverlay(cdpClient, sessionId);
 
   // 4. Create TabStateCache and attach to CDP events
   const tabStateCache = new TabStateCache({ ttlMs: 30_000 });
@@ -173,6 +177,9 @@ export async function startServer(): Promise<void> {
   }
   const freeTierConfig = loadFreeTierConfig();
 
+  // Set overlay tier label based on license status
+  setTierLabel(licenseValidator.isPro());
+
   // Story 13a.2: Pass waitForAXChange callback to Registry for post-click detection
   const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults, (ms) => domWatcher.waitForAXChange(ms));
   registry.registerAll();
@@ -206,6 +213,9 @@ export async function startServer(): Promise<void> {
     if (headless) {
       await newCdpClient.send("Emulation.setDeviceMetricsOverride", DEVICE_METRICS_OVERRIDE, newSessionId);
     }
+
+    // 2b. Re-inject session overlay after reconnect
+    await injectOverlay(newCdpClient, newSessionId);
 
     // 3. Re-wire TabStateCache: detach from old, attach to new
     tabStateCache.detachFromClient();
@@ -262,6 +272,7 @@ export async function startServer(): Promise<void> {
 
   // 8. Graceful shutdown
   const shutdown = async () => {
+    await removeOverlay(cdpClient, sessionId).catch(() => {});
     domWatcher.detach();
     networkCollector.detach();
     consoleCollector.detach();

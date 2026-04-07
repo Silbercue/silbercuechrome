@@ -761,7 +761,8 @@ describe("ToolRegistry", () => {
     const sendCalls = (mockCdpClient as { send: ReturnType<typeof vi.fn> }).send.mock.calls;
     expect(sendCalls.length).toBeGreaterThan(0);
     // Runtime.evaluate should have awaitPromise: true (resolved from session default)
-    const evalCall = sendCalls.find((c: unknown[]) => c[0] === "Runtime.evaluate");
+    // Filter out overlay status calls (awaitPromise: false) to find the actual evaluate tool call
+    const evalCall = sendCalls.find((c: unknown[]) => c[0] === "Runtime.evaluate" && c[1]?.awaitPromise === true);
     expect(evalCall).toBeDefined();
     expect(evalCall![1].awaitPromise).toBe(true);
   });
