@@ -6,6 +6,7 @@ import type { TabStateCache } from "../cache/tab-state-cache.js";
 import { settle } from "../cdp/settle.js";
 import { DEVICE_METRICS_OVERRIDE, isHeadless } from "../cdp/emulation.js";
 import { wrapCdpError } from "./error-utils.js";
+import { injectOverlay } from "../overlay/session-overlay.js";
 
 export const switchTabSchema = z.object({
   action: z
@@ -109,6 +110,7 @@ async function activateSession(
   await cdpClient.send("Runtime.enable", {}, newSessionId);
   await cdpClient.send("Page.enable", {}, newSessionId);
   await cdpClient.send("Page.setLifecycleEventsEnabled", { enabled: true }, newSessionId);
+  await cdpClient.send("DOM.enable", {}, newSessionId);
   await cdpClient.send("Accessibility.enable", {}, newSessionId);
   // BUG-015 fix: Keep renderer alive when window is occluded on macOS (per-tab).
   if (!isHeadless()) {
@@ -125,6 +127,9 @@ async function activateSession(
 
   // 4. Propagate new session to ToolRegistry
   onSessionChange(newSessionId);
+
+  // 5. Inject session overlay into the new tab
+  await injectOverlay(cdpClient, newSessionId);
 
   return newSessionId;
 }
