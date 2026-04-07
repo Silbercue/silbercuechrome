@@ -34,7 +34,13 @@ import {
   phase5_publishAndRelease,
   phase6_verify,
   main,
+  CONFIG,
 } from "./publish.js";
+
+// Use the same BRANCH/REMOTE as the script under test, so that env-overrides
+// (SILBERCUE_PUBLISH_BRANCH / SILBERCUE_PUBLISH_REMOTE) propagate to the tests.
+const BRANCH = CONFIG.BRANCH;
+const REMOTE = CONFIG.REMOTE;
 
 const mockExecFileSync = execFileSync as Mock;
 const mockReadFileSync = readFileSync as Mock;
@@ -235,13 +241,14 @@ describe("phase1_checkRepoStatus", () => {
     expect(result.message).toContain("uncommitted changes");
   });
 
-  it("fails when free repo is not on main branch", () => {
+  it("fails when free repo is not on configured branch", () => {
     setupMock([
       { match: ["git", "--version"], result: "git version 2.40" },
       { match: ["npm", "whoami"], result: "julian" },
       { match: ["gh", "auth", "status"], result: "Logged in" },
       { match: ["git", "status", "--porcelain"], result: "" },
       { match: ["git", "rev-parse", "--abbrev-ref"], result: "feature/xyz" },
+      { match: ["git", "remote", "get-url"], result: `git@github.com:foo/bar.git` },
     ]);
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(JSON.stringify({ version: "0.1.0" }));
@@ -249,7 +256,7 @@ describe("phase1_checkRepoStatus", () => {
     const result = phase1_checkRepoStatus(FREE_REPO, PRO_REPO);
     expect(result.success).toBe(false);
     expect(result.message).toContain("feature/xyz");
-    expect(result.message).toContain("expected 'main'");
+    expect(result.message).toContain(`expected '${BRANCH}'`);
   });
 
   it("detects version mismatch between free and pro repos (AC #2)", () => {
@@ -260,7 +267,8 @@ describe("phase1_checkRepoStatus", () => {
         if (fullArgs.includes("whoami")) return "julian";
         if (fullArgs.includes("auth status")) return "Logged in";
         if (fullArgs.includes("--porcelain")) return "";
-        if (fullArgs.includes("--abbrev-ref")) return "main";
+        if (fullArgs.includes("--abbrev-ref")) return BRANCH;
+        if (fullArgs.includes("remote get-url")) return "git@github.com:foo/bar.git";
         return "";
       },
     );
@@ -284,15 +292,17 @@ describe("phase1_checkRepoStatus", () => {
       { match: ["npm", "whoami"], result: "julian" },
       { match: ["gh", "auth", "status"], result: "Logged in" },
       { match: ["git", "status", "--porcelain"], result: "" },
-      { match: ["git", "rev-parse", "--abbrev-ref"], result: "main" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], result: "git@github.com:foo/bar.git" },
     ]);
 
     mockExistsSync.mockImplementation((path: string) => {
       if (typeof path === "string" && path.includes(PRO_REPO)) return false;
       return true;
     });
+    // Phase 0: package.json must NOT be private — Phase 1 throws otherwise.
     mockReadFileSync.mockReturnValue(
-      JSON.stringify({ version: "0.1.0", private: true }),
+      JSON.stringify({ version: "0.1.0", private: false }),
     );
 
     const result = phase1_checkRepoStatus(FREE_REPO, PRO_REPO);
@@ -303,6 +313,48 @@ describe("phase1_checkRepoStatus", () => {
     expect(result.context!.tag).toBe("v0.1.0");
   });
 
+  it("throws when free package.json has private:true", () => {
+    setupMock([
+      { match: ["git", "--version"], result: "git version 2.40" },
+      { match: ["npm", "whoami"], result: "julian" },
+      { match: ["gh", "auth", "status"], result: "Logged in" },
+      { match: ["git", "status", "--porcelain"], result: "" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], result: "git@github.com:foo/bar.git" },
+    ]);
+
+    mockExistsSync.mockImplementation((path: string) => {
+      if (typeof path === "string" && path.includes(PRO_REPO)) return false;
+      return true;
+    });
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({ version: "0.1.0", private: true }),
+    );
+
+    expect(() => phase1_checkRepoStatus(FREE_REPO, PRO_REPO)).toThrow(/private/);
+  });
+
+  it("fails when free repo has no configured remote", () => {
+    setupMockWithErrors([
+      { match: ["git", "--version"], result: "git version 2.40" },
+      { match: ["npm", "whoami"], result: "julian" },
+      { match: ["gh", "auth", "status"], result: "Logged in" },
+      { match: ["git", "status", "--porcelain"], result: "" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], error: "No such remote" },
+    ]);
+
+    mockExistsSync.mockImplementation((path: string) => {
+      if (typeof path === "string" && path.includes(PRO_REPO)) return false;
+      return true;
+    });
+    mockReadFileSync.mockReturnValue(JSON.stringify({ version: "0.1.0" }));
+
+    const result = phase1_checkRepoStatus(FREE_REPO, PRO_REPO);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("no '" + REMOTE + "' remote");
+  });
+
   it("succeeds with both repos in sync", () => {
     mockExecFileSync.mockImplementation(
       (cmd: string, args: string[], _opts: { cwd: string }) => {
@@ -311,7 +363,8 @@ describe("phase1_checkRepoStatus", () => {
         if (fullArgs.includes("whoami")) return "julian";
         if (fullArgs.includes("auth status")) return "Logged in";
         if (fullArgs.includes("--porcelain")) return "";
-        if (fullArgs.includes("--abbrev-ref")) return "main";
+        if (fullArgs.includes("--abbrev-ref")) return BRANCH;
+        if (fullArgs.includes("remote get-url")) return "git@github.com:foo/bar.git";
         return "";
       },
     );
@@ -332,7 +385,7 @@ describe("phase2_commitAndPush", () => {
 
   it("reports repos already in sync", () => {
     setupMock([
-      { match: ["git", "log", "origin/main..HEAD"], result: "" },
+      { match: ["git", "log", `${REMOTE}/${BRANCH}..HEAD`], result: "" },
     ]);
 
     const result = phase2_commitAndPush(makeContext(), realOpts());
@@ -343,10 +396,10 @@ describe("phase2_commitAndPush", () => {
   it("pushes when commits are ahead", () => {
     setupMock([
       {
-        match: ["git", "log", "origin/main..HEAD"],
+        match: ["git", "log", `${REMOTE}/${BRANCH}..HEAD`],
         result: "abc1234 some commit",
       },
-      { match: ["git", "push", "origin", "main"], result: "" },
+      { match: ["git", "push", REMOTE, BRANCH], result: "" },
     ]);
 
     const result = phase2_commitAndPush(makeContext(), realOpts());
@@ -356,7 +409,7 @@ describe("phase2_commitAndPush", () => {
   it("dry-run does not push", () => {
     setupMock([
       {
-        match: ["git", "log", "origin/main..HEAD"],
+        match: ["git", "log", `${REMOTE}/${BRANCH}..HEAD`],
         result: "abc1234 some commit",
       },
     ]);
@@ -375,11 +428,11 @@ describe("phase2_commitAndPush", () => {
   it("fails when push errors", () => {
     setupMockWithErrors([
       {
-        match: ["git", "log", "origin/main..HEAD"],
+        match: ["git", "log", `${REMOTE}/${BRANCH}..HEAD`],
         result: "abc1234 some commit",
       },
       {
-        match: ["git", "push", "origin", "main"],
+        match: ["git", "push", REMOTE, BRANCH],
         error: "rejected non-fast-forward",
       },
     ]);
@@ -495,7 +548,7 @@ describe("phase4_versionTag", () => {
     setupMock([
       { match: ["git", "tag", "-l"], result: "" },
       { match: ["git", "tag", "-a"], result: "" },
-      { match: ["git", "push", "origin"], result: "" },
+      { match: ["git", "push", REMOTE], result: "" },
     ]);
 
     const result = phase4_versionTag(makeContext(), realOpts());
@@ -507,9 +560,9 @@ describe("phase4_versionTag", () => {
     setupMock([
       { match: ["git", "tag", "-l"], result: "v0.1.0" },
       { match: ["git", "tag", "-d"], result: "" },
-      { match: ["git", "push", "origin", ":refs/tags/"], result: "" },
+      { match: ["git", "push", REMOTE, ":refs/tags/"], result: "" },
       { match: ["git", "tag", "-a"], result: "" },
-      { match: ["git", "push", "origin", "v0.1.0"], result: "" },
+      { match: ["git", "push", REMOTE, "v0.1.0"], result: "" },
     ]);
 
     const result = phase4_versionTag(makeContext(), realOpts());
@@ -546,7 +599,7 @@ describe("phase4_versionTag", () => {
     setupMock([
       { match: ["git", "tag", "-l"], result: "" },
       { match: ["git", "tag", "-a"], result: "" },
-      { match: ["git", "push", "origin"], result: "" },
+      { match: ["git", "push", REMOTE], result: "" },
     ]);
 
     const result = phase4_versionTag(ctx, realOpts());
@@ -749,7 +802,7 @@ describe("error reporting format (AC #3)", () => {
   it("phase2 reports which phase failed", () => {
     setupMockWithErrors([
       {
-        match: ["git", "log", "origin/main..HEAD"],
+        match: ["git", "log", `${REMOTE}/${BRANCH}..HEAD`],
         result: "abc commit",
       },
       {
@@ -795,7 +848,8 @@ describe("auth-check skip behavior (H1)", () => {
     setupMock([
       { match: ["git", "--version"], result: "git version 2.40" },
       { match: ["git", "status", "--porcelain"], result: "" },
-      { match: ["git", "rev-parse", "--abbrev-ref"], result: "main" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], result: "git@github.com:foo/bar.git" },
     ]);
 
     mockExistsSync.mockImplementation((path: string) => {
@@ -829,7 +883,8 @@ describe("auth-check skip behavior (H1)", () => {
       { match: ["git", "--version"], result: "git version 2.40" },
       { match: ["gh", "auth", "status"], result: "Logged in" },
       { match: ["git", "status", "--porcelain"], result: "" },
-      { match: ["git", "rev-parse", "--abbrev-ref"], result: "main" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], result: "git@github.com:foo/bar.git" },
     ]);
 
     mockExistsSync.mockImplementation((path: string) => {
@@ -867,7 +922,8 @@ describe("auth-check skip behavior (H1)", () => {
       { match: ["git", "--version"], result: "git version 2.40" },
       { match: ["npm", "whoami"], result: "julian" },
       { match: ["git", "status", "--porcelain"], result: "" },
-      { match: ["git", "rev-parse", "--abbrev-ref"], result: "main" },
+      { match: ["git", "rev-parse", "--abbrev-ref"], result: BRANCH },
+      { match: ["git", "remote", "get-url"], result: "git@github.com:foo/bar.git" },
     ]);
 
     mockExistsSync.mockImplementation((path: string) => {

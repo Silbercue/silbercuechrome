@@ -30,6 +30,17 @@ export const CONFIG = {
   NPM_PACKAGE: "@silbercuechrome/mcp",
   GITHUB_REPO_FREE: "Silbercue/SilbercueChrome",
   GITHUB_REPO_PRO: "Silbercue/SilbercueChromePro",
+  /**
+   * Default git branch fuer beide Repos.
+   * Override per Env-Var `SILBERCUE_PUBLISH_BRANCH` (z.B. fuer Test-Branches).
+   * Realitaet 2026-04: master (nicht main).
+   */
+  BRANCH: process.env.SILBERCUE_PUBLISH_BRANCH ?? "master",
+  /**
+   * Default git remote fuer push/pull/ls-remote.
+   * Override per Env-Var `SILBERCUE_PUBLISH_REMOTE`.
+   */
+  REMOTE: process.env.SILBERCUE_PUBLISH_REMOTE ?? "origin",
 } as const;
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -159,10 +170,23 @@ export function phase1_checkRepoStatus(
     ["rev-parse", "--abbrev-ref", "HEAD"],
     freeRepo,
   );
-  if (freeBranch !== "main") {
+  if (freeBranch !== CONFIG.BRANCH) {
     return {
       success: false,
-      message: `Free repo is on branch '${freeBranch}', expected 'main'`,
+      message: `Free repo is on branch '${freeBranch}', expected '${CONFIG.BRANCH}' (override via SILBERCUE_PUBLISH_BRANCH)`,
+    };
+  }
+
+  // 6b. Check free repo remote exists
+  const freeRemoteUrl = runOrNull(
+    "git",
+    ["remote", "get-url", CONFIG.REMOTE],
+    freeRepo,
+  );
+  if (freeRemoteUrl === null) {
+    return {
+      success: false,
+      message: `Free repo has no '${CONFIG.REMOTE}' remote configured. Set up with: git -C ${freeRepo} remote add ${CONFIG.REMOTE} <url> (or override remote name via SILBERCUE_PUBLISH_REMOTE)`,
     };
   }
 
@@ -202,10 +226,23 @@ export function phase1_checkRepoStatus(
       ["rev-parse", "--abbrev-ref", "HEAD"],
       proRepo,
     );
-    if (proBranch !== "main") {
+    if (proBranch !== CONFIG.BRANCH) {
       return {
         success: false,
-        message: `Pro repo is on branch '${proBranch}', expected 'main'`,
+        message: `Pro repo is on branch '${proBranch}', expected '${CONFIG.BRANCH}' (override via SILBERCUE_PUBLISH_BRANCH)`,
+      };
+    }
+
+    // Pro repo remote exists
+    const proRemoteUrl = runOrNull(
+      "git",
+      ["remote", "get-url", CONFIG.REMOTE],
+      proRepo,
+    );
+    if (proRemoteUrl === null) {
+      return {
+        success: false,
+        message: `Pro repo has no '${CONFIG.REMOTE}' remote configured. Set up with: git -C ${proRepo} remote add ${CONFIG.REMOTE} <url> (or override remote name via SILBERCUE_PUBLISH_REMOTE)`,
       };
     }
 
@@ -217,10 +254,13 @@ export function phase1_checkRepoStatus(
   const version = freeVersion;
   const tag = `v${version}`;
 
-  // 8. Warn about private: true
+  // 8. Hard-fail when free package.json is still marked private:true
+  // (Phase 0 setzt das auf false; falls jemand das versehentlich rueckgaengig macht,
+  // wuerde npm publish spaeter mit einem nichtssagenden EPRIVATE failen — lieber
+  // hier mit klarer Message stoppen.)
   if (freePkg.private === true) {
-    log(
-      `  WARNING: package.json has "private": true — npm publish will fail unless changed`,
+    throw new Error(
+      `Free package.json has "private": true — npm publish would fail. Set "private": false before publishing.`,
     );
   }
 
@@ -256,7 +296,7 @@ export function phase2_commitAndPush(
   for (const repo of repos) {
     const ahead = run(
       "git",
-      ["log", "origin/main..HEAD", "--oneline"],
+      ["log", `${CONFIG.REMOTE}/${CONFIG.BRANCH}..HEAD`, "--oneline"],
       repo.path,
     );
     if (ahead === "") {
@@ -267,13 +307,15 @@ export function phase2_commitAndPush(
     log(`  ${repo.name} repo: ${ahead.split("\n").length} commit(s) ahead`);
 
     if (opts.dryRun) {
-      log(`  [DRY-RUN] Would push ${repo.name} repo to origin/main`);
+      log(
+        `  [DRY-RUN] Would push ${repo.name} repo to ${CONFIG.REMOTE}/${CONFIG.BRANCH}`,
+      );
       continue;
     }
 
     try {
-      run("git", ["push", "origin", "main"], repo.path);
-      log(`  ${repo.name} repo: pushed to origin/main`);
+      run("git", ["push", CONFIG.REMOTE, CONFIG.BRANCH], repo.path);
+      log(`  ${repo.name} repo: pushed to ${CONFIG.REMOTE}/${CONFIG.BRANCH}`);
     } catch (err) {
       return {
         success: false,
@@ -325,9 +367,24 @@ export function phase3_combinedBuild(
   if (ctx.proRepoExists) {
     log("  Building pro tier...");
     if (opts.dryRun) {
+      log("  [DRY-RUN] Would run: npm install (pro repo)");
       log("  [DRY-RUN] Would build pro tier");
       log("  [DRY-RUN] Would run: npm pack");
     } else {
+      // 3.3a Pro repo haengt als `file:../SilbercueChrome` am Free-Repo.
+      // Bei jedem Free-Build kann sich `build/` aendern; ohne `npm install`
+      // bekommt das Pro-Repo veraltete Free-Artefakte. Daher VOR `npm run build`
+      // im Pro-Repo immer ein `npm install` ausfuehren.
+      try {
+        run("npm", ["install"], ctx.proRepo);
+        log("  Pro tier dependencies installed (incl. file:../SilbercueChrome)");
+      } catch (err) {
+        return {
+          success: false,
+          message: `Pro tier npm install failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
       try {
         run("npm", ["run", "build"], ctx.proRepo);
         log("  Pro tier build OK");
@@ -338,7 +395,8 @@ export function phase3_combinedBuild(
         };
       }
 
-      // 3.4 Create combined binary via npm pack
+      // 3.4 Combined npm tarball (not a standalone binary; Node SEA build
+      // kommt in Phase 3 separat)
       try {
         const packOutput = run("npm", ["pack", "--json"], ctx.proRepo);
         const packInfo = JSON.parse(packOutput);
@@ -358,7 +416,7 @@ export function phase3_combinedBuild(
         }
 
         buildArtifact = resolve(ctx.proRepo, packInfo[0].filename);
-        log(`  Combined binary created: ${buildArtifact}`);
+        log(`  Combined npm tarball created: ${buildArtifact}`);
       } catch (err) {
         return {
           success: false,
@@ -402,7 +460,7 @@ export function phase4_versionTag(
         // Delete remote tag (may not exist)
         runOrNull(
           "git",
-          ["push", "origin", `:refs/tags/${ctx.tag}`],
+          ["push", CONFIG.REMOTE, `:refs/tags/${ctx.tag}`],
           repo.path,
         );
       } else {
@@ -414,7 +472,7 @@ export function phase4_versionTag(
       log(
         `  [DRY-RUN] Would create annotated tag ${ctx.tag} on ${repo.name} repo`,
       );
-      log(`  [DRY-RUN] Would push tag ${ctx.tag} to origin`);
+      log(`  [DRY-RUN] Would push tag ${ctx.tag} to ${CONFIG.REMOTE}`);
       continue;
     }
 
@@ -435,7 +493,7 @@ export function phase4_versionTag(
 
     // Push tag
     try {
-      run("git", ["push", "origin", ctx.tag], repo.path);
+      run("git", ["push", CONFIG.REMOTE, ctx.tag], repo.path);
       log(`  ${repo.name} repo: tag ${ctx.tag} pushed`);
     } catch (err) {
       return {
@@ -476,6 +534,11 @@ export function phase5_publishAndRelease(
   }
 
   // 5.2 GitHub Release
+  // TODO Phase 5: Pro-Tarball als private GitHub Release im Pro-Repo hochladen,
+  // nicht als public Asset des Free-Repos. Aktuell wird `buildArtifact` (Pro-Tarball)
+  // an den FREE-Release angehaengt — das wuerde Pro-Code public machen, sobald die
+  // Free-Repo-Releases sichtbar sind. Bis dahin: Pro-Tarball nicht uploaden, oder
+  // separates `gh release create --repo CONFIG.GITHUB_REPO_PRO` mit private visibility.
   if (!opts.skipGithub) {
     if (opts.dryRun) {
       log(`  [DRY-RUN] Would create GitHub release ${ctx.tag}`);
@@ -633,7 +696,7 @@ export function phase6_verify(
   for (const repo of repos) {
     const remoteTags = runOrNull(
       "git",
-      ["ls-remote", "--tags", "origin", ctx.tag],
+      ["ls-remote", "--tags", CONFIG.REMOTE, ctx.tag],
       repo.path,
     );
     if (remoteTags && remoteTags.includes(ctx.tag)) {
