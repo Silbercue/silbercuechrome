@@ -30,7 +30,10 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    expect(toolFn).toHaveBeenCalledTimes(18);
+    // Story 15.2: 17 Free-Tools. `inspect_element` is Pro-only and is
+    // only registered when the Pro-Repo calls `registerProTools` — no
+    // stub fallback in the Free tier.
+    expect(toolFn).toHaveBeenCalledTimes(17);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
@@ -1850,5 +1853,137 @@ describe("ToolRegistry", () => {
     // Verify the value matches the serialized content
     const expectedBytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
     expect(result._meta!.response_bytes).toBe(expectedBytes);
+  });
+
+  // -----------------------------------------------------------------
+  // Story 15.2 — Pro-Tool registration lifecycle (H1, H2, M1)
+  // -----------------------------------------------------------------
+  describe("Pro-Tool registration lifecycle (Story 15.2)", () => {
+    it("calls registerProTools hook DURING registerAll()", () => {
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const mockCdpClient = {} as never;
+
+      const registerProTools = vi.fn();
+      registerProHooks({ registerProTools });
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+      registry.registerAll();
+
+      // The hook was invoked exactly once, with the registry itself as
+      // its argument (ToolRegistryPublic interface).
+      expect(registerProTools).toHaveBeenCalledTimes(1);
+      expect(registerProTools).toHaveBeenCalledWith(registry);
+    });
+
+    it("allows registerTool() to be called from inside registerProTools and exposes the tool via server.tool()", () => {
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const mockCdpClient = {} as never;
+
+      const handler = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        _meta: { elapsedMs: 1, method: "inspect_element" },
+      }));
+
+      registerProHooks({
+        registerProTools: (reg) => {
+          reg.registerTool(
+            "inspect_element",
+            "Inspect CSS + geometry (Pro)",
+            { selector: { type: "string" } },
+            handler,
+          );
+        },
+      });
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+      registry.registerAll();
+
+      // inspect_element was registered through the delegate, so it shows
+      // up in server.tool() calls (= tools/list).
+      const inspectCall = toolFn.mock.calls.find(
+        (call: unknown[]) => call[0] === "inspect_element",
+      );
+      expect(inspectCall).toBeDefined();
+      expect(inspectCall![1]).toBe("Inspect CSS + geometry (Pro)");
+    });
+
+    it("does NOT register inspect_element in tools/list when no registerProTools hook is set", () => {
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const mockCdpClient = {} as never;
+
+      // Explicitly empty hooks — no Pro-Repo loaded.
+      registerProHooks({});
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+      registry.registerAll();
+
+      const inspectCall = toolFn.mock.calls.find(
+        (call: unknown[]) => call[0] === "inspect_element",
+      );
+      // AC #8: No stub, no Pro-Feature error tool — inspect_element is
+      // simply absent from tools/list in the Free tier.
+      expect(inspectCall).toBeUndefined();
+    });
+
+    it("throws when registerTool() is called AFTER registerAll() (lifecycle — H2)", () => {
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const mockCdpClient = {} as never;
+
+      let leakedRegistry: import("./hooks/pro-hooks.js").ToolRegistryPublic | null = null;
+      registerProHooks({
+        registerProTools: (reg) => {
+          // Leak the registry reference so the test can call registerTool()
+          // *after* registerAll() has finished.
+          leakedRegistry = reg;
+        },
+      });
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+      registry.registerAll();
+
+      // registerAll() is now finished — the delegate must be cleared,
+      // so the leaked reference must refuse further tool registrations.
+      expect(leakedRegistry).not.toBeNull();
+      expect(() =>
+        leakedRegistry!.registerTool(
+          "late_tool",
+          "Registered too late",
+          {},
+          async () => ({
+            content: [{ type: "text" as const, text: "nope" }],
+            _meta: { elapsedMs: 0, method: "late_tool" },
+          }),
+        ),
+      ).toThrow(/registerTool\(\) can only be called during registerAll\(\) \/ registerProTools/);
+
+      // And the tool must NOT have been forwarded to server.tool().
+      const lateCall = toolFn.mock.calls.find(
+        (call: unknown[]) => call[0] === "late_tool",
+      );
+      expect(lateCall).toBeUndefined();
+    });
+
+    it("throws when registerTool() is called on a fresh registry BEFORE registerAll()", () => {
+      const mockServer = { tool: vi.fn() } as never;
+      const mockCdpClient = {} as never;
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+
+      expect(() =>
+        registry.registerTool(
+          "too_early",
+          "No delegate yet",
+          {},
+          async () => ({
+            content: [{ type: "text" as const, text: "nope" }],
+            _meta: { elapsedMs: 0, method: "too_early" },
+          }),
+        ),
+      ).toThrow(/registerTool\(\) can only be called during registerAll\(\) \/ registerProTools/);
+    });
   });
 });

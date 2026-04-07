@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { evaluateHandler, evaluateSchema, wrapInIIFE } from "./evaluate.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import { registerProHooks } from "../hooks/pro-hooks.js";
+import type { ToolResponse } from "../types.js";
 
 function mockCdpClient(
   sendFn: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
@@ -27,6 +29,11 @@ describe("evaluateSchema", () => {
 });
 
 describe("evaluateHandler", () => {
+  // Story 15.2: Reset Pro hooks between tests so stale hooks don't leak
+  beforeEach(() => {
+    registerProHooks({});
+  });
+
   it("should return string result from document.title", async () => {
     const cdp = mockCdpClient(async () => ({
       result: { type: "string", value: "Google" },
@@ -241,36 +248,16 @@ describe("evaluateHandler", () => {
   });
 });
 
-describe("evaluateHandler visual feedback", () => {
-  it("should attach screenshot + geometry for style-changing expression with selector", async () => {
-    const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
-    const cdp = mockCdpClient(async (method, params) => {
-      calls.push({ method, params });
+// Story 15.2: Visual Feedback is now a Pro-Feature exposed via the
+// `enhanceEvaluateResult` hook. The Free-Repo only returns the plain text
+// result; the Pro-Repo mounts its own tests for the geometry/screenshot path.
+describe("evaluateHandler visual feedback (Pro-Hook)", () => {
+  beforeEach(() => {
+    registerProHooks({});
+  });
 
-      if (method === "Runtime.evaluate") {
-        const expr = (params as { expression: string }).expression;
-        // Before-rect query
-        if (expr.includes("getBoundingClientRect") && !calls.some(c =>
-          c.method === "Runtime.evaluate" && c.params &&
-          (c.params as { expression: string }).expression === "document.querySelector('.card').style.width = '200px'"
-        )) {
-          return { result: { type: "object", value: { x: 10, y: 20, width: 100, height: 50 } } };
-        }
-        // After-rect query (called after the main expression)
-        if (expr.includes("getBoundingClientRect")) {
-          return { result: { type: "object", value: { x: 10, y: 20, width: 200, height: 50 } } };
-        }
-        // Scroll offset query
-        if (expr.includes("scrollX")) {
-          return { result: { type: "string", value: '{"x":0,"y":0}' } };
-        }
-        // Main expression
-        return { result: { type: "undefined" } };
-      }
-      if (method === "Emulation.setFocusEmulationEnabled") return {};
-      if (method === "Page.captureScreenshot") return { data: "fakeBase64Data" };
-      return {};
-    });
+  it("without enhanceEvaluateResult hook returns plain text result for style-change expression", async () => {
+    const cdp = mockCdpClient(async () => ({ result: { type: "undefined" } }));
 
     const response = await evaluateHandler(
       { expression: "document.querySelector('.card').style.width = '200px'", await_promise: true },
@@ -278,18 +265,13 @@ describe("evaluateHandler visual feedback", () => {
     );
 
     expect(response.isError).toBeUndefined();
-    expect(response.content.length).toBe(3); // text + geometry + screenshot
+    expect(response.content.length).toBe(1);
     expect(response.content[0].type).toBe("text");
     expect(response.content[0].text).toBe("undefined");
-    expect(response.content[1].type).toBe("text");
-    expect(response.content[1].text).toContain("Visual:");
-    expect(response.content[1].text).toContain("100×50 → 200×50px");
-    expect(response.content[2].type).toBe("image");
-    expect((response.content[2] as { data: string }).data).toBe("fakeBase64Data");
-    expect(response._meta?.visualFeedback).toBe(true);
+    expect(response._meta?.visualFeedback).toBeUndefined();
   });
 
-  it("should NOT attach screenshot for non-style-changing expression", async () => {
+  it("without enhanceEvaluateResult hook returns plain text result for non-style expression", async () => {
     const cdp = mockCdpClient(async () => ({
       result: { type: "string", value: "Google" },
     }));
@@ -301,58 +283,165 @@ describe("evaluateHandler visual feedback", () => {
 
     expect(response.content.length).toBe(1);
     expect(response.content[0].type).toBe("text");
+    expect(response.content[0].text).toBe('"Google"');
     expect(response._meta?.visualFeedback).toBeUndefined();
   });
 
-  it("should attach viewport screenshot for style-change without identifiable selector", async () => {
-    const cdp = mockCdpClient(async (method: string) => {
-      if (method === "Emulation.setFocusEmulationEnabled") return {};
-      if (method === "Runtime.evaluate") return { result: { type: "undefined" } };
-      if (method === "Page.captureScreenshot") return { data: "viewportData" };
-      return {};
-    });
+  it("with registered enhanceEvaluateResult hook delegates to hook and returns its response", async () => {
+    const enhanced: ToolResponse = {
+      content: [
+        { type: "text", text: "undefined" },
+        { type: "text", text: "Visual: .card 100x50 -> 200x50px" },
+        { type: "image", data: "fakeBase64Data", mimeType: "image/webp" },
+      ],
+      _meta: { elapsedMs: 25, method: "evaluate", visualFeedback: true },
+    };
+    const hook = vi.fn().mockResolvedValue(enhanced);
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({ result: { type: "undefined" } }));
 
     const response = await evaluateHandler(
-      { expression: "el.style.color = 'red'", await_promise: true },
+      { expression: "document.querySelector('.card').style.width = '200px'", await_promise: true },
       cdp,
     );
 
-    // No selector extractable → viewport screenshot, no geometry
-    expect(response.content.length).toBe(2); // text + screenshot (no geometry)
-    expect(response.content[0].text).toBe("undefined");
-    expect(response.content[1].type).toBe("image");
-    expect(response._meta?.visualFeedback).toBe(true);
+    expect(hook).toHaveBeenCalledTimes(1);
+    const callArgs = hook.mock.calls[0];
+    expect(callArgs[0]).toBe("document.querySelector('.card').style.width = '200px'");
+    // Base result passed to the hook has the plain text response
+    const baseArg = callArgs[1] as ToolResponse;
+    expect(baseArg.content.length).toBe(1);
+    expect(baseArg.content[0].type).toBe("text");
+    expect(baseArg.content[0].text).toBe("undefined");
+    expect(baseArg._meta?.method).toBe("evaluate");
+    // Context includes cdpClient + sessionId
+    expect(callArgs[2]).toEqual({ cdpClient: cdp, sessionId: undefined });
+
+    // Response is the hook's enhanced ToolResponse
+    expect(response).toBe(enhanced);
   });
 
-  it("should not include geometry text when size/position unchanged", async () => {
-    const sameRect = { x: 10, y: 20, width: 100, height: 50 };
-    const cdp = mockCdpClient(async (method, params) => {
-      if (method === "Runtime.evaluate") {
-        const expr = (params as { expression: string }).expression;
-        if (expr.includes("getBoundingClientRect")) {
-          return { result: { type: "object", value: sameRect } };
-        }
-        if (expr.includes("scrollX")) {
-          return { result: { type: "string", value: '{"x":0,"y":0}' } };
-        }
-        return { result: { type: "undefined" } };
-      }
-      if (method === "Emulation.setFocusEmulationEnabled") return {};
-      if (method === "Page.captureScreenshot") return { data: "screenshotData" };
-      return {};
-    });
+  it("enhanceEvaluateResult hook is ALWAYS invoked for successful eval, regardless of expression type", async () => {
+    // Free-Repo no longer performs isStyleChange — the Pro-Repo decides
+    // itself whether to enrich the response, so the hook must be called
+    // even for trivial expressions like `1+1`.
+    const hook = vi.fn().mockImplementation(async (_expr, result) => result);
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 2 },
+    }));
+
+    await evaluateHandler({ expression: "1+1", await_promise: true }, cdp);
+
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0][0]).toBe("1+1");
+  });
+
+  it("enhanceEvaluateResult hook is NOT invoked when the expression throws", async () => {
+    const hook = vi.fn();
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "object", subtype: "error" },
+      exceptionDetails: {
+        exceptionId: 1,
+        text: "Uncaught SyntaxError: Unexpected token",
+      },
+    }));
 
     const response = await evaluateHandler(
-      { expression: "document.querySelector('.card').classList.add('active')", await_promise: true },
+      { expression: "if(", await_promise: true },
       cdp,
     );
 
-    // H1 fix: text + geometry "unchanged" + screenshot (always show geometry)
-    expect(response.content.length).toBe(3);
+    expect(response.isError).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("enhanceEvaluateResult hook is NOT invoked when the result is non-serializable", async () => {
+    const hook = vi.fn();
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "object", subtype: "node", className: "HTMLBodyElement", description: "body" },
+    }));
+
+    const response = await evaluateHandler(
+      { expression: "document.body", await_promise: true },
+      cdp,
+    );
+
+    expect(response.isError).toBe(true);
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("enhanceEvaluateResult hook receives sessionId override when provided", async () => {
+    const hook = vi.fn().mockImplementation(async (_expr, result) => result);
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({ result: { type: "undefined" } }));
+
+    await evaluateHandler(
+      { expression: "el.style.color = 'red'", await_promise: true },
+      cdp,
+      "session-xyz",
+    );
+
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(hook.mock.calls[0][2]).toEqual({ cdpClient: cdp, sessionId: "session-xyz" });
+  });
+
+  // Code-Review M2: Defensive wrapping — a buggy Pro-Repo must not crash
+  // the evaluate tool. Any throw / rejection inside `enhanceEvaluateResult`
+  // must fall back to the plain `baseResult`.
+  it("falls back to baseResult when enhanceEvaluateResult throws synchronously", async () => {
+    const hook = vi.fn().mockImplementation(() => {
+      throw new Error("boom — synchronous pro-hook failure");
+    });
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "string", value: "Google" },
+    }));
+
+    const response = await evaluateHandler(
+      { expression: "document.title", await_promise: true },
+      cdp,
+    );
+
+    expect(hook).toHaveBeenCalledTimes(1);
+    // No crash, no isError — the plain baseResult is returned.
+    expect(response.isError).toBeUndefined();
+    expect(response.content.length).toBe(1);
+    expect(response.content[0].type).toBe("text");
+    expect(response.content[0].text).toBe('"Google"');
+    expect(response._meta?.method).toBe("evaluate");
+  });
+
+  it("falls back to baseResult when enhanceEvaluateResult returns a rejected promise", async () => {
+    const hook = vi
+      .fn()
+      .mockRejectedValue(new Error("boom — async pro-hook failure"));
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({ result: { type: "undefined" } }));
+
+    const response = await evaluateHandler(
+      {
+        expression: "document.querySelector('.card').style.width = '200px'",
+        await_promise: true,
+      },
+      cdp,
+    );
+
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(response.isError).toBeUndefined();
+    expect(response.content.length).toBe(1);
+    expect(response.content[0].type).toBe("text");
     expect(response.content[0].text).toBe("undefined");
-    expect(response.content[1].text).toContain("unchanged");
-    expect(response.content[1].text).toContain("100×50px");
-    expect(response.content[2].type).toBe("image");
+    expect(response._meta?.method).toBe("evaluate");
   });
 });
 
