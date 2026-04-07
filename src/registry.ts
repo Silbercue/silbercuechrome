@@ -52,11 +52,6 @@ import { inspectElementSchema, inspectElementHandler } from "./tools/inspect-ele
 import type { InspectElementParams } from "./tools/inspect-element.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
 import { injectOverlay, updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
-import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
-import { createHumanTouchFromEnv } from "./operator/human-touch.js";
-import { Captain } from "./operator/captain.js";
-import type { CaptainProvider } from "./operator/captain.js";
-import type { CaptainEscalationConfig } from "./operator/types.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
 import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
@@ -307,32 +302,6 @@ export class ToolRegistry {
   }
 
   /**
-   * Create a Captain instance if MCP Elicitation is available.
-   * Reads config from environment variables.
-   * Returns undefined if Elicitation is not supported.
-   */
-  private _createCaptain(): { captain: CaptainProvider; includeScreenshot: boolean } | undefined {
-    // The low-level Server exposes elicitInput — check if it exists
-    const lowLevelServer = this.server.server;
-    if (!lowLevelServer || typeof lowLevelServer.elicitInput !== "function") {
-      return undefined;
-    }
-
-    const rawTimeout = process.env.SILBERCUE_CAPTAIN_TIMEOUT;
-    const rawScreenshot = process.env.SILBERCUE_CAPTAIN_SCREENSHOT;
-
-    const parsedTimeout = rawTimeout !== undefined ? parseInt(rawTimeout, 10) : NaN;
-
-    const config: CaptainEscalationConfig = {
-      enabled: true,
-      timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 30000,
-      includeScreenshot: rawScreenshot === "true" || rawScreenshot === "1",
-    };
-
-    return { captain: new Captain(lowLevelServer, config), includeScreenshot: config.includeScreenshot };
-  }
-
-  /**
    * Wrap a tool handler so dialog notifications are injected into its response.
    * This ensures notifications reach the LLM regardless of whether the tool
    * is called via the direct MCP path (server.tool) or via executeTool (run_plan).
@@ -396,16 +365,6 @@ export class ToolRegistry {
     // Re-read hooks after potential registration
     const finalHooks = getProHooks();
 
-    // Create Human Touch config from environment (once at startup)
-    const humanTouch = createHumanTouchFromEnv();
-    // Story 9.9: Human Touch is Pro-only — silently downgrade in Free tier (AC #3)
-    if (humanTouch.enabled && !this._licenseStatus.isPro()) {
-      humanTouch.enabled = false;
-      console.error("SilbercueChrome human touch disabled (Pro feature — activate with 'silbercuechrome license activate <key>')");
-    }
-    if (humanTouch.enabled) {
-      console.error(`SilbercueChrome human touch enabled (speed: ${humanTouch.speedProfile})`);
-    }
     // Story 6.1 (C1): All server.tool() callbacks are wrapped with dialog notification
     // injection so that pending dialogs reach the LLM regardless of call path
     // (direct MCP call vs executeTool/run_plan).
@@ -628,7 +587,7 @@ export class ToolRegistry {
         y: clickSchema.shape.y,
       },
       wrap(async (params) => {
-        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
+        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
       }, "click"),
     );
 
@@ -642,7 +601,7 @@ export class ToolRegistry {
         clear: typeSchema.shape.clear,
       },
       wrap(async (params) => {
-        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager, humanTouch);
+        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
       }, "type"),
     );
 
@@ -830,7 +789,6 @@ export class ToolRegistry {
           this.cdpClient,
           this.sessionId,
           this._sessionManager,
-          humanTouch,
         );
       }, "fill_form"),
     );
@@ -867,16 +825,6 @@ export class ToolRegistry {
       );
     }
 
-    // C1: Create Micro-LLM provider from environment for Operator mode
-    const microLlm = createMicroLlmFromEnv();
-
-    // Story 8.3: Create Captain for escalation protocol
-    // Captain is only available when MCP Elicitation is supported by the client.
-    // Feature detection happens once at setup — no runtime checks per escalation.
-    const captainResult = this._createCaptain();
-    const captain = captainResult?.captain;
-    const captainScreenshot = captainResult?.includeScreenshot ?? false;
-
     this.server.tool(
       "run_plan",
       "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume, and parallel tab execution (Pro). Use parallel: [{ tab, steps }] for multi-tab workflows.",
@@ -890,10 +838,7 @@ export class ToolRegistry {
         const result = await runPlanHandler(params as unknown as RunPlanParams, this, {
           cdpClient: this.cdpClient,
           sessionId: this._sessionId,
-          microLlm,
           sessionManager: this._sessionManager,
-          captain,
-          captainScreenshot,
         }, this.planStateStore, this._licenseStatus, this._freeTierConfig);
         // Convert SuspendedPlanResponse to ToolResponse for MCP transport
         if ("status" in result && (result as { status: string }).status === "suspended") {
@@ -966,10 +911,10 @@ export class ToolRegistry {
       );
     });
     this._handlers.set("click", async (params, sessionIdOverride?) => {
-      return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
     this._handlers.set("type", async (params, sessionIdOverride?) => {
-      return typeHandler(params as unknown as TypeParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
     this._handlers.set("tab_status", async (params, sessionIdOverride?) => {
       return tabStatusHandler(
@@ -1056,7 +1001,6 @@ export class ToolRegistry {
         this.cdpClient,
         sessionIdOverride ?? this.sessionId,
         this._sessionManager,
-        humanTouch,
       );
     });
     if (this._consoleCollector) {

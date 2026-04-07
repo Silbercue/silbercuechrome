@@ -550,62 +550,6 @@ describe("typeHandler", () => {
     expect(result._meta?.cleared).toBe(false);
   });
 
-  // --- Human Touch integration tests (Story 8.5) ---
-
-  it("typeHandler with humanTouch disabled behaves identically to default (9.3)", async () => {
-    mockResolveElement.mockResolvedValue(mockTextbox());
-    const { cdpClient, sendFn } = createMockCdp();
-
-    const result = await typeHandler(
-      { ref: "e12", text: "hello", clear: false },
-      cdpClient,
-      "s1",
-      undefined,
-      { enabled: false, speedProfile: "normal" },
-    );
-
-    expect(result.isError).toBeUndefined();
-    // Should use Input.insertText (existing behavior)
-    expect(sendFn).toHaveBeenCalledWith("Input.insertText", { text: "hello" }, "s1");
-    // No Input.dispatchKeyEvent calls
-    const keyEvents = sendFn.mock.calls.filter(
-      (call: unknown[]) => call[0] === "Input.dispatchKeyEvent",
-    );
-    expect(keyEvents).toHaveLength(0);
-  });
-
-  it("typeHandler with humanTouch enabled dispatches keyEvent instead of insertText (9.4)", async () => {
-    vi.useFakeTimers();
-    mockResolveElement.mockResolvedValue(mockTextbox());
-    const { cdpClient, sendFn } = createMockCdp();
-
-    const promise = typeHandler(
-      { ref: "e12", text: "hi", clear: false },
-      cdpClient,
-      "s1",
-      undefined,
-      { enabled: true, speedProfile: "fast" },
-    );
-    await vi.advanceTimersByTimeAsync(30000);
-    const result = await promise;
-
-    expect(result.isError).toBeUndefined();
-
-    // Should NOT use Input.insertText
-    const insertCalls = sendFn.mock.calls.filter(
-      (call: unknown[]) => call[0] === "Input.insertText",
-    );
-    expect(insertCalls).toHaveLength(0);
-
-    // Should use Input.dispatchKeyEvent (2 chars * 3 events = 6)
-    const keyEvents = sendFn.mock.calls.filter(
-      (call: unknown[]) => call[0] === "Input.dispatchKeyEvent",
-    );
-    expect(keyEvents).toHaveLength(6);
-
-    vi.useRealTimers();
-  });
-
   // --- OOPIF tests ---
 
   it("type resolves OOPIF element and uses correct session", async () => {

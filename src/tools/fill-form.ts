@@ -4,8 +4,6 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 import { wrapCdpError } from "./error-utils.js";
-import type { HumanTouchConfig } from "../operator/human-touch.js";
-import { humanType } from "../operator/human-touch.js";
 
 // --- Constants ---
 
@@ -154,7 +152,7 @@ async function clickCheckboxOrRadio(
   const x = (q[0] + q[2] + q[4] + q[6]) / 4;
   const y = (q[1] + q[3] + q[5] + q[7]) / 4;
 
-  // Step 4: Dispatch mouse events (no humanMouseMove — fill_form is efficiency-optimized)
+  // Step 4: Dispatch mouse events
   await cdpClient.send(
     "Input.dispatchMouseEvent",
     { type: "mousePressed", x, y, button: "left", clickCount: 1 },
@@ -175,7 +173,6 @@ async function fillTextInput(
   backendNodeId: number,
   objectId: string,
   value: string,
-  humanTouch?: HumanTouchConfig,
 ): Promise<void> {
   // Step 1: Focus
   await cdpClient.send(
@@ -198,11 +195,7 @@ async function fillTextInput(
 
   // Step 3: Type text
   if (value.length > 0) {
-    if (humanTouch?.enabled) {
-      await humanType(cdpClient, sessionId, value, humanTouch);
-    } else {
-      await cdpClient.send("Input.insertText", { text: value }, sessionId);
-    }
+    await cdpClient.send("Input.insertText", { text: value }, sessionId);
   }
 }
 
@@ -213,7 +206,6 @@ export async function fillFormHandler(
   cdpClient: CdpClient,
   sessionId?: string,
   sessionManager?: SessionManager,
-  humanTouch?: HumanTouchConfig,
 ): Promise<ToolResponse> {
   const start = performance.now();
   const results: FieldResult[] = [];
@@ -294,7 +286,6 @@ export async function fillFormHandler(
           element.backendNodeId,
           element.objectId,
           textValue,
-          humanTouch,
         );
         results.push({
           ref: field.ref,

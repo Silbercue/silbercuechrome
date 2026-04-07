@@ -4,8 +4,6 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 import { wrapCdpError } from "./error-utils.js";
-import type { HumanTouchConfig } from "../operator/human-touch.js";
-import { humanType } from "../operator/human-touch.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 
 // --- Schema (Task 2) ---
@@ -48,7 +46,6 @@ export async function typeHandler(
   cdpClient: CdpClient,
   sessionId?: string,
   sessionManager?: SessionManager,
-  humanTouch?: HumanTouchConfig,
 ): Promise<ToolResponse> {
   const start = performance.now();
 
@@ -153,11 +150,7 @@ export async function typeHandler(
 
     // Step 5: Insert text (use resolved session for OOPIF — no auto-settle)
     if (params.text.length > 0) {
-      if (humanTouch?.enabled) {
-        await humanType(cdpClient, targetSession, params.text, humanTouch);
-      } else {
-        await cdpClient.send("Input.insertText", { text: params.text }, targetSession);
-      }
+      await cdpClient.send("Input.insertText", { text: params.text }, targetSession);
     }
 
     // Step 6: Success response

@@ -4,8 +4,6 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 import { wrapCdpError } from "./error-utils.js";
-import type { HumanTouchConfig } from "../operator/human-touch.js";
-import { humanMouseMove } from "../operator/human-touch.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 import { isHeadless } from "../cdp/emulation.js";
 
@@ -54,7 +52,6 @@ async function dispatchClick(
   sessionId: string,
   backendNodeId: number,
   objectId: string,
-  humanTouch?: HumanTouchConfig,
 ): Promise<ClickResult> {
   // Step 1: Reset scroll to origin before clicking.
   // When Emulation.setDeviceMetricsOverride is active, Input.dispatchMouseEvent
@@ -127,12 +124,7 @@ async function dispatchClick(
     }
   }
 
-  // Step 4: Human touch — Bezier mouse movement before click
-  if (humanTouch?.enabled) {
-    await humanMouseMove(cdpClient, sessionId, 0, 0, x, y, humanTouch);
-  }
-
-  // Step 5: Dispatch mouse events — mouseMoved → mousePressed → mouseReleased
+  // Step 4: Dispatch mouse events — mouseMoved → mousePressed → mouseReleased
   // mouseMoved establishes mouseenter/mouseover context (BUG-002)
   await cdpClient.send(
     "Input.dispatchMouseEvent",
@@ -160,7 +152,6 @@ export async function clickHandler(
   cdpClient: CdpClient,
   sessionId?: string,
   sessionManager?: SessionManager,
-  humanTouch?: HumanTouchConfig,
 ): Promise<ToolResponse> {
   const start = performance.now();
 
@@ -291,7 +282,7 @@ export async function clickHandler(
 
     // Dispatch click using the resolved session (may be OOPIF or main)
     const clickResult = await dispatchClick(
-      cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId, humanTouch,
+      cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId,
     );
 
     // FR-E: Check for new tabs after click
