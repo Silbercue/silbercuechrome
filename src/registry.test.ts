@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ToolRegistry } from "./registry.js";
+import { ToolRegistry, jsonSchemaToZodShape } from "./registry.js";
+import { z } from "zod";
 import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { registerProHooks } from "./hooks/pro-hooks.js";
@@ -2439,5 +2440,188 @@ describe("ToolRegistry", () => {
       expect(typeof result._meta!.response_bytes).toBe("number");
       expect((result._meta!.response_bytes as number) > 0).toBe(true);
     });
+  });
+});
+
+// Story 16.4 H2/H3/M1: Unit-Tests fuer den JSON-Schema → Zod-Shape Konverter,
+// der von `_registerProToolDelegate` benutzt wird, um Pro-Repo Tool-Schemas
+// in MCP-SDK-kompatible Zod-Shapes zu uebersetzen.
+describe("jsonSchemaToZodShape", () => {
+  it("converts string, boolean, number primitives", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        active: { type: "boolean" },
+        count: { type: "number" },
+      },
+      required: ["name", "active", "count"],
+    });
+
+    const obj = z.object(shape);
+    expect(obj.parse({ name: "x", active: true, count: 1.5 })).toEqual({
+      name: "x",
+      active: true,
+      count: 1.5,
+    });
+    expect(() => obj.parse({ name: 1, active: true, count: 1 })).toThrow();
+  });
+
+  it("converts string with enum to z.enum", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["fast", "slow"] },
+      },
+      required: ["mode"],
+    });
+
+    const obj = z.object(shape);
+    expect(obj.parse({ mode: "fast" })).toEqual({ mode: "fast" });
+    expect(obj.parse({ mode: "slow" })).toEqual({ mode: "slow" });
+    expect(() => obj.parse({ mode: "medium" })).toThrow();
+  });
+
+  it("converts integer to z.number().int()", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        port: { type: "integer" },
+      },
+      required: ["port"],
+    });
+
+    const obj = z.object(shape);
+    expect(obj.parse({ port: 9222 })).toEqual({ port: 9222 });
+    // Floats must be rejected
+    expect(() => obj.parse({ port: 9222.5 })).toThrow();
+  });
+
+  it("converts array-of-string and array-of-object", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" } },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "integer" },
+              label: { type: "string" },
+            },
+            required: ["id", "label"],
+          },
+        },
+      },
+      required: ["tags", "items"],
+    });
+
+    const obj = z.object(shape);
+    const parsed = obj.parse({
+      tags: ["a", "b"],
+      items: [
+        { id: 1, label: "one" },
+        { id: 2, label: "two" },
+      ],
+    });
+    expect(parsed.tags).toEqual(["a", "b"]);
+    expect(parsed.items).toHaveLength(2);
+    // Reject array entries with wrong shape
+    expect(() =>
+      obj.parse({ tags: ["a"], items: [{ id: "not-int", label: "x" }] }),
+    ).toThrow();
+  });
+
+  it("converts nested object schemas recursively", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        user: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            age: { type: "integer" },
+          },
+          required: ["name"],
+        },
+      },
+      required: ["user"],
+    });
+
+    const obj = z.object(shape);
+    expect(obj.parse({ user: { name: "Alice", age: 30 } })).toEqual({
+      user: { name: "Alice", age: 30 },
+    });
+    // Nested optional: age may be omitted (no default, not required)
+    expect(obj.parse({ user: { name: "Bob" } })).toEqual({
+      user: { name: "Bob" },
+    });
+    // Nested required: name must exist
+    expect(() => obj.parse({ user: {} })).toThrow();
+  });
+
+  it("applies defaults via .default() (no .optional() chained) and falls back when undefined", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        verbose: { type: "boolean", default: true },
+        level: { type: "integer", default: 3 },
+      },
+      // verbose & level are NOT in required — but they have defaults,
+      // so the result should still always include them.
+      required: [],
+    });
+
+    const obj = z.object(shape);
+    // Default is applied when input omits the field
+    expect(obj.parse({})).toEqual({ verbose: true, level: 3 });
+    // Explicit value overrides default
+    expect(obj.parse({ verbose: false, level: 7 })).toEqual({
+      verbose: false,
+      level: 7,
+    });
+    // The field schema itself must be a ZodDefault, NOT a ZodOptional that
+    // wraps a ZodDefault. (Reviewer H3: .default().optional() is wrong.)
+    expect(shape.verbose).toBeInstanceOf(z.ZodDefault);
+    expect(shape.level).toBeInstanceOf(z.ZodDefault);
+  });
+
+  it("treats fields not in `required` (and without default) as optional", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        must: { type: "string" },
+        maybe: { type: "string" },
+      },
+      required: ["must"],
+    });
+
+    const obj = z.object(shape);
+    expect(obj.parse({ must: "hello" })).toEqual({ must: "hello" });
+    expect(obj.parse({ must: "hello", maybe: "world" })).toEqual({
+      must: "hello",
+      maybe: "world",
+    });
+    expect(() => obj.parse({})).toThrow();
+    // Schema-level: maybe is wrapped in ZodOptional, must is not
+    expect(shape.maybe).toBeInstanceOf(z.ZodOptional);
+    expect(shape.must).not.toBeInstanceOf(z.ZodOptional);
+  });
+
+  it("falls back to z.unknown() for unrecognized types", () => {
+    const shape = jsonSchemaToZodShape({
+      type: "object",
+      properties: {
+        weird: { type: "fancy-thing" as unknown as string },
+      },
+      required: ["weird"],
+    });
+
+    const obj = z.object(shape);
+    // z.unknown() accepts anything
+    expect(obj.parse({ weird: { a: 1 } })).toEqual({ weird: { a: 1 } });
+    expect(obj.parse({ weird: "string" })).toEqual({ weird: "string" });
+    expect(obj.parse({ weird: 42 })).toEqual({ weird: 42 });
   });
 });

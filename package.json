@@ -13,7 +13,13 @@
     "./license/license-status.js": "./build/license/license-status.js",
     "./types.js": "./build/types.js",
     "./plan/plan-executor.js": "./build/plan/plan-executor.js",
-    "./plan/plan-variables.js": "./build/plan/plan-variables.js"
+    "./plan/plan-variables.js": "./build/plan/plan-variables.js",
+    "./tools/element-utils.js": "./build/tools/element-utils.js",
+    "./tools/error-utils.js": "./build/tools/error-utils.js",
+    "./cache/a11y-tree.js": "./build/cache/a11y-tree.js",
+    "./cache/selector-cache.js": "./build/cache/selector-cache.js",
+    "./cdp/cdp-client.js": "./build/cdp/cdp-client.js",
+    "./cdp/session-manager.js": "./build/cdp/session-manager.js"
   },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
