@@ -12,7 +12,7 @@
     "./hooks": "./build/hooks/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x build/index.js",
     "test": "vitest run",
     "token-count": "node scripts/token-count.mjs",
     "lint": "eslint .",
