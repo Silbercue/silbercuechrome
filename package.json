@@ -10,7 +10,10 @@
   "exports": {
     ".": "./build/index.js",
     "./hooks": "./build/hooks/index.js",
-    "./license/license-status.js": "./build/license/license-status.js"
+    "./license/license-status.js": "./build/license/license-status.js",
+    "./types.js": "./build/types.js",
+    "./plan/plan-executor.js": "./build/plan/plan-executor.js",
+    "./plan/plan-variables.js": "./build/plan/plan-variables.js"
   },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
