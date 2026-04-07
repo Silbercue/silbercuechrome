@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-08  # Story 16.6 done
+last_updated: 2026-04-07  # Story 16.7: awaiting-manual-verification (AC #1-#4,#6 PASS; AC #5 manual Benchmark-Run; AC #7 PARTIAL bis Benchmark)
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -222,5 +222,5 @@ development_status:
   16-4-inspect-element-visual-feedback-pro-repo: done
   16-5-operator-modul-pro-repo: done
   16-6-ambient-context-pro-repo: done
-  16-7-pro-repo-integration-benchmark: ready-for-dev
+  16-7-pro-repo-integration-benchmark: awaiting-manual-verification
   epic-16-retrospective: optional
