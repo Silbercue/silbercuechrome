@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { registerProHooks, getProHooks, proFeatureError } from "./pro-hooks.js";
-import type { ProHooks } from "./pro-hooks.js";
+import type { ProHooks, ToolRegistryPublic } from "./pro-hooks.js";
 import type { LicenseStatus } from "../license/license-status.js";
 import type { ToolResponse } from "../types.js";
 import type { PlanStep } from "../plan/plan-executor.js";
+import type { CdpClient } from "../cdp/cdp-client.js";
 
 describe("ProHooks", () => {
   // Reset between tests — clean state
@@ -244,5 +245,105 @@ describe("ProHooks", () => {
 
     registerProHooks({});
     expect(getProHooks().executeParallel).toBeUndefined();
+  });
+
+  // --- Story 15.2: registerProTools Hook ---
+
+  it("registerProTools is undefined by default", () => {
+    const hooks = getProHooks();
+    expect(hooks.registerProTools).toBeUndefined();
+  });
+
+  it("registerProTools can be registered and retrieved", () => {
+    const impl = vi.fn((_registry: ToolRegistryPublic) => {
+      /* Pro-Repo would call registry.registerTool(...) here */
+    });
+
+    registerProHooks({ registerProTools: impl });
+
+    const hooks = getProHooks();
+    expect(hooks.registerProTools).toBe(impl);
+
+    // Simulate Free-Repo calling the hook with a fake registry
+    const fakeRegistry: ToolRegistryPublic = {
+      registerTool: vi.fn(),
+    };
+    hooks.registerProTools!(fakeRegistry);
+    expect(impl).toHaveBeenCalledWith(fakeRegistry);
+  });
+
+  it("registerProTools works alongside other hooks", () => {
+    const gate = () => ({ allowed: true });
+    const registerImpl = (_registry: ToolRegistryPublic) => {
+      /* no-op */
+    };
+
+    registerProHooks({ featureGate: gate, registerProTools: registerImpl });
+
+    const hooks = getProHooks();
+    expect(hooks.featureGate).toBe(gate);
+    expect(hooks.registerProTools).toBe(registerImpl);
+  });
+
+  it("registerProTools is cleared when hooks are reset", () => {
+    registerProHooks({ registerProTools: () => { /* no-op */ } });
+    expect(getProHooks().registerProTools).toBeDefined();
+
+    registerProHooks({});
+    expect(getProHooks().registerProTools).toBeUndefined();
+  });
+
+  // --- Story 15.2: enhanceEvaluateResult Hook ---
+
+  it("enhanceEvaluateResult is undefined by default", () => {
+    const hooks = getProHooks();
+    expect(hooks.enhanceEvaluateResult).toBeUndefined();
+  });
+
+  it("enhanceEvaluateResult can be registered and retrieved", async () => {
+    const enhanced: ToolResponse = {
+      content: [
+        { type: "text", text: "result" },
+        { type: "text", text: "Visual: 100x50 -> 200x50" },
+        { type: "image", data: "fakeBase64", mimeType: "image/webp" },
+      ],
+      _meta: { elapsedMs: 20, method: "evaluate", visualFeedback: true },
+    };
+    const impl = vi.fn().mockResolvedValue(enhanced);
+
+    registerProHooks({ enhanceEvaluateResult: impl });
+
+    const hooks = getProHooks();
+    expect(hooks.enhanceEvaluateResult).toBe(impl);
+
+    const fakeCdp = { send: vi.fn() } as unknown as CdpClient;
+    const base: ToolResponse = {
+      content: [{ type: "text", text: "result" }],
+      _meta: { elapsedMs: 10, method: "evaluate" },
+    };
+    const result = await hooks.enhanceEvaluateResult!(
+      "el.style.width = '200px'",
+      base,
+      { cdpClient: fakeCdp, sessionId: "sess-1" },
+    );
+
+    expect(impl).toHaveBeenCalledWith(
+      "el.style.width = '200px'",
+      base,
+      { cdpClient: fakeCdp, sessionId: "sess-1" },
+    );
+    expect(result).toBe(enhanced);
+  });
+
+  it("enhanceEvaluateResult is cleared when hooks are reset", async () => {
+    const impl = async (
+      _expression: string,
+      result: ToolResponse,
+    ): Promise<ToolResponse> => result;
+    registerProHooks({ enhanceEvaluateResult: impl });
+    expect(getProHooks().enhanceEvaluateResult).toBeDefined();
+
+    registerProHooks({});
+    expect(getProHooks().enhanceEvaluateResult).toBeUndefined();
   });
 });

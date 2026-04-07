@@ -48,8 +48,6 @@ import { scrollSchema, scrollHandler } from "./tools/scroll.js";
 import type { ScrollParams } from "./tools/scroll.js";
 import { observeSchema, observeHandler } from "./tools/observe.js";
 import type { ObserveParams } from "./tools/observe.js";
-import { inspectElementSchema, inspectElementHandler } from "./tools/inspect-element.js";
-import type { InspectElementParams } from "./tools/inspect-element.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
 import { injectOverlay, updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
@@ -58,9 +56,12 @@ import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hooks.js";
+import type { ToolRegistryPublic } from "./hooks/pro-hooks.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
 // Story 13.1: Tools whose response IS page context — no ambient injection needed
+// Story 15.2: inspect_element string literal remains in the set — it costs nothing
+// and guarantees consistent ambient-context suppression if the Pro-Repo registers it.
 const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot", "inspect_element"]);
 
 // FR-H2: Fast content hash for ambient context dedup (djb2)
@@ -75,10 +76,55 @@ function simpleHash(str: string): string {
 // FR-002: Action tools that mutate the DOM and benefit from post-action diff
 const ACTION_TOOLS = new Set(["click", "type", "fill_form"]);
 
-export class ToolRegistry {
+export class ToolRegistry implements ToolRegistryPublic {
   private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
+
+  /**
+   * Story 15.2: Delegate for `registerTool()` — set during `registerAll()`
+   * so it has access to the wrap() closure (dialog injection, response_bytes,
+   * session defaults). Pro-Repo calls `registerTool()` from within
+   * `registerProTools`, which runs inside `registerAll()` after this delegate
+   * is installed.
+   */
+  private _registerProToolDelegate:
+    | ((
+        name: string,
+        description: string,
+        schema: Record<string, unknown>,
+        handler: (
+          params: Record<string, unknown>,
+          sessionIdOverride?: string,
+        ) => Promise<ToolResponse>,
+      ) => void)
+    | null = null;
+
+  /**
+   * Story 15.2: Public method exposed via `ToolRegistryPublic`. The Pro-Repo
+   * uses this from within the `registerProTools` hook to register extra
+   * MCP tools (e.g. inspect_element).
+   *
+   * Lifecycle: The delegate is installed at the start of `registerAll()`
+   * (before `registerProTools` is invoked) and cleared at the end of
+   * `registerAll()`. Calling `registerTool()` outside this window throws.
+   */
+  registerTool(
+    name: string,
+    description: string,
+    schema: Record<string, unknown>,
+    handler: (
+      params: Record<string, unknown>,
+      sessionIdOverride?: string,
+    ) => Promise<ToolResponse>,
+  ): void {
+    if (!this._registerProToolDelegate) {
+      throw new Error(
+        "ToolRegistry.registerTool() can only be called during registerAll() / registerProTools",
+      );
+    }
+    this._registerProToolDelegate(name, description, schema, handler);
+  }
 
   // Story 13.1: Ambient Page Context — track content hash of last sent snapshot
   // FR-H2: Changed from version counter to content hash to avoid false positives
@@ -467,6 +513,34 @@ export class ToolRegistry {
       };
     };
 
+    // Story 15.2: Install the registerTool delegate so the Pro-Repo can
+    // register extra MCP tools from within its `registerProTools` hook.
+    // Must be set BEFORE `finalHooks.registerProTools?.(this)` is called.
+    this._registerProToolDelegate = (name, description, schema, handler) => {
+      // Register in the internal handlers map (for executeTool / run_plan)
+      this._handlers.set(name, handler);
+      // Register with the MCP server (for tools/list). Reuse the same
+      // `wrap()` closure as Free-Tools so Pro-Tools inherit the same
+      // cross-cutting concerns (dialog injection, response_bytes,
+      // session-defaults, overlay status).
+      this.server.tool(
+        name,
+        description,
+        schema,
+        wrap(async (params) => handler(params as Record<string, unknown>), name),
+      );
+    };
+
+    // Story 15.2: Let the Pro-Repo register its tools BEFORE the Free-Tools
+    // so that `tools/list` is deterministic.
+    //
+    // AC #8: When the Pro-Repo does NOT call `registerProTools`, the Pro-only
+    // tools (e.g. `inspect_element`) are simply NOT registered — they do not
+    // appear in `tools/list` at all. If an LLM still attempts to invoke them,
+    // the MCP server returns a standard "Unknown tool" error. This is cleaner
+    // than maintaining a fake stub that clutters the tool list in the free tier.
+    finalHooks.registerProTools?.(this);
+
     this.server.tool(
       "evaluate",
       "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
@@ -654,26 +728,6 @@ export class ToolRegistry {
       wrap(async (params) => {
         return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._sessionManager);
       }, "observe"),
-    );
-
-    // Story 13.1: inspect_element — CSS debugging in one call
-    this.server.tool(
-      "inspect_element",
-      "Inspect CSS styles, matching rules with source file:line, and geometry for any element. Returns computed styles, CSS rules with sources, and inherited styles in one call. Use styles filter (e.g. ['flex*']) to narrow output.",
-      {
-        selector: inspectElementSchema.shape.selector,
-        styles: inspectElementSchema.shape.styles,
-        include_rules: inspectElementSchema.shape.include_rules,
-        include_inherited: inspectElementSchema.shape.include_inherited,
-      },
-      wrap(async (params) => {
-        return inspectElementHandler(
-          params as unknown as InspectElementParams,
-          this.cdpClient,
-          this.sessionId,
-          this._sessionManager,
-        );
-      }, "inspect_element"),
     );
 
     this.server.tool(
@@ -902,14 +956,6 @@ export class ToolRegistry {
     this._handlers.set("observe", async (params, sessionIdOverride?) => {
       return observeHandler(params as unknown as ObserveParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
-    this._handlers.set("inspect_element", async (params, sessionIdOverride?) => {
-      return inspectElementHandler(
-        params as unknown as InspectElementParams,
-        this.cdpClient,
-        sessionIdOverride ?? this.sessionId,
-        this._sessionManager,
-      );
-    });
     this._handlers.set("click", async (params, sessionIdOverride?) => {
       return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
@@ -1018,5 +1064,11 @@ export class ToolRegistry {
         return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
       });
     }
+
+    // Story 15.2 / H2: Clear the Pro-Tool registration delegate now that
+    // `registerAll()` is done. Any subsequent `registerTool()` call (after
+    // the setup phase) will throw — preventing non-deterministic late
+    // registrations from corrupting `tools/list`.
+    this._registerProToolDelegate = null;
   }
 }
