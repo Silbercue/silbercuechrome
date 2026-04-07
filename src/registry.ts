@@ -827,7 +827,7 @@ export class ToolRegistry {
 
     this.server.tool(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume, and parallel tab execution (Pro). Use parallel: [{ tab, steps }] for multi-tab workflows.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume. Parallel tab execution via parallel: [{ tab, steps }] is a Pro-Feature - requires Pro license.",
       {
         steps: runPlanSchema.shape.steps,
         parallel: runPlanSchema.shape.parallel,

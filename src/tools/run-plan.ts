@@ -3,15 +3,14 @@ import type { ToolResponse } from "../types.js";
 import type { ToolRegistry } from "../registry.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
-import { executePlan, executeParallel } from "../plan/plan-executor.js";
-import type { PlanStep, PlanOptions, SuspendedPlanResponse, ParallelGroup } from "../plan/plan-executor.js";
+import { executePlan } from "../plan/plan-executor.js";
+import type { PlanStep, PlanOptions, SuspendedPlanResponse } from "../plan/plan-executor.js";
 import type { PlanStateStore } from "../plan/plan-state-store.js";
-import { proFeatureError } from "../hooks/pro-hooks.js";
+import { getProHooks, proFeatureError } from "../hooks/pro-hooks.js";
 import type { LicenseStatus } from "../license/license-status.js";
 import type { FreeTierConfig } from "../license/free-tier-config.js";
 import { FreeTierLicenseStatus } from "../license/license-status.js";
 import { DEFAULT_FREE_TIER_CONFIG } from "../license/free-tier-config.js";
-import { createTabScopedRegistry } from "../plan/tab-scoped-registry.js";
 
 const suspendSchema = z.object({
   question: z.string().optional().describe("Question to ask the agent when suspending"),
@@ -46,7 +45,7 @@ export const runPlanSchema = z.object({
   parallel: z
     .array(parallelGroupSchema)
     .optional()
-    .describe("Array of tab groups to execute in parallel. Pro-Feature."),
+    .describe("Array of tab groups to execute in parallel. Pro-Feature — requires Pro license."),
   vars: z
     .record(z.unknown())
     .optional()
@@ -109,7 +108,8 @@ export async function runPlanHandler(
   const resolvedConfig = freeTierConfig ?? DEFAULT_FREE_TIER_CONFIG;
   const stepLimit = resolvedLicense.isPro() ? undefined : resolvedConfig.runPlanLimit;
 
-  // --- Story 7.6: Parallel path ---
+  // --- Story 7.6 / 15.4: Parallel path ---
+  // Multi-Tab-Parallel-Engine lebt im Pro-Repo und wird via executeParallel-Hook injiziert.
   if (params.parallel) {
     // Pro-Feature-Gate: parallel requires Pro license
     if (!resolvedLicense.isPro()) {
@@ -136,15 +136,70 @@ export async function runPlanHandler(
       };
     }
 
+    // Safety-Net: Pro-Lizenz vorhanden, aber Pro-Repo hat den Hook nicht registriert
+    // (z.B. jemand benutzt das Free-npm-Paket ohne Pro-Add-on). Sauberer Pro-Feature-Error
+    // statt undefined.executeParallel(...)-Crash.
+    const hooks = getProHooks();
+    if (!hooks.executeParallel) {
+      return proFeatureError("parallel");
+    }
+
+    // Inline tab-scope: attach + Runtime/Accessibility enable + sessionId-Override.
+    // Standard-CDP-Plumbing, keine Pro-Logik — bleibt im Free-Repo. Der Pro-Hook ist
+    // die reine Orchestrierungs-Engine (Semaphore, Promise.allSettled, Group-Aggregation).
+    //
+    // H2-Fix (Code-Review 15.4): attachte Sessions werden in `attachedSessions`
+    // getrackt und nach dem Hook-Aufruf via `Target.detachFromTarget` aufgeraeumt,
+    // damit wiederholte parallel-Laeufe keine Session-Leaks verursachen.
+    const cdpClient = deps.cdpClient;
+    const attachedSessions: Array<{ targetId: string; sessionId: string }> = [];
     const registryFactory = async (tabTargetId: string) => {
-      return createTabScopedRegistry(registry, deps.cdpClient, tabTargetId);
+      const { sessionId: tabSessionId } = await cdpClient.send<{ sessionId: string }>(
+        "Target.attachToTarget",
+        { targetId: tabTargetId, flatten: true },
+      );
+      attachedSessions.push({ targetId: tabTargetId, sessionId: tabSessionId });
+      await cdpClient.send("Runtime.enable", {}, tabSessionId);
+      await cdpClient.send("Accessibility.enable", {}, tabSessionId);
+      return {
+        executeTool: (name: string, toolParams: Record<string, unknown>): Promise<ToolResponse> =>
+          registry.executeTool(name, toolParams, tabSessionId),
+      };
     };
 
-    return executeParallel(params.parallel as ParallelGroup[], registryFactory, {
-      vars: params.vars,
-      errorStrategy: params.errorStrategy,
-      concurrencyLimit: 5,
-    });
+    // H1-Fix (Code-Review 15.4): Hook-Exceptions in MCP-konforme isError-Response
+    // wandeln statt nach oben durchzulassen.
+    try {
+      return await hooks.executeParallel(
+        params.parallel as Array<{ tab: string; steps: PlanStep[] }>,
+        registryFactory,
+        {
+          vars: params.vars,
+          errorStrategy: params.errorStrategy,
+          concurrencyLimit: 5,
+        },
+      );
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: `parallel execution failed: ${error instanceof Error ? error.message : String(error)}`,
+        }],
+        isError: true,
+        _meta: { elapsedMs: 0, method: "run_plan" },
+      };
+    } finally {
+      // H2-Fix: Cleanup aller attachten Sessions, auch im Fehlerfall.
+      // Best-effort: Detach-Fehler werden geschluckt, damit ein einzelner
+      // bereits geschlossener Tab nicht den ganzen Cleanup blockiert.
+      for (const { sessionId: tabSessionId } of attachedSessions) {
+        try {
+          await cdpClient.send("Target.detachFromTarget", { sessionId: tabSessionId });
+        } catch {
+          // Tab ggf. bereits geschlossen — ignorieren
+        }
+      }
+    }
   }
 
   // --- Resume path ---
