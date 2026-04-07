@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-07
+last_updated: 2026-04-07  # Story 13.2 review
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -171,5 +171,5 @@ development_status:
   # Epic 13: Visual Developer Intelligence (Phase 3)
   epic-13: in-progress
   13-1-inspect-element-tool: review
-  13-2-visual-feedback-nach-edits: backlog
+  13-2-visual-feedback-nach-edits: review
   epic-13-retrospective: optional

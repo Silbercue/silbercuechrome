@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/visual-feedback.mjs",
+            "timeout": 10,
+            "statusMessage": "visual feedback..."
+          }
+        ]
+      }
+    ]
+  }
+}
