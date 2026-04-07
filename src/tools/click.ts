@@ -38,6 +38,22 @@ export type ClickParams = z.infer<typeof clickSchema>;
 
 export type ClickMethod = "cdp" | "js-rect" | "js-click" | "coordinates";
 
+/**
+ * Story 16.5: Optional human-mouse-move callback injected via the
+ * `enhanceTool` Pro-Hook. When present, this replaces the raw
+ * `Input.dispatchMouseEvent("mouseMoved",...)` with a Bezier-curve mouse
+ * movement from the Pro-Repo Human Touch module. The Free-Repo does NOT
+ * contain any Human-Touch logic — it only knows how to delegate.
+ */
+export type HumanMouseMoveFn = (
+  cdpClient: CdpClient,
+  sessionId: string,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+) => Promise<void>;
+
 interface TargetInfo {
   targetId: string;
   type: string;
@@ -52,6 +68,7 @@ async function dispatchClick(
   sessionId: string,
   backendNodeId: number,
   objectId: string,
+  humanMouseMove?: HumanMouseMoveFn,
 ): Promise<ClickResult> {
   // Step 1: Reset scroll to origin before clicking.
   // When Emulation.setDeviceMetricsOverride is active, Input.dispatchMouseEvent
@@ -126,11 +143,17 @@ async function dispatchClick(
 
   // Step 4: Dispatch mouse events — mouseMoved → mousePressed → mouseReleased
   // mouseMoved establishes mouseenter/mouseover context (BUG-002)
-  await cdpClient.send(
-    "Input.dispatchMouseEvent",
-    { type: "mouseMoved", x, y, button: "none", buttons: 0 },
-    sessionId,
-  );
+  // Story 16.5: If humanMouseMove callback is injected (via Pro-Hook),
+  // delegate the mouse-move sequence to it. Otherwise: raw CDP dispatch.
+  if (humanMouseMove) {
+    await humanMouseMove(cdpClient, sessionId, 0, 0, x, y);
+  } else {
+    await cdpClient.send(
+      "Input.dispatchMouseEvent",
+      { type: "mouseMoved", x, y, button: "none", buttons: 0 },
+      sessionId,
+    );
+  }
   await cdpClient.send(
     "Input.dispatchMouseEvent",
     { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 },
@@ -154,6 +177,21 @@ export async function clickHandler(
   sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
+
+  // Story 16.5: Extract optional humanMouseMove callback injected by the
+  // `enhanceTool` Pro-Hook. The field is NOT part of the Zod schema — it is
+  // read from the raw params map via type-guard and stripped from the params
+  // object before downstream code uses it (so it never leaks into CDP calls
+  // or schema-validation paths).
+  const rawParams = params as unknown as Record<string, unknown>;
+  const maybeHuman = rawParams.humanMouseMove;
+  const humanMouseMove: HumanMouseMoveFn | undefined =
+    typeof maybeHuman === "function" ? (maybeHuman as HumanMouseMoveFn) : undefined;
+  if ("humanMouseMove" in rawParams) {
+    const { humanMouseMove: _humanMouseMove, ...rest } = rawParams;
+    void _humanMouseMove;
+    params = rest as unknown as ClickParams;
+  }
 
   // FR-D: Coordinate-based click — skip element resolution entirely
   if (params.x !== undefined && params.y !== undefined) {
@@ -207,7 +245,12 @@ export async function clickHandler(
       }
 
       // Dispatch mouse events at coordinates via CDP
-      await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dispatchX, y: dispatchY, button: "none", buttons: 0 }, sessionId);
+      // Story 16.5: If humanMouseMove callback is injected, delegate the move.
+      if (humanMouseMove) {
+        await humanMouseMove(cdpClient, sessionId!, 0, 0, dispatchX, dispatchY);
+      } else {
+        await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: dispatchX, y: dispatchY, button: "none", buttons: 0 }, sessionId);
+      }
       await cdpClient.send("Input.dispatchMouseEvent", { type: "mousePressed", x: dispatchX, y: dispatchY, button: "left", buttons: 1, clickCount: 1 }, sessionId);
       await cdpClient.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: dispatchX, y: dispatchY, button: "left", buttons: 0, clickCount: 1 }, sessionId);
 
@@ -282,7 +325,7 @@ export async function clickHandler(
 
     // Dispatch click using the resolved session (may be OOPIF or main)
     const clickResult = await dispatchClick(
-      cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId,
+      cdpClient, element.resolvedSessionId, element.backendNodeId, element.objectId, humanMouseMove,
     );
 
     // FR-E: Check for new tabs after click

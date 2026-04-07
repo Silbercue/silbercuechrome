@@ -303,6 +303,15 @@ export class ToolRegistry implements ToolRegistryPublic {
       }
       resolvedParams = this._sessionDefaults.resolveParams(name, params);
     }
+    // Story 16.5: enhanceTool hook (Operator/Human Touch) — Pro-Repo injiziert
+    // Callback-Funktionen (z.B. humanMouseMove) in params. Sync-Hook, kein await.
+    {
+      const hooks = getProHooks();
+      const enhanced = hooks.enhanceTool?.(name, resolvedParams);
+      if (enhanced) {
+        resolvedParams = enhanced;
+      }
+    }
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
     // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
@@ -522,7 +531,18 @@ export class ToolRegistry implements ToolRegistryPublic {
           let elapsed: number | undefined;
           let meta: Record<string, unknown> | undefined;
           try {
-            const result = await dialogWrapped(params);
+            // Story 16.5: enhanceTool hook (Operator/Human Touch) — Pro-Repo
+            // injiziert Callback-Funktionen in params. Sync-Hook.
+            let effectiveParams = params;
+            const enhanceHooks = getProHooks();
+            const enhanced = enhanceHooks.enhanceTool?.(
+              name,
+              params as unknown as Record<string, unknown>,
+            );
+            if (enhanced) {
+              effectiveParams = enhanced as unknown as T;
+            }
+            const result = await dialogWrapped(effectiveParams);
             elapsed = result._meta?.elapsedMs as number | undefined;
             meta = result._meta as Record<string, unknown> | undefined;
             // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
@@ -556,7 +576,17 @@ export class ToolRegistry implements ToolRegistryPublic {
             suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
           }
           // Resolve defaults into params
-          const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
+          let resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
+          // Story 16.5: enhanceTool hook (Operator/Human Touch) — Pro-Repo
+          // injiziert Callback-Funktionen in params. Sync-Hook, kein await.
+          const enhanceHooks = getProHooks();
+          const enhanced = enhanceHooks.enhanceTool?.(
+            name,
+            resolvedParams as unknown as Record<string, unknown>,
+          );
+          if (enhanced) {
+            resolvedParams = enhanced as unknown as T;
+          }
           const result = await dialogWrapped(resolvedParams);
           // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
           await this._runOnToolResultHook(result, name);

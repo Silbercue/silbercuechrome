@@ -29,6 +29,18 @@ export const typeSchema = z.object({
 
 export type TypeParams = z.infer<typeof typeSchema>;
 
+/**
+ * Story 16.5: Optional human-type callback injected via the `enhanceTool`
+ * Pro-Hook. When present, this replaces the raw `Input.insertText` with a
+ * realistic per-character typing sequence from the Pro-Repo Human Touch
+ * module. The Free-Repo itself does NOT contain any Human-Touch logic.
+ */
+export type HumanTypeFn = (
+  cdpClient: CdpClient,
+  sessionId: string,
+  text: string,
+) => Promise<void>;
+
 // --- Constants ---
 
 const INPUT_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
@@ -48,6 +60,20 @@ export async function typeHandler(
   sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
+
+  // Story 16.5: Extract optional humanType callback injected by the
+  // `enhanceTool` Pro-Hook. The field is NOT part of the Zod schema — it is
+  // read from the raw params map via type-guard and stripped from the params
+  // object before downstream code uses it.
+  const rawParams = params as unknown as Record<string, unknown>;
+  const maybeHuman = rawParams.humanType;
+  const humanType: HumanTypeFn | undefined =
+    typeof maybeHuman === "function" ? (maybeHuman as HumanTypeFn) : undefined;
+  if ("humanType" in rawParams) {
+    const { humanType: _humanType, ...rest } = rawParams;
+    void _humanType;
+    params = rest as unknown as TypeParams;
+  }
 
   // Validation: require text parameter (defensive — Zod enforces this at schema level,
   // but handler may be called directly without schema parsing)
@@ -149,8 +175,13 @@ export async function typeHandler(
     }
 
     // Step 5: Insert text (use resolved session for OOPIF — no auto-settle)
+    // Story 16.5: If humanType callback is injected, delegate to it.
     if (params.text.length > 0) {
-      await cdpClient.send("Input.insertText", { text: params.text }, targetSession);
+      if (humanType) {
+        await humanType(cdpClient, targetSession, params.text);
+      } else {
+        await cdpClient.send("Input.insertText", { text: params.text }, targetSession);
+      }
     }
 
     // Step 6: Success response

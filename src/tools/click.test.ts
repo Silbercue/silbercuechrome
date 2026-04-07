@@ -848,4 +848,87 @@ describe("clickHandler", () => {
     expect(result.isError).toBeUndefined();
     expect(a11yTree.getTree).toHaveBeenCalled();
   });
+
+  // --- Story 16.5: humanMouseMove callback delegation ---
+
+  describe("Story 16.5 — humanMouseMove callback", () => {
+    it("dispatchClick delegates mouse-move to humanMouseMove callback when provided (ref path)", async () => {
+      mockResolveElement.mockResolvedValue({
+        backendNodeId: 42,
+        objectId: "obj-42",
+        role: "button",
+        name: "Submit",
+        resolvedVia: "ref",
+        resolvedSessionId: "s1",
+      });
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const humanMouseMove = vi.fn().mockResolvedValue(undefined);
+
+      // Pass humanMouseMove via params (cast — it is NOT in the Zod schema)
+      const params = {
+        ref: "e5",
+        humanMouseMove,
+      } as unknown as ClickParams;
+
+      const result = await clickHandler(params, cdpClient, "s1");
+
+      expect(result.isError).toBeUndefined();
+      expect(humanMouseMove).toHaveBeenCalledTimes(1);
+      // No raw mouseMoved CDP-call should have been issued
+      const mouseMovedCalls = sendFn.mock.calls.filter(
+        (c) => c[0] === "Input.dispatchMouseEvent" && (c[1] as { type?: string })?.type === "mouseMoved",
+      );
+      expect(mouseMovedCalls.length).toBe(0);
+      // mousePressed and mouseReleased still issued
+      const pressedCalls = sendFn.mock.calls.filter(
+        (c) => c[0] === "Input.dispatchMouseEvent" && (c[1] as { type?: string })?.type === "mousePressed",
+      );
+      expect(pressedCalls.length).toBe(1);
+    });
+
+    it("dispatchClick falls back to raw CDP mouseMoved when humanMouseMove is absent", async () => {
+      mockResolveElement.mockResolvedValue({
+        backendNodeId: 42,
+        objectId: "obj-42",
+        role: "button",
+        name: "Submit",
+        resolvedVia: "ref",
+        resolvedSessionId: "s1",
+      });
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const result = await clickHandler({ ref: "e5" } as ClickParams, cdpClient, "s1");
+
+      expect(result.isError).toBeUndefined();
+      const mouseMovedCalls = sendFn.mock.calls.filter(
+        (c) => c[0] === "Input.dispatchMouseEvent" && (c[1] as { type?: string })?.type === "mouseMoved",
+      );
+      expect(mouseMovedCalls.length).toBe(1);
+    });
+
+    it("coordinate-based click delegates to humanMouseMove when provided", async () => {
+      const { cdpClient, sendFn } = createMockCdp({
+        "Runtime.evaluate": {
+          result: { value: { sx: 0, sy: 0, w: 800, h: 600, oob: false } },
+        },
+      });
+
+      const humanMouseMove = vi.fn().mockResolvedValue(undefined);
+      const params = {
+        x: 100,
+        y: 200,
+        humanMouseMove,
+      } as unknown as ClickParams;
+
+      const result = await clickHandler(params, cdpClient, "s1");
+
+      expect(result.isError).toBeUndefined();
+      expect(humanMouseMove).toHaveBeenCalledTimes(1);
+      const mouseMovedCalls = sendFn.mock.calls.filter(
+        (c) => c[0] === "Input.dispatchMouseEvent" && (c[1] as { type?: string })?.type === "mouseMoved",
+      );
+      expect(mouseMovedCalls.length).toBe(0);
+    });
+  });
 });

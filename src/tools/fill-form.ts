@@ -38,6 +38,17 @@ export const fillFormSchema = z.object({
 
 export type FillFormParams = z.infer<typeof fillFormSchema>;
 
+/**
+ * Story 16.5: Optional human-type callback injected via the `enhanceTool`
+ * Pro-Hook. Used to replace the raw `Input.insertText` with a realistic
+ * per-character typing sequence from the Pro-Repo Human Touch module.
+ */
+export type HumanTypeFn = (
+  cdpClient: CdpClient,
+  sessionId: string,
+  text: string,
+) => Promise<void>;
+
 // --- Types ---
 
 interface FieldResult {
@@ -173,6 +184,7 @@ async function fillTextInput(
   backendNodeId: number,
   objectId: string,
   value: string,
+  humanType?: HumanTypeFn,
 ): Promise<void> {
   // Step 1: Focus
   await cdpClient.send(
@@ -194,8 +206,13 @@ async function fillTextInput(
   );
 
   // Step 3: Type text
+  // Story 16.5: If humanType callback is injected (via Pro-Hook), delegate.
   if (value.length > 0) {
-    await cdpClient.send("Input.insertText", { text: value }, sessionId);
+    if (humanType) {
+      await humanType(cdpClient, sessionId, value);
+    } else {
+      await cdpClient.send("Input.insertText", { text: value }, sessionId);
+    }
   }
 }
 
@@ -209,6 +226,20 @@ export async function fillFormHandler(
 ): Promise<ToolResponse> {
   const start = performance.now();
   const results: FieldResult[] = [];
+
+  // Story 16.5: Extract optional humanType callback injected by the
+  // `enhanceTool` Pro-Hook. The field is NOT part of the Zod schema and must
+  // be stripped from `params` before downstream code uses it (so it never
+  // leaks into per-field validation or response payloads).
+  const rawParams = params as unknown as Record<string, unknown>;
+  const maybeHuman = rawParams.humanType;
+  const humanType: HumanTypeFn | undefined =
+    typeof maybeHuman === "function" ? (maybeHuman as HumanTypeFn) : undefined;
+  if ("humanType" in rawParams) {
+    const { humanType: _humanType, ...rest } = rawParams;
+    void _humanType;
+    params = rest as unknown as FillFormParams;
+  }
 
   // Process fields sequentially (CDP commands are not parallelizable on same tab)
   for (const field of params.fields) {
@@ -286,6 +317,7 @@ export async function fillFormHandler(
           element.backendNodeId,
           element.objectId,
           textValue,
+          humanType,
         );
         results.push({
           ref: field.ref,

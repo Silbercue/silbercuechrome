@@ -853,4 +853,42 @@ describe("fillFormHandler", () => {
     expect(result._meta?.method).toBe("fill_form");
     expect(typeof result._meta?.elapsedMs).toBe("number");
   });
+
+  // --- Story 16.5: humanType callback delegation ---
+
+  describe("Story 16.5 — humanType callback", () => {
+    it("delegates text input to humanType callback when provided", async () => {
+      mockResolveElement.mockResolvedValue(mockTextbox());
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const humanType = vi.fn().mockResolvedValue(undefined);
+      const params = {
+        fields: [{ ref: "e5", value: "Max" }],
+        humanType,
+      } as unknown as FillFormParams;
+
+      const result = await fillFormHandler(params, cdpClient, "s1");
+
+      expect(result.isError).toBeUndefined();
+      expect(humanType).toHaveBeenCalledWith(cdpClient, "s1", "Max");
+      const insertCalls = sendFn.mock.calls.filter((c) => c[0] === "Input.insertText");
+      expect(insertCalls.length).toBe(0);
+    });
+
+    it("falls back to raw Input.insertText when humanType is absent", async () => {
+      mockResolveElement.mockResolvedValue(mockTextbox());
+      const { cdpClient, sendFn } = createMockCdp();
+
+      const result = await fillFormHandler(
+        { fields: [{ ref: "e5", value: "Max" }] },
+        cdpClient,
+        "s1",
+      );
+
+      expect(result.isError).toBeUndefined();
+      const insertCalls = sendFn.mock.calls.filter((c) => c[0] === "Input.insertText");
+      expect(insertCalls.length).toBe(1);
+      expect(insertCalls[0][1]).toEqual({ text: "Max" });
+    });
+  });
 });
