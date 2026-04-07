@@ -241,6 +241,121 @@ describe("evaluateHandler", () => {
   });
 });
 
+describe("evaluateHandler visual feedback", () => {
+  it("should attach screenshot + geometry for style-changing expression with selector", async () => {
+    const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+    const cdp = mockCdpClient(async (method, params) => {
+      calls.push({ method, params });
+
+      if (method === "Runtime.evaluate") {
+        const expr = (params as { expression: string }).expression;
+        // Before-rect query
+        if (expr.includes("getBoundingClientRect") && !calls.some(c =>
+          c.method === "Runtime.evaluate" && c.params &&
+          (c.params as { expression: string }).expression === "document.querySelector('.card').style.width = '200px'"
+        )) {
+          return { result: { type: "object", value: { x: 10, y: 20, width: 100, height: 50 } } };
+        }
+        // After-rect query (called after the main expression)
+        if (expr.includes("getBoundingClientRect")) {
+          return { result: { type: "object", value: { x: 10, y: 20, width: 200, height: 50 } } };
+        }
+        // Scroll offset query
+        if (expr.includes("scrollX")) {
+          return { result: { type: "string", value: '{"x":0,"y":0}' } };
+        }
+        // Main expression
+        return { result: { type: "undefined" } };
+      }
+      if (method === "Emulation.setFocusEmulationEnabled") return {};
+      if (method === "Page.captureScreenshot") return { data: "fakeBase64Data" };
+      return {};
+    });
+
+    const response = await evaluateHandler(
+      { expression: "document.querySelector('.card').style.width = '200px'", await_promise: true },
+      cdp,
+    );
+
+    expect(response.isError).toBeUndefined();
+    expect(response.content.length).toBe(3); // text + geometry + screenshot
+    expect(response.content[0].type).toBe("text");
+    expect(response.content[0].text).toBe("undefined");
+    expect(response.content[1].type).toBe("text");
+    expect(response.content[1].text).toContain("Visual:");
+    expect(response.content[1].text).toContain("100×50 → 200×50px");
+    expect(response.content[2].type).toBe("image");
+    expect((response.content[2] as { data: string }).data).toBe("fakeBase64Data");
+    expect(response._meta?.visualFeedback).toBe(true);
+  });
+
+  it("should NOT attach screenshot for non-style-changing expression", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "string", value: "Google" },
+    }));
+
+    const response = await evaluateHandler(
+      { expression: "document.title", await_promise: true },
+      cdp,
+    );
+
+    expect(response.content.length).toBe(1);
+    expect(response.content[0].type).toBe("text");
+    expect(response._meta?.visualFeedback).toBeUndefined();
+  });
+
+  it("should attach viewport screenshot for style-change without identifiable selector", async () => {
+    const cdp = mockCdpClient(async (method: string) => {
+      if (method === "Emulation.setFocusEmulationEnabled") return {};
+      if (method === "Runtime.evaluate") return { result: { type: "undefined" } };
+      if (method === "Page.captureScreenshot") return { data: "viewportData" };
+      return {};
+    });
+
+    const response = await evaluateHandler(
+      { expression: "el.style.color = 'red'", await_promise: true },
+      cdp,
+    );
+
+    // No selector extractable → viewport screenshot, no geometry
+    expect(response.content.length).toBe(2); // text + screenshot (no geometry)
+    expect(response.content[0].text).toBe("undefined");
+    expect(response.content[1].type).toBe("image");
+    expect(response._meta?.visualFeedback).toBe(true);
+  });
+
+  it("should not include geometry text when size/position unchanged", async () => {
+    const sameRect = { x: 10, y: 20, width: 100, height: 50 };
+    const cdp = mockCdpClient(async (method, params) => {
+      if (method === "Runtime.evaluate") {
+        const expr = (params as { expression: string }).expression;
+        if (expr.includes("getBoundingClientRect")) {
+          return { result: { type: "object", value: sameRect } };
+        }
+        if (expr.includes("scrollX")) {
+          return { result: { type: "string", value: '{"x":0,"y":0}' } };
+        }
+        return { result: { type: "undefined" } };
+      }
+      if (method === "Emulation.setFocusEmulationEnabled") return {};
+      if (method === "Page.captureScreenshot") return { data: "screenshotData" };
+      return {};
+    });
+
+    const response = await evaluateHandler(
+      { expression: "document.querySelector('.card').classList.add('active')", await_promise: true },
+      cdp,
+    );
+
+    // H1 fix: text + geometry "unchanged" + screenshot (always show geometry)
+    expect(response.content.length).toBe(3);
+    expect(response.content[0].text).toBe("undefined");
+    expect(response.content[1].text).toContain("unchanged");
+    expect(response.content[1].text).toContain("100×50px");
+    expect(response.content[2].type).toBe("image");
+  });
+});
+
 describe("wrapInIIFE", () => {
   it("should wrap code with top-level const and return last expression", () => {
     const result = wrapInIIFE('const x = 1;\nx;');

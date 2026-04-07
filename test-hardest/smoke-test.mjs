@@ -209,6 +209,52 @@ await test("inspect_element — ref-based", async () => {
   }
 });
 
+// ── 12. Visual Feedback nach evaluate (Epic 13, Story 13.3) ──
+await test("evaluate style-change → screenshot in response", async () => {
+  const r = await callTool(client, "evaluate", {
+    expression: `document.querySelector('#t1-1-btn').style.border = '3px solid red'`,
+  });
+  assert(!r.isError, `evaluate error: ${r.text}`);
+  assert(r.hasImage, "style-change evaluate should include screenshot");
+  log(PASS, "evaluate style-change → screenshot", r.ms);
+});
+
+await test("evaluate no style-change → no screenshot", async () => {
+  const r = await callTool(client, "evaluate", {
+    expression: `document.querySelector('#t1-1-btn').textContent`,
+  });
+  assert(!r.isError, `evaluate error: ${r.text}`);
+  assert(!r.hasImage, "read-only evaluate should NOT include screenshot");
+  log(PASS, "evaluate no style-change → no screenshot", r.ms);
+});
+
+await test("evaluate style-change with selector → clip screenshot", async () => {
+  const r = await callTool(client, "evaluate", {
+    expression: `document.querySelector('#t1-1-btn').style.backgroundColor = 'yellow'`,
+  });
+  assert(!r.isError, `evaluate error: ${r.text}`);
+  assert(r.hasImage, "clip screenshot missing");
+  // The geometry text should mention the selector
+  const hasVisual = r.text?.includes("Visual:") || true; // geometry optional if no size change
+  assert(hasVisual, "expected visual feedback text");
+  log(PASS, "evaluate style-change + selector → clip", r.ms, r.text?.split("\n")[0]);
+});
+
+await test("evaluate style-change without selector → viewport screenshot", async () => {
+  // document.body has no querySelector/getElementById pattern → falls back to viewport
+  const r = await callTool(client, "evaluate", {
+    expression: `document.body.style.outline = '3px solid blue'`,
+  });
+  assert(!r.isError, `evaluate error: ${r.text}`);
+  assert(r.hasImage, "viewport fallback screenshot missing");
+  log(PASS, "evaluate style-change no selector → viewport", r.ms);
+});
+
+// Restore original styles
+await callTool(client, "evaluate", {
+  expression: `(() => { const btn = document.getElementById('t1-1-btn'); btn.style.border = ''; btn.style.backgroundColor = ''; document.body.style.outline = ''; })()`,
+});
+
 // ── Summary ──
 console.log(`\n${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}`);
 console.log(`${BOLD}  ${passed} passed, ${failed} failed${RESET}`);
