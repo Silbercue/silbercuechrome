@@ -31,3 +31,5 @@ export { networkMonitorSchema, networkMonitorHandler } from "./network-monitor.j
 export type { NetworkMonitorParams } from "./network-monitor.js";
 export { configureSessionSchema, configureSessionHandler } from "./configure-session.js";
 export type { ConfigureSessionParams } from "./configure-session.js";
+export { observeSchema, observeHandler } from "./observe.js";
+export type { ObserveParams } from "./observe.js";

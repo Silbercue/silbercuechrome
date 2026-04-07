@@ -46,6 +46,8 @@ import { pressKeySchema, pressKeyHandler } from "./tools/press-key.js";
 import type { PressKeyParams } from "./tools/press-key.js";
 import { scrollSchema, scrollHandler } from "./tools/scroll.js";
 import type { ScrollParams } from "./tools/scroll.js";
+import { observeSchema, observeHandler } from "./tools/observe.js";
+import type { ObserveParams } from "./tools/observe.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
@@ -641,6 +643,25 @@ export class ToolRegistry {
       }, "scroll"),
     );
 
+    // FR-009: observe — passively watch DOM changes
+    this.server.tool(
+      "observe",
+      "Watch an element for changes over time — use this INSTEAD of writing MutationObserver/setInterval/setTimeout code in evaluate. Two modes: (1) collect — watch for 'duration' ms, return all text/attribute changes (e.g. collect 3 values that appear one after another). (2) until — wait for a condition, then optionally click immediately (e.g. click Capture when counter hits 8). Use click_first to trigger the action that causes changes (observer is set up BEFORE the click, so nothing is missed).",
+      {
+        selector: observeSchema.shape.selector,
+        duration: observeSchema.shape.duration,
+        until: observeSchema.shape.until,
+        then_click: observeSchema.shape.then_click,
+        click_first: observeSchema.shape.click_first,
+        collect: observeSchema.shape.collect,
+        interval: observeSchema.shape.interval,
+        timeout: observeSchema.shape.timeout,
+      },
+      wrap(async (params) => {
+        return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._sessionManager);
+      }, "observe"),
+    );
+
     this.server.tool(
       "tab_status",
       "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
@@ -877,6 +898,9 @@ export class ToolRegistry {
     });
     this._handlers.set("wait_for", async (params, sessionIdOverride?) => {
       return waitForHandler(params as unknown as WaitForParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
+    });
+    this._handlers.set("observe", async (params, sessionIdOverride?) => {
+      return observeHandler(params as unknown as ObserveParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
     });
     this._handlers.set("click", async (params, sessionIdOverride?) => {
       return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
