@@ -1,5 +1,7 @@
 import type { ToolResponse } from "../types.js";
 import type { LicenseStatus } from "../license/license-status.js";
+import type { PlanStep, ErrorStrategy } from "../plan/plan-executor.js";
+import type { VarsMap } from "../plan/plan-variables.js";
 
 /** Erweiterungspunkte fuer Pro-Features. */
 export interface ProHooks {
@@ -11,6 +13,14 @@ export interface ProHooks {
   onToolResult?: (toolName: string, result: ToolResponse) => ToolResponse;
   /** Liefert den LicenseStatus — Pro-Repo injiziert hier den LicenseValidator. */
   provideLicenseStatus?: () => Promise<LicenseStatus>;
+  /** Pro-Repo registriert hier die Multi-Tab-Parallel-Engine (Story 15.4). */
+  executeParallel?: (
+    groups: Array<{ tab: string; steps: PlanStep[] }>,
+    registryFactory: (tabTargetId: string) => Promise<{
+      executeTool: (name: string, params: Record<string, unknown>) => Promise<ToolResponse>;
+    }>,
+    options?: { vars?: VarsMap; errorStrategy?: ErrorStrategy; concurrencyLimit?: number },
+  ) => Promise<ToolResponse>;
 }
 
 let _hooks: ProHooks = {};

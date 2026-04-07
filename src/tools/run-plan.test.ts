@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runPlanHandler, runPlanSchema } from "./run-plan.js";
 import type { RunPlanParams, RunPlanDeps } from "./run-plan.js";
 import type { ToolRegistry } from "../registry.js";
 import type { ToolResponse } from "../types.js";
 import { PlanStateStore } from "../plan/plan-state-store.js";
 import type { SuspendedPlanResponse } from "../plan/plan-executor.js";
+import { registerProHooks } from "../hooks/pro-hooks.js";
 
 function createMockRegistry(
   toolResponses: Map<string, ToolResponse>,
@@ -514,6 +515,11 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
 // ===== Story 7.6: Parallel Tab Control =====
 
 describe("runPlanHandler — parallel (Story 7.6)", () => {
+  // Story 15.4: ensure clean hook state between parallel tests
+  beforeEach(() => {
+    registerProHooks({});
+  });
+
   it("parallel and steps simultaneously returns error", async () => {
     const registry = createMockRegistry(new Map());
     const params: RunPlanParams = {
@@ -602,6 +608,153 @@ describe("runPlanHandler — parallel (Story 7.6)", () => {
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("Parallel-Ausfuehrung benoetigt CDP-Verbindung");
+  });
+
+  // --- Story 15.4: executeParallel Hook delegation ---
+
+  it("parallel with Pro license but without registered hook returns Pro-Feature error", async () => {
+    // Simulates Free-Repo scenario: Pro license somehow set, but Pro-Repo not loaded
+    // (e.g. npm-installed free package). Must not crash, must return proFeatureError.
+    registerProHooks({}); // Ensure no executeParallel hook registered
+
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: vi.fn(),
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate" }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("parallel ist ein Pro-Feature");
+  });
+
+  it("parallel with Pro license and registered hook delegates to hook", async () => {
+    const mockHookResponse: ToolResponse = {
+      content: [{ type: "text", text: "parallel-hook-result" }],
+      _meta: { elapsedMs: 42, method: "run_plan", parallel: true, tabGroups: 1 },
+    };
+    const executeParallelMock = vi.fn().mockResolvedValue(mockHookResponse);
+
+    registerProHooks({ executeParallel: executeParallelMock });
+
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const cdpSendMock = vi.fn();
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: cdpSendMock,
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] }],
+      vars: { foo: "bar" },
+      errorStrategy: "continue",
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    // Hook was called exactly once
+    expect(executeParallelMock).toHaveBeenCalledTimes(1);
+
+    // Args: groups, registryFactory, options
+    const callArgs = executeParallelMock.mock.calls[0];
+    expect(callArgs[0]).toEqual([
+      { tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+    ]);
+    expect(typeof callArgs[1]).toBe("function"); // registryFactory
+    expect(callArgs[2]).toEqual({
+      vars: { foo: "bar" },
+      errorStrategy: "continue",
+      concurrencyLimit: 5,
+    });
+
+    // Hook response is returned verbatim
+    expect(result).toBe(mockHookResponse);
+
+    // Reset hooks
+    registerProHooks({});
+  });
+
+  // --- M1 (Code-Review 15.4): Edge-Case-Tests fuer Hook-Errors ---
+
+  it("parallel hook throws exception → returns isError response (no crash)", async () => {
+    // Hook wirft synchron/asynchron eine Exception. runPlanHandler MUSS sie
+    // in eine MCP-konforme isError-Response wandeln statt nach oben durchzulassen.
+    const executeParallelMock = vi.fn().mockRejectedValue(new Error("hook boom"));
+    registerProHooks({ executeParallel: executeParallelMock });
+
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const cdpSendMock = vi.fn().mockResolvedValue({ sessionId: "tab-session-1" });
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: cdpSendMock,
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    expect(executeParallelMock).toHaveBeenCalledTimes(1);
+    expect((result as ToolResponse).isError).toBe(true);
+    const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
+    expect(text).toContain("parallel execution failed");
+    expect(text).toContain("hook boom");
+    expect((result as ToolResponse)._meta).toEqual(
+      expect.objectContaining({ method: "run_plan" }),
+    );
+
+    registerProHooks({});
+  });
+
+  it("parallel hook returns isError:true → returned as-is", async () => {
+    // Wenn der Hook eine isError-Response liefert (z.B. wegen Tab-Fehler),
+    // muss runPlanHandler sie unveraendert weiterreichen — kein Wrapping,
+    // kein Verlust der _meta-Daten.
+    const hookErrorResponse: ToolResponse = {
+      content: [{ type: "text", text: "Tab xyz konnte nicht geoeffnet werden" }],
+      isError: true,
+      _meta: { elapsedMs: 17, method: "run_plan", parallel: true, tabGroups: 1 },
+    };
+    const executeParallelMock = vi.fn().mockResolvedValue(hookErrorResponse);
+    registerProHooks({ executeParallel: executeParallelMock });
+
+    const registry = createMockRegistry(new Map());
+    const license = createMockLicense(true);
+    const cdpSendMock = vi.fn().mockResolvedValue({ sessionId: "tab-session-1" });
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: cdpSendMock,
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "navigate" }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    expect(executeParallelMock).toHaveBeenCalledTimes(1);
+    // Response identisch zurueckgegeben (gleicher Object-Reference)
+    expect(result).toBe(hookErrorResponse);
+    expect((result as ToolResponse).isError).toBe(true);
+    expect((result as ToolResponse)._meta).toEqual(
+      expect.objectContaining({ elapsedMs: 17, method: "run_plan", parallel: true, tabGroups: 1 }),
+    );
+
+    registerProHooks({});
   });
 });
 

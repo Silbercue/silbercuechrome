@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { registerProHooks, getProHooks, proFeatureError } from "./pro-hooks.js";
 import type { ProHooks } from "./pro-hooks.js";
 import type { LicenseStatus } from "../license/license-status.js";
+import type { ToolResponse } from "../types.js";
+import type { PlanStep } from "../plan/plan-executor.js";
 
 describe("ProHooks", () => {
   // Reset between tests — clean state
@@ -175,5 +177,72 @@ describe("ProHooks", () => {
 
     registerProHooks({});
     expect(getProHooks().provideLicenseStatus).toBeUndefined();
+  });
+
+  // --- Story 15.4: executeParallel Hook ---
+
+  it("executeParallel is undefined by default", () => {
+    const hooks = getProHooks();
+    expect(hooks.executeParallel).toBeUndefined();
+  });
+
+  it("executeParallel can be registered and retrieved", async () => {
+    const mockResponse: ToolResponse = {
+      content: [{ type: "text", text: "parallel done" }],
+      _meta: { elapsedMs: 10, method: "run_plan", parallel: true },
+    };
+    const impl = vi.fn().mockResolvedValue(mockResponse);
+
+    registerProHooks({ executeParallel: impl });
+
+    const hooks = getProHooks();
+    expect(hooks.executeParallel).toBe(impl);
+
+    const groups: Array<{ tab: string; steps: PlanStep[] }> = [
+      { tab: "tab-a", steps: [{ tool: "navigate", params: { url: "https://a.com" } }] },
+    ];
+    const factory = async (_tabId: string) => ({
+      executeTool: async (_name: string, _params: Record<string, unknown>): Promise<ToolResponse> => ({
+        content: [{ type: "text", text: "ok" }],
+        _meta: { elapsedMs: 1, method: "navigate" },
+      }),
+    });
+
+    const result = await hooks.executeParallel!(groups, factory, {
+      errorStrategy: "abort",
+      concurrencyLimit: 5,
+    });
+
+    expect(impl).toHaveBeenCalledWith(groups, factory, {
+      errorStrategy: "abort",
+      concurrencyLimit: 5,
+    });
+    expect(result).toBe(mockResponse);
+  });
+
+  it("executeParallel works alongside other hooks", () => {
+    const gate = () => ({ allowed: true });
+    const impl = async (): Promise<ToolResponse> => ({
+      content: [],
+      _meta: { elapsedMs: 0, method: "run_plan" },
+    });
+
+    registerProHooks({ featureGate: gate, executeParallel: impl });
+
+    const hooks = getProHooks();
+    expect(hooks.featureGate).toBe(gate);
+    expect(hooks.executeParallel).toBe(impl);
+  });
+
+  it("executeParallel is cleared when hooks are reset", async () => {
+    const impl = async (): Promise<ToolResponse> => ({
+      content: [],
+      _meta: { elapsedMs: 0, method: "run_plan" },
+    });
+    registerProHooks({ executeParallel: impl });
+    expect(getProHooks().executeParallel).toBeDefined();
+
+    registerProHooks({});
+    expect(getProHooks().executeParallel).toBeUndefined();
   });
 });
