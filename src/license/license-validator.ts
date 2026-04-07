@@ -29,6 +29,7 @@ interface LicenseCache {
   valid: boolean;
   lastCheck: string; // ISO 8601
   features: string[];
+  customerName?: string;
 }
 
 const CACHE_FILENAME = "license-cache.json";
@@ -46,6 +47,8 @@ const RECHECK_INTERVAL_MS = 86_400_000; // 24 hours
  */
 export class LicenseValidator implements LicenseStatus {
   private pro = false;
+  private _lastCheck: string | undefined;
+  private _customerName: string | undefined;
   private readonly config: LicenseValidatorConfig;
 
   constructor(config: LicenseValidatorConfig) {
@@ -55,6 +58,16 @@ export class LicenseValidator implements LicenseStatus {
   /** Synchronous — returns cached Pro status. */
   isPro(): boolean {
     return this.pro;
+  }
+
+  /** Returns the ISO timestamp of the last successful validation, if any. */
+  getLastCheck(): string | undefined {
+    return this._lastCheck;
+  }
+
+  /** Returns the customer name from the license, if available. */
+  getCustomerName(): string | undefined {
+    return this._customerName;
   }
 
   /**
@@ -80,6 +93,8 @@ export class LicenseValidator implements LicenseStatus {
       // so no grace-period check needed here. The else-branch was
       // mathematically unreachable (RECHECK_INTERVAL_MS < GRACE_PERIOD_MS).
       this.pro = true;
+      this._lastCheck = cache.lastCheck;
+      this._customerName = cache.customerName;
       debug("License cache fresh — skipping remote check");
       return;
     }
@@ -119,12 +134,17 @@ export class LicenseValidator implements LicenseStatus {
 
       if (valid) {
         this.pro = true;
+        this._lastCheck = new Date().toISOString();
+        // Extract customer name from Polar response (customer.name or customer.email)
+        const customer = body.customer as Record<string, unknown> | undefined;
+        this._customerName = (customer?.name as string) || (customer?.email as string) || undefined;
         debug("License validated (Pro)");
         this.writeCache({
           key: licenseKey,
           valid: true,
-          lastCheck: new Date().toISOString(),
+          lastCheck: this._lastCheck,
           features: [],
+          customerName: this._customerName,
         });
       } else {
         this.pro = false;
@@ -152,6 +172,8 @@ export class LicenseValidator implements LicenseStatus {
     if (cache && cache.key === licenseKey && cache.valid) {
       if (this.isCacheWithinGracePeriod(cache)) {
         this.pro = true;
+        this._lastCheck = cache.lastCheck;
+        this._customerName = cache.customerName;
         debug("License cache used (offline, grace-period active)");
       } else {
         this.pro = false;

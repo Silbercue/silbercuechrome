@@ -8,7 +8,7 @@ import { NetworkCollector } from "./cdp/network-collector.js";
 import { DomWatcher } from "./cdp/dom-watcher.js";
 import { DEVICE_METRICS_OVERRIDE, EMULATED_WIDTH, EMULATED_HEIGHT, setHeadless } from "./cdp/emulation.js";
 import { ToolRegistry } from "./registry.js";
-import { injectOverlay, removeOverlay, setTierLabel } from "./overlay/session-overlay.js";
+import { injectOverlay, removeOverlay, setTierLabel, setLicenseInfo } from "./overlay/session-overlay.js";
 import { TabStateCache } from "./cache/tab-state-cache.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { a11yTree } from "./cache/a11y-tree.js";
@@ -177,8 +177,9 @@ export async function startServer(): Promise<void> {
   }
   const freeTierConfig = loadFreeTierConfig();
 
-  // Set overlay tier label based on license status
+  // Set overlay tier label and license info
   setTierLabel(licenseValidator.isPro());
+  setLicenseInfo(licenseConfig.licenseKey, licenseValidator.getLastCheck(), licenseValidator.getCustomerName());
 
   // Story 13a.2: Pass waitForAXChange callback to Registry for post-click detection
   const registry = new ToolRegistry(server, cdpClient, sessionId, tabStateCache, () => connection.status, sessionManager, dialogHandler, licenseValidator, freeTierConfig, consoleCollector, networkCollector, sessionDefaults, (ms) => domWatcher.waitForAXChange(ms));
