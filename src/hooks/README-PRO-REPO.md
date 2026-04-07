@@ -71,7 +71,40 @@ registerProHooks({
     }
     return { allowed: true };
   },
-  // enhanceTool und onToolResult optional
+
+  // Story 15.3: Ambient-Context-Enrichment via 3-Stufen-Klick-Analyse.
+  // Der onToolResult-Hook ist der Kern des Ambient-Context-Enrichment-Patterns
+  // — das Free-Repo liefert nur die rohen a11yTree-APIs, das Pro-Repo
+  // orchestriert die 3-Stufen-Analyse (classifyRef → waitForAXChange →
+  // diffSnapshots → formatDomDiff).
+  //
+  // Alle noetigen Methoden sind auf `context.a11yTree` verfuegbar, inklusive
+  // `diffSnapshots` und `formatDomDiff`. Das separate `context.a11yTreeDiffs`
+  // existiert weiterhin als Backward-Compat-Alias.
+  onToolResult: async (toolName, result, context) => {
+    // Beispiel: Ambient Context nach einem Klick auf ein interaktives Element
+    if (toolName === "click" && result._meta?.elementClass === "clickable") {
+      const snapshotBefore = context.a11yTree.getSnapshotMap();
+      await context.waitForAXChange?.(350);
+      await context.a11yTree.refreshPrecomputed(
+        context.cdpClient,
+        context.sessionId,
+        context.sessionManager,
+      );
+      const snapshotAfter = context.a11yTree.getSnapshotMap();
+      const changes = context.a11yTree.diffSnapshots(snapshotBefore, snapshotAfter);
+      const diffText = context.a11yTree.formatDomDiff(
+        changes,
+        context.a11yTree.currentUrl || undefined,
+      );
+      if (diffText) {
+        result.content.push({ type: "text", text: diffText });
+      }
+    }
+    return result;
+  },
+
+  // enhanceTool optional
 });
 
 startServer();
