@@ -165,6 +165,50 @@ await test("run_plan — 3-step batch", async () => {
   log(PASS, "run_plan — 3-step batch", r.ms);
 });
 
+// ── 11. inspect_element — CSS debugging (Epic 13, Story 13.1) ──
+await test("inspect_element — computed styles + rules", async () => {
+  // Navigate to benchmark if needed (already there from above)
+  const r = await callTool(client, "inspect_element", { selector: "#t6-2-target" });
+  assert(!r.isError, `inspect_element error: ${r.text}`);
+  assert(r.text.includes("Element:"), `missing Element header: ${r.text?.slice(0, 100)}`);
+  assert(r.text.includes("Computed:"), `missing Computed section`);
+  assert(r.text.includes("Rules:"), `missing Rules section`);
+  assert(r.text.includes("color:"), `missing color property`);
+  log(PASS, "inspect_element — computed + rules", r.ms, r.text?.split("\n")[0]);
+});
+
+await test("inspect_element — styles filter", async () => {
+  const r = await callTool(client, "inspect_element", {
+    selector: "#t6-1-target",
+    styles: ["display", "flex*"],
+    include_rules: false,
+    include_inherited: false,
+  });
+  assert(!r.isError, `inspect_element error: ${r.text}`);
+  assert(r.text.includes("display:"), `missing display`);
+  assert(!r.text.includes("Rules:"), `Rules should not appear with include_rules=false`);
+  assert(!r.text.includes("Inherited:"), `Inherited should not appear`);
+  log(PASS, "inspect_element — styles filter", r.ms);
+});
+
+await test("inspect_element — ref-based", async () => {
+  // First get a ref from read_page
+  const rp = await callTool(client, "read_page");
+  const refMatch = rp.text.match(/\[(e\d+)\].*Click Me/);
+  if (refMatch) {
+    const ref = refMatch[1];
+    const r = await callTool(client, "inspect_element", { selector: ref });
+    assert(!r.isError, `inspect_element ref error: ${r.text}`);
+    assert(r.text.includes("Element:"), `missing Element header`);
+    log(PASS, "inspect_element — ref " + ref, r.ms, r.text?.split("\n")[0]);
+  } else {
+    // Fallback: use CSS selector
+    const r = await callTool(client, "inspect_element", { selector: "button.action-btn" });
+    assert(!r.isError, `inspect_element error: ${r.text}`);
+    log(PASS, "inspect_element — CSS fallback", r.ms);
+  }
+});
+
 // ── Summary ──
 console.log(`\n${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}`);
 console.log(`${BOLD}  ${passed} passed, ${failed} failed${RESET}`);

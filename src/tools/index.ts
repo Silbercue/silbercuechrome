@@ -33,3 +33,5 @@ export { configureSessionSchema, configureSessionHandler } from "./configure-ses
 export type { ConfigureSessionParams } from "./configure-session.js";
 export { observeSchema, observeHandler } from "./observe.js";
 export type { ObserveParams } from "./observe.js";
+export { inspectElementSchema, inspectElementHandler } from "./inspect-element.js";
+export type { InspectElementParams } from "./inspect-element.js";

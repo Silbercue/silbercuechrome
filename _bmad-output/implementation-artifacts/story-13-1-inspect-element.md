@@ -2,7 +2,7 @@
 title: 'inspect_element Tool — CSS-Debugging in einem Call'
 type: 'feature'
 created: '2026-04-07'
-status: 'ready-for-dev'
+status: 'review'
 epic: 'Epic 13: Visual Developer Intelligence'
 context:
   - '_bmad-output/planning-artifacts/epics.md # Story 13.1 ab Zeile 2370'
@@ -60,16 +60,16 @@ context:
 ## Tasks & Acceptance
 
 **Vorbereitung:**
-- [ ] Context7: CDP CSS-Domain Doku abrufen (CSS.getMatchedStylesForNode, CSS.getComputedStyleForNode, CSS.enable)
-- [ ] Bestehende Tools als Pattern-Referenz lesen (observe.ts fuer Schema+Handler, element-utils.ts fuer resolveElement)
+- [x] Context7: CDP CSS-Domain Doku abrufen (CSS.getMatchedStylesForNode, CSS.getComputedStyleForNode, CSS.enable)
+- [x] Bestehende Tools als Pattern-Referenz lesen (observe.ts fuer Schema+Handler, element-utils.ts fuer resolveElement)
 
 **Execution:**
-- [ ] `src/tools/inspect-element.ts` — Schema: selector/ref, styles (optional Filter), include_children (default true), include_rules (default true)
-- [ ] `src/tools/inspect-element.ts` — Handler: CSS.enable, resolveElement, CSS.getComputedStyleForNode, CSS.getMatchedStylesForNode, Source-Resolution
-- [ ] `src/tools/inspect-element.ts` — Kompakte Ausgabe-Formatierung (nicht raw CDP-Response, sondern LLM-freundlich)
-- [ ] `src/tools/inspect-element.test.ts` — Unit Tests (Schema, Handler mit Mock CDP)
-- [ ] `src/tools/index.ts` + `src/registry.ts` — Registrierung
-- [ ] Live-Test gegen echte Webseite
+- [x] `src/tools/inspect-element.ts` — Schema: selector/ref, styles (optional Filter), include_inherited (default true), include_rules (default true)
+- [x] `src/tools/inspect-element.ts` — Handler: CSS.enable, resolveElement, CSS.getComputedStyleForNode, CSS.getMatchedStylesForNode, Source-Resolution
+- [x] `src/tools/inspect-element.ts` — Kompakte Ausgabe-Formatierung (nicht raw CDP-Response, sondern LLM-freundlich)
+- [x] `src/tools/inspect-element.test.ts` — Unit Tests (Schema, Handler mit Mock CDP)
+- [x] `src/tools/index.ts` + `src/registry.ts` — Registrierung
+- [x] Live-Test gegen echte Webseite
 
 **Acceptance Criteria:**
 - Given ein Element mit CSS-Konflikten, when inspect_element aufgerufen wird, then zeigt die Response computed styles + alle matchenden CSS-Regeln mit Source-Datei

@@ -110,6 +110,7 @@
   <button data-level="3">Level 3 — Advanced</button>
   <button data-level="4">Level 4 — Hardest</button>
   <button data-level="5">Level 5 — Community Pain Points</button>
+  <button data-level="6">Level 6 — CSS Inspection</button>
   <button data-level="results">Results</button>
   <button data-level="compare">Compare</button>
 </nav>
@@ -696,6 +697,127 @@
   </div>
 </section>
 
+<!-- LEVEL 6 — CSS INSPECTION -->
+<section class="level-section" data-level="6">
+  <div class="level-header">
+    <h2>Level 6 — CSS Inspection</h2>
+    <p>CSS-Debugging: Computed Styles lesen, CSS-Regeln mit Source finden, Specificity-Konflikte loesen, Styles aendern. Alle Werte randomisiert.</p>
+  </div>
+
+  <!-- T6.1 — Read Computed Style -->
+  <div class="test-card" data-test="6.1">
+    <h3><span class="test-id">T6.1</span> Read Computed Style</h3>
+    <p class="test-desc">Inspiziere das farbige Element und gib den exakten computed <code>display</code>-Wert in das Eingabefeld ein.</p>
+    <div class="test-area">
+      <div id="t6-1-target" class="css-target-box">CSS Target</div>
+      <div class="flex gap-8 mt-12">
+        <input type="text" id="t6-1-input" placeholder="display value...">
+        <button class="action-btn" onclick="Tests.t6_1()">Verify</button>
+      </div>
+      <div class="verify-output" id="t6-1-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-1-status">PENDING</span>
+  </div>
+
+  <!-- T6.2 — CSS Specificity Battle -->
+  <div class="test-card" data-test="6.2">
+    <h3><span class="test-id">T6.2</span> CSS Specificity Battle</h3>
+    <p class="test-desc">Das Element wird von mehreren CSS-Regeln gestylt. Welche <code>color</code> gewinnt? Gib den computed color-Wert ein (rgb-Format).</p>
+    <div class="test-area">
+      <style id="t6-2-style-a">.spec-box { color: #e17055; }</style>
+      <style id="t6-2-style-b">div.spec-box.spec-extra { color: #00cec9; }</style>
+      <style id="t6-2-style-c">#t6-2-target { color: #6c5ce7; }</style>
+      <div id="t6-2-target" class="spec-box spec-extra">Welche Farbe habe ich?</div>
+      <div class="flex gap-8 mt-12">
+        <input type="text" id="t6-2-input" placeholder="rgb(r, g, b)...">
+        <button class="action-btn" onclick="Tests.t6_2()">Verify</button>
+      </div>
+      <div class="verify-output" id="t6-2-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-2-status">PENDING</span>
+  </div>
+
+  <!-- T6.3 — Find the Source Rule -->
+  <div class="test-card" data-test="6.3">
+    <h3><span class="test-id">T6.3</span> Find the Source Rule</h3>
+    <p class="test-desc">Das Element hat einen bestimmten <code>padding</code>-Wert. Finde mit inspect_element welcher CSS-Selektor den padding setzt und gib den Selektor ein.</p>
+    <div class="test-area">
+      <div id="t6-3-target" class="source-target">Padding-Raetsel</div>
+      <div class="flex gap-8 mt-12">
+        <input type="text" id="t6-3-input" placeholder="CSS selector that sets padding...">
+        <button class="action-btn" onclick="Tests.t6_3()">Verify</button>
+      </div>
+      <div class="verify-output" id="t6-3-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-3-status">PENDING</span>
+  </div>
+
+  <!-- T6.4 — Inherited Style Trace -->
+  <div class="test-card" data-test="6.4">
+    <h3><span class="test-id">T6.4</span> Inherited Style Trace</h3>
+    <p class="test-desc">Das innere Element erbt seine <code>font-family</code>. Finde welches Vorfahren-Element die font-family setzt und gib dessen Tag + ID ein (z.B. "div#ancestor").</p>
+    <div class="test-area">
+      <div id="t6-4-grandparent" class="inherit-gp">
+        <div id="t6-4-parent" class="inherit-p">
+          <span id="t6-4-target" class="inherit-target">Woher kommt mein Font?</span>
+        </div>
+      </div>
+      <div class="flex gap-8 mt-12">
+        <input type="text" id="t6-4-input" placeholder="tag#id...">
+        <button class="action-btn" onclick="Tests.t6_4()">Verify</button>
+      </div>
+      <div class="verify-output" id="t6-4-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-4-status">PENDING</span>
+  </div>
+
+  <!-- T6.5 — Fix the Layout -->
+  <div class="test-card" data-test="6.5">
+    <h3><span class="test-id">T6.5</span> Fix the Layout</h3>
+    <p class="test-desc">Die Items sollen horizontal angeordnet sein, aber sie stehen vertikal. Aendere den CSS-Wert per JavaScript (element.style), sodass die Items nebeneinander stehen. Klicke dann Verify.</p>
+    <div class="test-area">
+      <div id="t6-5-container" class="fix-layout-container">
+        <div class="fix-layout-item">A</div>
+        <div class="fix-layout-item">B</div>
+        <div class="fix-layout-item">C</div>
+      </div>
+      <button class="action-btn mt-12" onclick="Tests.t6_5()">Verify</button>
+      <div class="verify-output" id="t6-5-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-5-status">PENDING</span>
+  </div>
+
+  <!-- T6.6 — Why Is It Hidden? -->
+  <div class="test-card" data-test="6.6">
+    <h3><span class="test-id">T6.6</span> Why Is It Hidden?</h3>
+    <p class="test-desc">Das Element unten ist unsichtbar. Finde heraus WARUM (welche CSS-Property es versteckt) und gib die Property ein (z.B. "display", "visibility", "opacity").</p>
+    <div class="test-area">
+      <div id="t6-6-target" class="hidden-mystery">Ich bin versteckt!</div>
+      <p style="color:var(--muted);font-size:0.8rem;margin-top:8px">&uarr; Das Element ist hier, aber nicht sichtbar. Inspiziere es.</p>
+      <div class="flex gap-8 mt-12">
+        <input type="text" id="t6-6-input" placeholder="CSS property causing invisibility...">
+        <button class="action-btn" onclick="Tests.t6_6()">Verify</button>
+      </div>
+      <div class="verify-output" id="t6-6-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-6-status">PENDING</span>
+  </div>
+
+  <!-- T6.7 — Override with !important -->
+  <div class="test-card" data-test="6.7">
+    <h3><span class="test-id">T6.7</span> Override with !important</h3>
+    <p class="test-desc">Das Element hat eine Hintergrundfarbe via !important. Setze den Hintergrund auf den angezeigten Zielwert — nur !important kann !important ueberschreiben. Klicke dann Verify.</p>
+    <div class="test-area">
+      <div id="t6-7-target" class="important-box">Change my background!</div>
+      <p style="color:var(--muted);font-size:0.8rem;margin-top:8px">Ziel-Farbe: <strong id="t6-7-goal"></strong></p>
+      <button class="action-btn mt-12" onclick="Tests.t6_7()">Verify</button>
+      <div class="verify-output" id="t6-7-result"></div>
+    </div>
+    <span class="test-status pending" id="t6-7-status">PENDING</span>
+  </div>
+
+</section>
+
 <!-- COMPARE -->
 <section class="level-section" data-level="compare">
   <div class="level-header">
@@ -788,8 +910,22 @@ const R = (() => {
 
   const mutVals = ['MUT-'+rstr(3),'MUT-'+rstr(3),'MUT-'+rstr(3)]; // T4.5
 
+  // L6 — CSS Inspection randomized values
+  const cssDisplay = pick(['flex','grid','inline-flex','inline-grid']);     // T6.1
+  const cssBgColors = ['#e17055','#00cec9','#6c5ce7','#fdcb6e','#00b894']; // T6.2-6.7
+  const cssFonts = ['Georgia, serif', '"Courier New", monospace', 'Verdana, sans-serif', '"Times New Roman", serif', 'Impact, sans-serif'];
+  const cssFontAncestor = pick(['grandparent','parent']);                   // T6.4
+  const cssPaddingSelector = pick(['.source-target','#t6-3-target']);       // T6.3
+  const cssPaddingValue = pick(['12px','18px','24px','32px']);              // T6.3
+  const cssHiddenReason = pick(['display','visibility','opacity']);         // T6.6
+  const cssGoalBg = pick(cssBgColors);                                     // T6.7
+  const cssImportantBg = pick(cssBgColors.filter(c => c !== cssGoalBg));   // T6.7 — different from goal
+  const cssInheritFont = pick(cssFonts);                                   // T6.4
+
   return { secret, selectorText, tableRows, tableSum, langs, dropdownTarget, tabValue,
-           products, mostExpensive, shadowVal, frameVal, counterTarget, lsVal, ckVal, mutVals };
+           products, mostExpensive, shadowVal, frameVal, counterTarget, lsVal, ckVal, mutVals,
+           cssDisplay, cssPaddingSelector, cssPaddingValue, cssHiddenReason, cssGoalBg, cssImportantBg,
+           cssInheritFont, cssFontAncestor };
 })();
 
 const Benchmark = {
@@ -1672,11 +1808,118 @@ const Tests = {
     zone.appendChild(toast);
     setTimeout(() => toast.remove(), 2000);
     Benchmark.setResult('5.10', el, true, 'Quick toast shown (role="status", aria-live="polite", 2s TTL). MCP must read page within 2s to detect it.');
+  },
+
+  // ── L6 — CSS Inspection ──
+
+  t6_1() {
+    Benchmark.start('6.1');
+    const val = document.getElementById('t6-1-input').value.trim().toLowerCase();
+    const actual = getComputedStyle(document.getElementById('t6-1-target')).display;
+    Benchmark.setResult('6.1', document.getElementById('t6-1-result'), val === actual, val === actual ? 'Correct: display is ' + actual : 'Expected "' + actual + '", got "' + val + '"');
+  },
+
+  t6_2() {
+    Benchmark.start('6.2');
+    const val = document.getElementById('t6-2-input').value.trim().toLowerCase();
+    const actual = getComputedStyle(document.getElementById('t6-2-target')).color;
+    // Accept both rgb and hex formats
+    const pass = val === actual || val === actual.replace(/\s/g, '');
+    Benchmark.setResult('6.2', document.getElementById('t6-2-result'), pass, pass ? 'Correct: color is ' + actual : 'Expected "' + actual + '", got "' + val + '"');
+  },
+
+  t6_3() {
+    Benchmark.start('6.3');
+    const val = document.getElementById('t6-3-input').value.trim();
+    // Accept the winning selector (the one that actually sets the padding)
+    const pass = val === R.cssPaddingSelector;
+    Benchmark.setResult('6.3', document.getElementById('t6-3-result'), pass, pass ? 'Correct: ' + R.cssPaddingSelector + ' sets padding ' + R.cssPaddingValue : 'Expected "' + R.cssPaddingSelector + '", got "' + val + '"');
+  },
+
+  t6_4() {
+    Benchmark.start('6.4');
+    const val = document.getElementById('t6-4-input').value.trim().toLowerCase();
+    const expected = R.cssFontAncestor === 'grandparent' ? 'div#t6-4-grandparent' : 'div#t6-4-parent';
+    const pass = val === expected;
+    Benchmark.setResult('6.4', document.getElementById('t6-4-result'), pass, pass ? 'Correct: font-family set by ' + expected : 'Expected "' + expected + '", got "' + val + '"');
+  },
+
+  t6_5() {
+    Benchmark.start('6.5');
+    const container = document.getElementById('t6-5-container');
+    const dir = getComputedStyle(container).flexDirection;
+    const pass = dir === 'row';
+    Benchmark.setResult('6.5', document.getElementById('t6-5-result'), pass, pass ? 'Layout fixed: flex-direction is now row' : 'flex-direction is still "' + dir + '", expected "row"');
+  },
+
+  t6_6() {
+    Benchmark.start('6.6');
+    const val = document.getElementById('t6-6-input').value.trim().toLowerCase();
+    const pass = val === R.cssHiddenReason;
+    Benchmark.setResult('6.6', document.getElementById('t6-6-result'), pass, pass ? 'Correct: hidden via ' + R.cssHiddenReason : 'Expected "' + R.cssHiddenReason + '", got "' + val + '"');
+  },
+
+  t6_7() {
+    Benchmark.start('6.7');
+    const el = document.getElementById('t6-7-target');
+    const actual = getComputedStyle(el).backgroundColor;
+    // Convert goal hex to rgb for comparison
+    const goalEl = document.createElement('div');
+    goalEl.style.backgroundColor = R.cssGoalBg;
+    document.body.appendChild(goalEl);
+    const goalRgb = getComputedStyle(goalEl).backgroundColor;
+    goalEl.remove();
+    const pass = actual === goalRgb;
+    Benchmark.setResult('6.7', document.getElementById('t6-7-result'), pass, pass ? 'Background changed to ' + R.cssGoalBg : 'Expected ' + goalRgb + ', got ' + actual);
+  },
+
+  _t6_init() {
+    // T6.1 — randomized display value
+    const style61 = document.createElement('style');
+    style61.textContent = '.css-target-box { display: ' + R.cssDisplay + '; padding: 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--accent); font-weight: 600; }';
+    document.head.appendChild(style61);
+
+    // T6.3 — randomized padding selector and value
+    const style63 = document.createElement('style');
+    style63.textContent = R.cssPaddingSelector + ' { padding: ' + R.cssPaddingValue + '; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); }';
+    document.head.appendChild(style63);
+
+    // T6.4 — font-family on randomized ancestor
+    const style64 = document.createElement('style');
+    if (R.cssFontAncestor === 'grandparent') {
+      style64.textContent = '#t6-4-grandparent { font-family: ' + R.cssInheritFont + '; } .inherit-gp { padding: 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); } .inherit-p { padding: 8px; } .inherit-target { color: var(--accent); font-weight: 600; }';
+    } else {
+      style64.textContent = '#t6-4-parent { font-family: ' + R.cssInheritFont + '; } .inherit-gp { padding: 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); } .inherit-p { padding: 8px; } .inherit-target { color: var(--accent); font-weight: 600; }';
+    }
+    document.head.appendChild(style64);
+
+    // T6.5 — broken layout (flex-direction: column instead of row)
+    const style65 = document.createElement('style');
+    style65.textContent = '.fix-layout-container { display: flex; flex-direction: column; gap: 12px; } .fix-layout-item { background: var(--accent); color: #fff; padding: 16px 24px; border-radius: var(--radius); font-weight: 600; text-align: center; }';
+    document.head.appendChild(style65);
+
+    // T6.6 — randomized hidden reason
+    const style66 = document.createElement('style');
+    const target66 = document.getElementById('t6-6-target');
+    if (R.cssHiddenReason === 'display') {
+      style66.textContent = '.hidden-mystery { display: none; padding: 16px; background: var(--accent); color: #fff; border-radius: var(--radius); }';
+    } else if (R.cssHiddenReason === 'visibility') {
+      style66.textContent = '.hidden-mystery { visibility: hidden; padding: 16px; background: var(--accent); color: #fff; border-radius: var(--radius); height: 50px; }';
+    } else {
+      style66.textContent = '.hidden-mystery { opacity: 0; padding: 16px; background: var(--accent); color: #fff; border-radius: var(--radius); height: 50px; }';
+    }
+    document.head.appendChild(style66);
+
+    // T6.7 — !important background + goal display
+    const style67 = document.createElement('style');
+    style67.textContent = '.important-box { background-color: ' + R.cssImportantBg + ' !important; color: #fff; padding: 20px; border-radius: var(--radius); font-weight: 600; text-align: center; }';
+    document.head.appendChild(style67);
+    document.getElementById('t6-7-goal').textContent = R.cssGoalBg;
   }
 };
 
-const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6','4.7','5.1','5.2','5.3','5.4','5.5','5.6','5.7','5.8','5.9','5.10'];
-const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token','4.7':'Token Budget','5.1':'Session Persistence','5.2':'CDP Fingerprint','5.3':'Console Log Capture','5.4':'File Upload','5.5':'SPA Navigation','5.6':'Reconnect Recovery','5.7':'Toast Success','5.8':'Toast Error','5.9':'Warning Banner','5.10':'Quick Toast'};
+const ALL_TESTS = ['1.1','1.2','1.3','1.4','1.5','1.6','2.1','2.2','2.3','2.4','2.5','2.6','3.1','3.2','3.3','3.4','3.5','3.6','4.1','4.2','4.3','4.4','4.5','4.6','4.7','5.1','5.2','5.3','5.4','5.5','5.6','5.7','5.8','5.9','5.10','6.1','6.2','6.3','6.4','6.5','6.6','6.7'];
+const TEST_LABELS = {'1.1':'Click Button','1.2':'Read Text','1.3':'Fill Form','1.4':'Selector Challenge','1.5':'Nav Sequence','1.6':'Table Sum','2.1':'Async Content','2.2':'Infinite Scroll','2.3':'Wizard','2.4':'Searchable Dropdown','2.5':'Tab Management','2.6':'Sort Table','3.1':'Shadow DOM','3.2':'Nested iFrame','3.3':'Drag & Drop','3.4':'Canvas Click','3.5':'Keyboard Shortcut','3.6':'Contenteditable','4.1':'Unpredictable Timing','4.2':'Counter Race','4.3':'10K DOM Needle','4.4':'LocalStorage+Cookie','4.5':'Mutation Observer','4.6':'Modal Token','4.7':'Token Budget','5.1':'Session Persistence','5.2':'CDP Fingerprint','5.3':'Console Log Capture','5.4':'File Upload','5.5':'SPA Navigation','5.6':'Reconnect Recovery','5.7':'Toast Success','5.8':'Toast Error','5.9':'Warning Banner','5.10':'Quick Toast','6.1':'Read Computed Style','6.2':'Specificity Battle','6.3':'Find Source Rule','6.4':'Inherited Style Trace','6.5':'Fix the Layout','6.6':'Why Is It Hidden','6.7':'Override !important'};
 
 const PRELOADED_RUNS = [
   {"name":"SilbercueChrome Pro","timestamp":"2026-04-05T05:12:58.080Z","elapsed_s":555,"tests":{"1.1":{"status":"pass"},"1.2":{"status":"pass"},"1.3":{"status":"pass"},"1.4":{"status":"pass"},"1.5":{"status":"pass"},"1.6":{"status":"pass"},"2.1":{"status":"pass"},"2.2":{"status":"pass"},"2.3":{"status":"pass"},"2.4":{"status":"pass"},"2.5":{"status":"pass"},"2.6":{"status":"pass"},"3.1":{"status":"pass"},"3.2":{"status":"pass"},"3.3":{"status":"pass"},"3.4":{"status":"pass"},"3.5":{"status":"pass"},"3.6":{"status":"pass"},"4.1":{"status":"pass"},"4.2":{"status":"pass"},"4.3":{"status":"pass"},"4.4":{"status":"pass"},"4.5":{"status":"pass"},"4.6":{"status":"pass"},"4.7":{"status":"pass"}}},
@@ -1862,6 +2105,7 @@ document.addEventListener('DOMContentLoaded', () => {
   Tests._t3_3_init();
   Tests._t3_4_init();
   Tests._t3_5_init();
+  Tests._t6_init();
   Compare.render();
 });
 </script>

@@ -1,5 +1,5 @@
 # generated: 2026-04-03
-# last_updated: 2026-04-06
+# last_updated: 2026-04-07
 # project: SilbercueChrome
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-03
-last_updated: 2026-04-06
+last_updated: 2026-04-07
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -170,6 +170,6 @@ development_status:
 
   # Epic 13: Visual Developer Intelligence (Phase 3)
   epic-13: in-progress
-  13-1-inspect-element-tool: ready-for-dev
+  13-1-inspect-element-tool: review
   13-2-visual-feedback-nach-edits: backlog
   epic-13-retrospective: optional

@@ -48,6 +48,8 @@ import { scrollSchema, scrollHandler } from "./tools/scroll.js";
 import type { ScrollParams } from "./tools/scroll.js";
 import { observeSchema, observeHandler } from "./tools/observe.js";
 import type { ObserveParams } from "./tools/observe.js";
+import { inspectElementSchema, inspectElementHandler } from "./tools/inspect-element.js";
+import type { InspectElementParams } from "./tools/inspect-element.js";
 import type { SessionDefaults } from "./cache/session-defaults.js";
 import { createMicroLlmFromEnv } from "./operator/micro-llm.js";
 import { createHumanTouchFromEnv } from "./operator/human-touch.js";
@@ -63,7 +65,7 @@ import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hook
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
 // Story 13.1: Tools whose response IS page context — no ambient injection needed
-const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot"]);
+const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot", "inspect_element"]);
 
 // FR-H2: Fast content hash for ambient context dedup (djb2)
 function simpleHash(str: string): string {
@@ -662,6 +664,26 @@ export class ToolRegistry {
       }, "observe"),
     );
 
+    // Story 13.1: inspect_element — CSS debugging in one call
+    this.server.tool(
+      "inspect_element",
+      "Inspect CSS styles, matching rules with source file:line, and geometry for any element. Returns computed styles, CSS rules with sources, and inherited styles in one call. Use styles filter (e.g. ['flex*']) to narrow output.",
+      {
+        selector: inspectElementSchema.shape.selector,
+        styles: inspectElementSchema.shape.styles,
+        include_rules: inspectElementSchema.shape.include_rules,
+        include_inherited: inspectElementSchema.shape.include_inherited,
+      },
+      wrap(async (params) => {
+        return inspectElementHandler(
+          params as unknown as InspectElementParams,
+          this.cdpClient,
+          this.sessionId,
+          this._sessionManager,
+        );
+      }, "inspect_element"),
+    );
+
     this.server.tool(
       "tab_status",
       "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
@@ -901,6 +923,14 @@ export class ToolRegistry {
     });
     this._handlers.set("observe", async (params, sessionIdOverride?) => {
       return observeHandler(params as unknown as ObserveParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+    });
+    this._handlers.set("inspect_element", async (params, sessionIdOverride?) => {
+      return inspectElementHandler(
+        params as unknown as InspectElementParams,
+        this.cdpClient,
+        sessionIdOverride ?? this.sessionId,
+        this._sessionManager,
+      );
     });
     this._handlers.set("click", async (params, sessionIdOverride?) => {
       return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager, humanTouch);
