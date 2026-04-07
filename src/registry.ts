@@ -59,23 +59,6 @@ import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hook
 import type { ToolRegistryPublic } from "./hooks/pro-hooks.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
-// Story 13.1: Tools whose response IS page context — no ambient injection needed
-// Story 15.2: inspect_element string literal remains in the set — it costs nothing
-// and guarantees consistent ambient-context suppression if the Pro-Repo registers it.
-const PAGE_CONTEXT_TOOLS = new Set(["read_page", "dom_snapshot", "screenshot", "inspect_element"]);
-
-// FR-H2: Fast content hash for ambient context dedup (djb2)
-function simpleHash(str: string): string {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
-  }
-  return hash.toString(36);
-}
-
-// FR-002: Action tools that mutate the DOM and benefit from post-action diff
-const ACTION_TOOLS = new Set(["click", "type", "fill_form"]);
-
 export class ToolRegistry implements ToolRegistryPublic {
   private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
@@ -125,11 +108,6 @@ export class ToolRegistry implements ToolRegistryPublic {
     }
     this._registerProToolDelegate(name, description, schema, handler);
   }
-
-  // Story 13.1: Ambient Page Context — track content hash of last sent snapshot
-  // FR-H2: Changed from version counter to content hash to avoid false positives
-  // when DomWatcher background refreshes bump the version without content change.
-  private _lastSentSnapshotHash = "";
 
   private _getConnectionStatus: (() => ConnectionStatus) | null = null;
   private _sessionManager: SessionManager | undefined;
@@ -217,8 +195,8 @@ export class ToolRegistry implements ToolRegistryPublic {
     }
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
-    // Story 13.1: Ambient Page Context — inject after action, before metrics
-    await this._injectAmbientContext(result, name);
+    // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
+    await this._runOnToolResultHook(result, name);
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
       result._meta.suggestion = suggestionText;
@@ -237,100 +215,82 @@ export class ToolRegistry implements ToolRegistryPublic {
   }
 
   /**
-   * FR-002 + Story 13a.2: Ambient Page Context with DOM-Diff.
-   * For action tools (click, type, fill_form): captures pre/post snapshot,
-   * computes diff, and returns only the changes — not the whole page.
-   * Falls back to compact snapshot when diff is empty or for non-action tools.
+   * Story 15.3: Invokes the `onToolResult` Pro-Hook (if registered) to enrich
+   * the tool response with ambient context (DOM diffs, compact snapshots).
+   *
+   * The Free-Repo itself no longer contains any ambient-context orchestration —
+   * the 3-stage click analysis (classifyRef → waitForAXChange → diffSnapshots →
+   * formatDomDiff) now lives in the Pro-Repo hook implementation.
+   *
+   * Responsibilities that stay in the Free-Repo:
+   *  - FR-007: `a11yTree.reset()` on navigate — called BEFORE the hook so
+   *    stale refs never leak to the next tool call, even if the hook is
+   *    not registered.
+   *  - Error-guard: the hook is NOT invoked when `result.isError` is true,
+   *    preserving the pre-15.3 semantics.
+   *
+   * After the hook returns, the enhanced response is merged via
+   * `Object.assign(result, enhanced)` so the original `_meta` reference
+   * remains stable — later code-paths (response_bytes, estimated_tokens,
+   * suggestion injection) mutate `result._meta` in place. If the hook
+   * returns a new `_meta` object, the original reference is restored to
+   * prevent downstream mutations from writing to a detached object.
    */
-  private async _injectAmbientContext(result: ToolResponse, toolName: string): Promise<void> {
-    if (PAGE_CONTEXT_TOOLS.has(toolName)) return;
+  private async _runOnToolResultHook(result: ToolResponse, name: string): Promise<void> {
+    // FR-007: Navigate invalidates all refs — reset immediately so next
+    // tool gets clear stale-error even if no hook is registered.
+    if (name === "navigate") {
+      a11yTree.reset();
+    }
+
     if (result.isError) return;
 
-    // FR-007: Navigate invalidates all refs — reset immediately so next tool gets clear stale error
-    if (toolName === "navigate") {
-      a11yTree.reset();
-      return;
+    const hooks = getProHooks();
+    if (!hooks.onToolResult) return;
+
+    // Story 15.3 (AC #5): Build a unified `a11yTree` facade that exposes both
+    // the instance methods (classifyRef, getSnapshotMap, refreshPrecomputed, …)
+    // AND the static diff/format methods (diffSnapshots, formatDomDiff), so
+    // the Pro-Repo can drive the full 3-stage analysis through a single
+    // `context.a11yTree` object. The legacy `a11yTreeDiffs` field is kept
+    // for backward compatibility.
+    const a11yTreeFacade = {
+      classifyRef: (ref: string) => a11yTree.classifyRef(ref),
+      getSnapshotMap: () => a11yTree.getSnapshotMap(),
+      getCompactSnapshot: (maxTokens?: number) => a11yTree.getCompactSnapshot(maxTokens),
+      refreshPrecomputed: (client: CdpClient, sessionId: string, manager?: SessionManager) =>
+        a11yTree.refreshPrecomputed(client, sessionId, manager),
+      reset: () => a11yTree.reset(),
+      get currentUrl(): string {
+        return a11yTree.currentUrl;
+      },
+      diffSnapshots: A11yTreeProcessor.diffSnapshots,
+      formatDomDiff: A11yTreeProcessor.formatDomDiff,
+    };
+
+    // M1 fix: Save the original `_meta` reference BEFORE invoking the hook.
+    // If the hook returns a new `_meta` object, downstream code-paths would
+    // otherwise mutate a detached object (response_bytes, estimated_tokens,
+    // suggestion injection all assume `result._meta` is the original reference).
+    const originalMeta = result._meta;
+
+    const enhanced = await hooks.onToolResult(name, result, {
+      a11yTree: a11yTreeFacade,
+      a11yTreeDiffs: A11yTreeProcessor,
+      waitForAXChange: this._waitForAXChange ?? undefined,
+      cdpClient: this.cdpClient,
+      sessionId: this._sessionId,
+      sessionManager: this._sessionManager,
+    });
+
+    // Merge enhanced fields into the original result object so the `_meta`
+    // reference stays stable for downstream mutations. If the hook returned
+    // a new object (enhanced !== result), we still Object.assign to copy the
+    // content, then restore the original _meta reference.
+    if (enhanced && enhanced !== result) {
+      Object.assign(result, enhanced);
+      result._meta = originalMeta;
     }
-
-    // Tab switch/open: session changed → force-refresh a11yTree for the new tab
-    if (toolName === "switch_tab") {
-      try {
-        a11yTree.reset(); // Clear stale refs from previous tab (prevents duplicates with same-URL tabs)
-        await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
-      } catch {
-        return; // Refresh failed (e.g. chrome:// page) — skip context gracefully
-      }
-      const snapshot = a11yTree.getCompactSnapshot();
-      if (!snapshot) return;
-      result.content.push({ type: "text", text: snapshot });
-      this._lastSentSnapshotHash = simpleHash(snapshot);
-      return;
-    }
-
-    const elementClass = result._meta?.elementClass as string | undefined;
-
-    // Story 13a.2: Pre-click classification — skip immediately for disabled/static
-    if (elementClass === "disabled" || elementClass === "static") return;
-
-    // FR-002: For action tools, use DOM-Diff approach
-    // FR-004: type only diffs for widget-state (combobox/autocomplete) — textbox typing doesn't need context
-    const shouldDiff = toolName === "type"
-      ? elementClass === "widget-state"
-      : (elementClass === "widget-state" || elementClass === "clickable");
-    if (ACTION_TOOLS.has(toolName) && shouldDiff) {
-      if (this._waitForAXChange) {
-        // FR-002: Capture pre-action snapshot BEFORE refreshing the tree
-        const snapshotBefore = a11yTree.getSnapshotMap();
-
-        const timeoutMs = elementClass === "widget-state" ? 500 : 350;
-        const changed = await this._waitForAXChange(timeoutMs);
-
-        // Always refresh to get post-action state
-        try {
-          await a11yTree.refreshPrecomputed(this.cdpClient, this._sessionId, this._sessionManager);
-        } catch {
-          return; // Refresh failed — can't compute diff
-        }
-
-        const snapshotAfter = a11yTree.getSnapshotMap();
-        const changes = A11yTreeProcessor.diffSnapshots(snapshotBefore, snapshotAfter);
-
-        if (changes.length > 0) {
-          // FR-002: Inject DOM diff — focused, compact, shows exactly what changed
-          const diffText = A11yTreeProcessor.formatDomDiff(changes, a11yTree.currentUrl || undefined);
-          if (diffText) {
-            result.content.push({ type: "text", text: diffText });
-          }
-          // Update hash with the diff content (not full snapshot) so v1 fallback
-          // doesn't re-send the full snapshot if the diff already covered the change.
-          const postSnapshot = a11yTree.getCompactSnapshot();
-          if (postSnapshot) this._lastSentSnapshotHash = simpleHash(postSnapshot);
-          return;
-        }
-
-        // No changes detected despite nodesUpdated event — skip
-        if (!changed && elementClass === "clickable") {
-          return; // CSS-only toggle, nothing meaningful changed
-        }
-        // widget-state: always inject even if no visible text changes
-        // Fall through to compact snapshot below
-      }
-    }
-
-    // FR-004: type only returns its confirmation — no snapshot fallback
-    if (toolName === "type") return;
-
-    // FR-H2: v1 fallback — inject compact snapshot only if CONTENT actually changed.
-    // Uses content hash instead of version counter to avoid false positives from
-    // DomWatcher background refreshes that bump cacheVersion without content change.
-    const snapshot = a11yTree.getCompactSnapshot();
-    if (!snapshot) return;
-
-    const hash = simpleHash(snapshot);
-    if (hash === this._lastSentSnapshotHash) return;
-
-    result.content.push({ type: "text", text: snapshot });
-    this._lastSentSnapshotHash = hash;
   }
 
   /**
@@ -455,8 +415,8 @@ export class ToolRegistry implements ToolRegistryPublic {
             const result = await dialogWrapped(params);
             elapsed = result._meta?.elapsedMs as number | undefined;
             meta = result._meta as Record<string, unknown> | undefined;
-            // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-            await this._injectAmbientContext(result, name);
+            // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
+            await this._runOnToolResultHook(result, name);
             injectResponseBytes(result);
             return result;
           } finally {
@@ -488,8 +448,8 @@ export class ToolRegistry implements ToolRegistryPublic {
           // Resolve defaults into params
           const resolvedParams = sessionDefaults.resolveParams(name, params as unknown as Record<string, unknown>) as unknown as T;
           const result = await dialogWrapped(resolvedParams);
-          // Story 13.1: Ambient Page Context (before metrics so bytes include snapshot)
-          await this._injectAmbientContext(result, name);
+          // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
+          await this._runOnToolResultHook(result, name);
           // Inject auto-promote suggestion into _meta
           if (suggestionText && result._meta) {
             result._meta.suggestion = suggestionText;

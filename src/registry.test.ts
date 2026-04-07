@@ -3,7 +3,9 @@ import { ToolRegistry } from "./registry.js";
 import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { registerProHooks } from "./hooks/pro-hooks.js";
+import type { ProHooks } from "./hooks/pro-hooks.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
+import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
 describe("ToolRegistry", () => {
   // Story 9.5: Reset Pro hooks between tests
@@ -1984,6 +1986,458 @@ describe("ToolRegistry", () => {
           }),
         ),
       ).toThrow(/registerTool\(\) can only be called during registerAll\(\) \/ registerProTools/);
+    });
+  });
+
+  // --- Story 15.3: onToolResult hook integration ---
+
+  describe("onToolResult hook integration (Story 15.3)", () => {
+    beforeEach(() => {
+      registerProHooks({});
+    });
+
+    it("executeTool invokes onToolResult hook with context parameter", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const waitForAXChange = vi.fn().mockResolvedValue(true);
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => ({
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "enhanced" },
+          ],
+        }),
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        waitForAXChange,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool("evaluate", {
+        expression: "21*2",
+        await_promise: false,
+      });
+
+      expect(hookFn).toHaveBeenCalledTimes(1);
+      const [calledName, calledResult, calledCtx] = hookFn.mock.calls[0];
+      expect(calledName).toBe("evaluate");
+      expect(calledResult).toBeDefined();
+      // Story 15.3 (AC #5): a11yTree is a unified facade exposing both
+      // instance methods AND the static diff/format methods.
+      expect(typeof calledCtx.a11yTree.classifyRef).toBe("function");
+      expect(typeof calledCtx.a11yTree.getSnapshotMap).toBe("function");
+      expect(typeof calledCtx.a11yTree.refreshPrecomputed).toBe("function");
+      expect(typeof calledCtx.a11yTree.reset).toBe("function");
+      expect(typeof calledCtx.a11yTree.diffSnapshots).toBe("function");
+      expect(typeof calledCtx.a11yTree.formatDomDiff).toBe("function");
+      expect(calledCtx.a11yTree.diffSnapshots).toBe(A11yTreeProcessor.diffSnapshots);
+      expect(calledCtx.a11yTree.formatDomDiff).toBe(A11yTreeProcessor.formatDomDiff);
+      expect(calledCtx.a11yTreeDiffs).toBe(A11yTreeProcessor);
+      expect(calledCtx.waitForAXChange).toBe(waitForAXChange);
+      expect(calledCtx.cdpClient).toBe(mockCdpClient);
+      expect(calledCtx.sessionId).toBe("session-1");
+      expect(calledCtx.sessionManager).toBeUndefined();
+
+      // Hook result was merged into the original via Object.assign
+      expect(result.content.length).toBeGreaterThanOrEqual(2);
+      const lastBlock = result.content[result.content.length - 1] as {
+        text: string;
+      };
+      expect(lastBlock.text).toBe("enhanced");
+    });
+
+    it("executeTool skips onToolResult hook when result.isError is true", async () => {
+      // Mock cdpClient that makes evaluate fail with isError
+      const mockCdpClient = {
+        send: vi.fn().mockRejectedValue(new Error("boom")),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => result,
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool("evaluate", {
+        expression: "throw new Error()",
+        await_promise: false,
+      });
+
+      expect(result.isError).toBe(true);
+      expect(hookFn).not.toHaveBeenCalled();
+    });
+
+    it("executeTool does not invoke hook when no onToolResult is registered", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      // Explicitly empty hooks
+      registerProHooks({});
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool("evaluate", {
+        expression: "21*2",
+        await_promise: false,
+      });
+
+      // Free-tier default: no ambient context injected
+      expect(result.isError).toBeFalsy();
+      expect((result.content[0] as { text: string }).text).toBe("42");
+      // Only the tool result content block should remain
+      expect(result.content).toHaveLength(1);
+    });
+
+    it("executeTool calls a11yTree.reset() when tool is navigate (even without hook)", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockImplementation(async (method: string) => {
+          if (method === "Page.navigate") return { frameId: "frame1" };
+          if (method === "Runtime.evaluate")
+            return { result: { type: "string", value: "complete" } };
+          return {};
+        }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      // No hook registered
+      registerProHooks({});
+
+      const resetSpy = vi.spyOn(a11yTree, "reset");
+      resetSpy.mockClear();
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registry.executeTool("navigate", { url: "http://example.com" });
+
+      expect(resetSpy).toHaveBeenCalled();
+      resetSpy.mockRestore();
+    });
+
+    it("executeTool calls a11yTree.reset() before invoking hook for navigate", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockImplementation(async (method: string) => {
+          if (method === "Page.navigate") return { frameId: "frame1" };
+          if (method === "Runtime.evaluate")
+            return { result: { type: "string", value: "complete" } };
+          return {};
+        }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const resetSpy = vi.spyOn(a11yTree, "reset");
+      resetSpy.mockClear();
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => result,
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registry.executeTool("navigate", { url: "http://example.com" });
+
+      expect(resetSpy).toHaveBeenCalled();
+      expect(hookFn).toHaveBeenCalledTimes(1);
+
+      // Assert call order: reset ran before the hook
+      const resetOrder = resetSpy.mock.invocationCallOrder[0];
+      const hookOrder = hookFn.mock.invocationCallOrder[0];
+      expect(resetOrder).toBeLessThan(hookOrder);
+      resetSpy.mockRestore();
+    });
+
+    it("executeTool passes waitForAXChange callback to hook context", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const waitForAXChange = vi.fn().mockResolvedValue(true);
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, ctx) => {
+          await ctx.waitForAXChange?.(500);
+          return result;
+        },
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-1",
+        {} as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        waitForAXChange,
+      );
+      registry.registerAll();
+
+      await registry.executeTool("evaluate", {
+        expression: "1",
+        await_promise: false,
+      });
+
+      expect(waitForAXChange).toHaveBeenCalledWith(500);
+    });
+
+    it("executeTool passes sessionId and cdpClient to hook context", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const captured: {
+        sessionId?: string;
+        cdpClient?: unknown;
+      } = {};
+      registerProHooks({
+        onToolResult: async (_name, result, ctx) => {
+          captured.sessionId = ctx.sessionId;
+          captured.cdpClient = ctx.cdpClient;
+          return result;
+        },
+      });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-42",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registry.executeTool("evaluate", {
+        expression: "1",
+        await_promise: false,
+      });
+
+      expect(captured.sessionId).toBe("session-42");
+      expect(captured.cdpClient).toBe(mockCdpClient);
+    });
+
+    // M2: wrap-callsite coverage — the onToolResult hook must also fire on
+    // the direct server.tool() path (wrap closure), not only via executeTool.
+    it("wrap (MCP path, no sessionDefaults) invokes onToolResult hook", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "string", value: "wrapped" } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => ({
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "wrap-enhanced" },
+          ],
+        }),
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      // No sessionDefaults — exercises the early-return wrap branch
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-wrap-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const evaluateCall = toolFn.mock.calls.find(
+        (call: unknown[]) => call[0] === "evaluate",
+      );
+      expect(evaluateCall).toBeDefined();
+      const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+        params: Record<string, unknown>,
+      ) => Promise<{
+        content: Array<{ type: string; text?: string }>;
+        _meta?: Record<string, unknown>;
+      }>;
+
+      const result = await evaluateCallback({
+        expression: "'wrapped'",
+        await_promise: false,
+      });
+
+      expect(hookFn).toHaveBeenCalledTimes(1);
+      const [calledName, , calledCtx] = hookFn.mock.calls[0];
+      expect(calledName).toBe("evaluate");
+      expect(calledCtx.sessionId).toBe("session-wrap-1");
+      expect(calledCtx.cdpClient).toBe(mockCdpClient);
+      // Hook-merged content appended
+      const lastBlock = result.content[result.content.length - 1] as {
+        text: string;
+      };
+      expect(lastBlock.text).toBe("wrap-enhanced");
+      // M1: response_bytes was still injected (proves _meta ref is stable)
+      expect(result._meta).toBeDefined();
+      expect(typeof result._meta!.response_bytes).toBe("number");
+    });
+
+    it("wrap (MCP path, with sessionDefaults) invokes onToolResult hook", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "string", value: "wrapped2" } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => ({
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "wrap-enhanced-sd" },
+          ],
+        }),
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const sessionDefaults = new SessionDefaults();
+
+      // With sessionDefaults — exercises the other wrap branch
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-wrap-2",
+        {} as never,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sessionDefaults,
+      );
+      registry.registerAll();
+
+      const evaluateCall = toolFn.mock.calls.find(
+        (call: unknown[]) => call[0] === "evaluate",
+      );
+      expect(evaluateCall).toBeDefined();
+      const evaluateCallback = evaluateCall![evaluateCall!.length - 1] as (
+        params: Record<string, unknown>,
+      ) => Promise<{
+        content: Array<{ type: string; text?: string }>;
+        _meta?: Record<string, unknown>;
+      }>;
+
+      const result = await evaluateCallback({
+        expression: "'wrapped2'",
+        await_promise: false,
+      });
+
+      expect(hookFn).toHaveBeenCalledTimes(1);
+      const [calledName, , calledCtx] = hookFn.mock.calls[0];
+      expect(calledName).toBe("evaluate");
+      expect(calledCtx.sessionId).toBe("session-wrap-2");
+      // Hook-merged content appended
+      const lastBlock = result.content[result.content.length - 1] as {
+        text: string;
+      };
+      expect(lastBlock.text).toBe("wrap-enhanced-sd");
+      // M1: response_bytes still injected on original _meta ref
+      expect(result._meta).toBeDefined();
+      expect(typeof result._meta!.response_bytes).toBe("number");
+    });
+
+    // M1: Guard regression — hook returning a new _meta object must not
+    // detach downstream mutations. Verify via executeTool path (simpler setup).
+    it("executeTool keeps original _meta reference when hook returns new _meta", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 7 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      // Hook returns a fresh object with a NEW _meta — this used to
+      // silently detach downstream injections (response_bytes, suggestion).
+      registerProHooks({
+        onToolResult: async (_name, result, _ctx) => ({
+          ...result,
+          _meta: { elapsedMs: 999, method: "hijacked" },
+        }),
+      });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-meta",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool("evaluate", {
+        expression: "7",
+        await_promise: false,
+      });
+
+      // Original _meta must survive (not overwritten by hook)
+      expect(result._meta).toBeDefined();
+      expect(result._meta!.method).toBe("evaluate");
+      // response_bytes must have been injected on the original _meta
+      expect(typeof result._meta!.response_bytes).toBe("number");
+      expect((result._meta!.response_bytes as number) > 0).toBe(true);
     });
   });
 });

@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { registerProHooks, getProHooks, proFeatureError } from "./pro-hooks.js";
-import type { ProHooks, ToolRegistryPublic } from "./pro-hooks.js";
+import type {
+  ProHooks,
+  ToolRegistryPublic,
+  A11yTreePublic,
+  A11yTreeDiffs,
+} from "./pro-hooks.js";
 import type { LicenseStatus } from "../license/license-status.js";
 import type { ToolResponse } from "../types.js";
 import type { PlanStep } from "../plan/plan-executor.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
+import type { SnapshotMap, DOMChange } from "../cache/a11y-tree.js";
 
 describe("ProHooks", () => {
   // Reset between tests — clean state
@@ -34,7 +40,7 @@ describe("ProHooks", () => {
     const myHooks: ProHooks = {
       featureGate: () => ({ allowed: true }),
       enhanceTool: (_name, params) => params,
-      onToolResult: (_name, result) => result,
+      onToolResult: async (_name, result, _ctx) => result,
     };
     registerProHooks(myHooks);
 
@@ -101,21 +107,177 @@ describe("ProHooks", () => {
     expect(result).toBeNull();
   });
 
-  it("onToolResult hook can modify response", () => {
+  // --- Story 15.3: onToolResult Hook (Async + Context-Parameter) ---
+
+  /**
+   * Shared mock factory for the a11yTree/A11yTreeDiffs/context objects used
+   * by the onToolResult tests. Keeps the setup DRY and lets each test
+   * override only the fields it cares about.
+   */
+  const makeMockA11yTree = (): A11yTreePublic => ({
+    classifyRef: vi.fn().mockReturnValue("static"),
+    getSnapshotMap: vi.fn().mockReturnValue(new Map() as SnapshotMap),
+    getCompactSnapshot: vi.fn().mockReturnValue(null),
+    refreshPrecomputed: vi.fn().mockResolvedValue(undefined),
+    reset: vi.fn(),
+    currentUrl: "https://example.com",
+    // Story 15.3 (AC #5): diff methods live on the A11yTreePublic facade too
+    diffSnapshots: vi.fn().mockReturnValue([] as DOMChange[]),
+    formatDomDiff: vi.fn().mockReturnValue(null),
+  });
+
+  const makeMockA11yTreeDiffs = (): A11yTreeDiffs => ({
+    diffSnapshots: vi.fn().mockReturnValue([] as DOMChange[]),
+    formatDomDiff: vi.fn().mockReturnValue(null),
+  });
+
+  const makeHookContext = (
+    overrides: Partial<Parameters<NonNullable<ProHooks["onToolResult"]>>[2]> = {},
+  ): Parameters<NonNullable<ProHooks["onToolResult"]>>[2] => ({
+    a11yTree: makeMockA11yTree(),
+    a11yTreeDiffs: makeMockA11yTreeDiffs(),
+    waitForAXChange: vi.fn().mockResolvedValue(true),
+    cdpClient: { send: vi.fn() } as unknown as CdpClient,
+    sessionId: "session-1",
+    sessionManager: undefined,
+    ...overrides,
+  });
+
+  it("onToolResult hook can modify response (new async signature with context)", async () => {
     registerProHooks({
-      onToolResult: (_name, result) => ({
+      onToolResult: async (_name, result, _ctx) => ({
         ...result,
         content: [...result.content, { type: "text" as const, text: "enhanced" }],
       }),
     });
 
-    const original = {
+    const original: ToolResponse = {
       content: [{ type: "text" as const, text: "original" }],
       _meta: { elapsedMs: 10, method: "evaluate" },
     };
-    const modified = getProHooks().onToolResult!("evaluate", original);
+    const ctx = makeHookContext();
+    const modified = await getProHooks().onToolResult!("evaluate", original, ctx);
     expect(modified.content).toHaveLength(2);
     expect((modified.content[1] as { text: string }).text).toBe("enhanced");
+  });
+
+  it("onToolResult is undefined by default", () => {
+    const hooks = getProHooks();
+    expect(hooks.onToolResult).toBeUndefined();
+  });
+
+  it("onToolResult can be registered and retrieved", async () => {
+    const mockFn = vi.fn().mockImplementation(
+      async (_name, result, _ctx) => result,
+    );
+    registerProHooks({ onToolResult: mockFn });
+
+    const hooks = getProHooks();
+    expect(hooks.onToolResult).toBe(mockFn);
+  });
+
+  it("onToolResult works alongside other hooks", () => {
+    const gate = () => ({ allowed: true });
+    const enhance = (_n: string, p: Record<string, unknown>) => p;
+    const result: ProHooks["onToolResult"] = async (_name, r, _ctx) => r;
+    const provider: ProHooks["provideLicenseStatus"] = async () => ({
+      isPro: () => true,
+    });
+
+    registerProHooks({
+      featureGate: gate,
+      enhanceTool: enhance,
+      onToolResult: result,
+      provideLicenseStatus: provider,
+    });
+
+    const hooks = getProHooks();
+    expect(hooks.featureGate).toBe(gate);
+    expect(hooks.enhanceTool).toBe(enhance);
+    expect(hooks.onToolResult).toBe(result);
+    expect(hooks.provideLicenseStatus).toBe(provider);
+  });
+
+  it("onToolResult is cleared when hooks are reset", () => {
+    registerProHooks({
+      onToolResult: async (_name, result, _ctx) => result,
+    });
+    expect(getProHooks().onToolResult).toBeDefined();
+
+    registerProHooks({});
+    expect(getProHooks().onToolResult).toBeUndefined();
+  });
+
+  it("onToolResult receives context parameter with a11yTree", async () => {
+    const mockA11yTree = makeMockA11yTree();
+    (mockA11yTree.classifyRef as ReturnType<typeof vi.fn>).mockReturnValue(
+      "clickable",
+    );
+
+    const captured: { classification?: string } = {};
+    registerProHooks({
+      onToolResult: async (_name, result, ctx) => {
+        captured.classification = ctx.a11yTree.classifyRef("e1");
+        return result;
+      },
+    });
+
+    const result: ToolResponse = {
+      content: [{ type: "text" as const, text: "ok" }],
+      _meta: { elapsedMs: 1, method: "click" },
+    };
+    const ctx = makeHookContext({ a11yTree: mockA11yTree });
+    await getProHooks().onToolResult!("click", result, ctx);
+
+    expect(mockA11yTree.classifyRef).toHaveBeenCalledWith("e1");
+    expect(captured.classification).toBe("clickable");
+  });
+
+  it("onToolResult can call waitForAXChange via context parameter", async () => {
+    const waitMock = vi.fn().mockResolvedValue(true);
+    registerProHooks({
+      onToolResult: async (_name, result, ctx) => {
+        await ctx.waitForAXChange?.(350);
+        return result;
+      },
+    });
+
+    const result: ToolResponse = {
+      content: [{ type: "text" as const, text: "ok" }],
+      _meta: { elapsedMs: 1, method: "click" },
+    };
+    const ctx = makeHookContext({ waitForAXChange: waitMock });
+    await getProHooks().onToolResult!("click", result, ctx);
+
+    expect(waitMock).toHaveBeenCalledWith(350);
+  });
+
+  it("onToolResult can return enhanced response asynchronously", async () => {
+    registerProHooks({
+      onToolResult: async (_name, result, _ctx) => {
+        // Simulate an async CDP call before enriching
+        await Promise.resolve();
+        return {
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "[diff] +button#submit" },
+          ],
+        };
+      },
+    });
+
+    const result: ToolResponse = {
+      content: [{ type: "text" as const, text: "clicked" }],
+      _meta: { elapsedMs: 5, method: "click" },
+    };
+    const ctx = makeHookContext();
+    const enriched = await getProHooks().onToolResult!("click", result, ctx);
+
+    expect(enriched.content).toHaveLength(2);
+    expect((enriched.content[1] as { text: string }).text).toBe(
+      "[diff] +button#submit",
+    );
   });
 
   // --- Story 9.6: proFeatureError ---
