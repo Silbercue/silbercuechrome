@@ -9,7 +9,8 @@
   "main": "./build/index.js",
   "exports": {
     ".": "./build/index.js",
-    "./hooks": "./build/hooks/index.js"
+    "./hooks": "./build/hooks/index.js",
+    "./license/license-status.js": "./build/license/license-status.js"
   },
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
