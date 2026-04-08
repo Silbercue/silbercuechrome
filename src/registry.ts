@@ -686,7 +686,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // --- 3. Interaction (click/type/fill_form/press_key/scroll) ---
     this.server.tool(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state.",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state. If click fails with a stale-ref error, call read_page for fresh refs and retry. Avoid evaluate(querySelector + .click()) as default recovery — it bypasses the CDP pointer chain and hides real bugs. (Legitimate exception: explicitly testing synthetic JS event plumbing.)",
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
@@ -701,7 +701,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     this.server.tool(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
+      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead. On stale-ref errors, call read_page for fresh refs and retry. Avoid evaluate(element.value = ...) as default data-entry recovery — it bypasses framework listeners (React, Vue) and masks real failures. (Legitimate exception: tests explicitly targeting synthetic event plumbing.)",
       {
         ref: typeSchema.shape.ref,
         selector: typeSchema.shape.selector,
@@ -716,7 +716,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // Story 6.3: fill_form — fill complete forms with one call
     this.server.tool(
       "fill_form",
-      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status.",
+      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status. On per-field errors, call read_page and retry the failing fields — DO NOT escape to evaluate(querySelector) to patch individual fields; it bypasses framework state management (React, Vue) and hides real bugs.",
       {
         fields: fillFormSchema.shape.fields,
       },
@@ -795,7 +795,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     this.server.tool(
       "switch_tab",
-      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
+      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab. After switching, refs from the previous tab are invalid — call read_page FIRST to get fresh refs before click/type/fill_form. DO NOT try to reuse old refs via evaluate(querySelector) as a shortcut.",
       {
         action: switchTabSchema.shape.action,
         url: switchTabSchema.shape.url,
@@ -1044,7 +1044,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // don't default to it for text/element tasks — Positional Bias fix) ---
     this.server.tool(
       "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Use this to COMPUTE values or trigger side effects no other tool covers — NOT to discover elements. If you're using querySelector/getElementById/innerText to find interactive elements or read visible text, prefer read_page (stable refs survive DOM changes, selectors don't) or fill_form. Common anti-patterns that evaluate will detect and hint you about: DOM-queried buttons/inputs, .innerText/.textContent reads, .click()/.scrollIntoView(), Tests.*.toString() introspection. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
+      "Execute JavaScript in the browser page context. Good uses: computation, reading values, shadow-root traversal, app-specific side effects no dedicated tool covers. Bad use: automatic recovery after a click/type/fill_form failure — call read_page for fresh refs and retry the failing tool instead. For element discovery (querySelector/getElementById/innerText), prefer read_page (stable refs survive DOM changes, selectors don't) or fill_form. Anti-patterns that evaluate flags in responses: DOM-queried buttons/inputs, .innerText/.textContent reads, .click()/.scrollIntoView(), Tests.*.toString() introspection. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
       {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,

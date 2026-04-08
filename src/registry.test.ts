@@ -39,7 +39,7 @@ describe("ToolRegistry", () => {
     expect(toolFn).toHaveBeenCalledTimes(17);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Use this to COMPUTE values or trigger side effects no other tool covers — NOT to discover elements. If you're using querySelector/getElementById/innerText to find interactive elements or read visible text, prefer read_page (stable refs survive DOM changes, selectors don't) or fill_form. Common anti-patterns that evaluate will detect and hint you about: DOM-queried buttons/inputs, .innerText/.textContent reads, .click()/.scrollIntoView(), Tests.*.toString() introspection. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
+      expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad use: automatic recovery after a click\/type\/fill_form failure/s),
       expect.objectContaining({
         expression: expect.anything(),
         await_promise: expect.anything(),
@@ -87,7 +87,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state.",
+      expect.stringMatching(/^Click an element by ref.*stale-ref error, call read_page/s),
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
@@ -98,7 +98,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
+      expect.stringMatching(/^Type text into an input field.*On stale-ref errors/s),
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
@@ -115,7 +115,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "switch_tab",
-      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
+      expect.stringMatching(/^Open a new tab.*After switching, refs from the previous tab are invalid/s),
       expect.objectContaining({
         action: expect.anything(),
         url: expect.anything(),
@@ -149,7 +149,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "fill_form",
-      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status.",
+      expect.stringMatching(/^Fill a complete form with one call.*On per-field errors, call read_page/s),
       expect.objectContaining({
         fields: expect.anything(),
       }),
@@ -1278,8 +1278,8 @@ describe("ToolRegistry", () => {
       (call: unknown[]) => call[0] === "switch_tab",
     );
     expect(switchTabCall).toBeDefined();
-    expect(switchTabCall![1]).toBe(
-      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
+    expect(switchTabCall![1]).toMatch(
+      /^Open a new tab.*After switching, refs from the previous tab are invalid/s,
     );
   });
 
