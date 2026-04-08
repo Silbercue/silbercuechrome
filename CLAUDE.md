@@ -13,7 +13,26 @@ npm test               # vitest run (1100+ Tests)
 node build/index.js    # Stdio-Transport, verbindet sich zu Chrome via CDP
 ```
 
-Der Server verbindet sich automatisch zu einer laufenden Chrome-Instanz (WebSocket auf Port 9222) oder startet Chrome als Child-Prozess. Chrome muss mit Remote Debugging laufen fuer manuelle Verbindung:
+### Connection Modes
+
+SilbercueChrome verbindet sich beim Start in dieser Reihenfolge:
+
+1. **Auto-Launch (Default, Zero-Config):** Wenn kein Chrome auf Port 9222 laeuft, startet SilbercueChrome selbst einen Chrome-Kindprozess mit `--remote-debugging-pipe` und allen noetigen Flags (inklusive `--disable-backgrounding-occluded-windows` fuer zuverlaessige Screenshots). Chrome oeffnet sich **sichtbar** als Fenster — kein Headless. Das ist der Standard-Weg und erfordert keine Vorbereitung vom Nutzer.
+2. **WebSocket (optional):** Wenn bereits ein Chrome mit Remote-Debugging auf Port 9222 laeuft, verbindet sich SilbercueChrome via WebSocket an diesen existierenden Browser. Nutze das, wenn du deinen eigenen Chrome (inklusive deiner Login-Sessions) steuern willst.
+3. **Fehler:** Wenn `autoLaunch=false` gesetzt ist und kein Chrome laeuft, wirft SilbercueChrome einen Verbindungsfehler.
+
+**Umgebungsvariablen:**
+
+| Variable | Werte | Default | Beschreibung |
+|----------|-------|---------|-------------|
+| `SILBERCUE_CHROME_AUTO_LAUNCH` | `true` / `false` | `true` | Chrome automatisch starten wenn kein laufendes Chrome gefunden |
+| `SILBERCUE_CHROME_HEADLESS` | `true` / `false` | `false` | Chrome im Headless-Modus starten (Opt-in fuer CI/Server-Umgebungen) |
+| `SILBERCUE_CHROME_PROFILE` | Pfad | — | Chrome-Profilverzeichnis (nur bei Auto-Launch) |
+| `CHROME_PATH` | Pfad | — | Pfad zur Chrome-Binary (ueberschreibt automatische Erkennung) |
+
+### Advanced — Eigenen Chrome steuern
+
+Wenn du deinen eigenen Chrome (mit Login-Sessions, Extensions, Profil) steuern willst, starte ihn mit Remote-Debugging, bevor SilbercueChrome startet:
 
 ```bash
 # Chrome mit Remote Debugging starten (macOS) — alle Flags fuer zuverlaessige Screenshots
@@ -25,23 +44,6 @@ Der Server verbindet sich automatisch zu einer laufenden Chrome-Instanz (WebSock
 ```
 
 **Wichtig:** Ohne `--disable-backgrounding-occluded-windows` liefert `screenshot` schwarze Bilder wenn das Chrome-Fenster verdeckt oder auf einem anderen Monitor ist. Bei Auto-Launch werden diese Flags automatisch gesetzt.
-
-### Connection Modes
-
-SilbercueChrome verbindet sich in dieser Reihenfolge:
-
-1. **WebSocket (bevorzugt):** Prueft `127.0.0.1:9222/json/version`. Wenn Chrome laeuft, verbindet sich per WebSocket.
-2. **Auto-Launch (Fallback):** Wenn kein Chrome laeuft und `autoLaunch` aktiv, startet Chrome mit `--remote-debugging-pipe` als Child-Prozess.
-3. **Fehler:** Wenn kein Chrome laeuft und `autoLaunch=false`, wirft einen Verbindungsfehler.
-
-**Umgebungsvariablen:**
-
-| Variable | Werte | Default | Beschreibung |
-|----------|-------|---------|-------------|
-| `SILBERCUE_CHROME_AUTO_LAUNCH` | `true` / `false` | `true` (headless), `false` (headed) | Chrome automatisch starten wenn kein laufendes Chrome gefunden |
-| `SILBERCUE_CHROME_HEADLESS` | `true` / `false` | `true` | Chrome im Headless-Modus starten |
-| `SILBERCUE_CHROME_PROFILE` | Pfad | — | Chrome-Profilverzeichnis (nur bei Auto-Launch) |
-| `CHROME_PATH` | Pfad | — | Pfad zur Chrome-Binary (ueberschreibt automatische Erkennung) |
 
 ## Test Hardest — Benchmark-Seite
 

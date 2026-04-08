@@ -362,10 +362,12 @@ Neuer `text` Parameter in clickSchema: `click(text: "Submit")`. Intern nutzt `a1
 **Entdeckt:** 2026-04-05
 **Schwere:** Low
 **Betrifft:** `src/server.ts`, `src/cdp/chrome-launcher.ts`
-**Status:** GEFIXT (Story 10.2)
+**Status:** GEFIXT (Story 10.2) + UEBERHOLT (2026-04-08 — Headed-Default-Inversion)
 
 ### Aenderung
-Neues Verhalten: Wenn `SILBERCUE_CHROME_HEADLESS=false`, dann `autoLaunch` automatisch `false` (es sei denn explizit `SILBERCUE_CHROME_AUTO_LAUNCH=true` gesetzt). Neue Env-Variable `SILBERCUE_CHROME_AUTO_LAUNCH` hinzugefuegt.
+Urspruenglich (Story 10.2): Wenn `SILBERCUE_CHROME_HEADLESS=false`, dann `autoLaunch` automatisch `false`. Diese headless↔autoLaunch-Kaskade war fuer die alte "headless-by-default"-Semantik gedacht und machte in der neuen Welt keinen Sinn mehr.
+
+2026-04-08 Inversion: Headless ist jetzt Opt-in (`SILBERCUE_CHROME_HEADLESS=true`), Default ist headed. `resolveAutoLaunch` gibt bei unset Env immer `true` zurueck — unabhaengig von headless. Damit hat ein neuer Nutzer eine echte Zero-Config-UX: installieren, restart, Tool aufrufen, Chrome oeffnet sich sichtbar von selbst.
 
 ### Fix
 Tests in `src/cdp/chrome-launcher.test.ts`: WebSocket-Fallback, Pipe-Launch, autoLaunch-disabled, env-Variable-Overrides (SILBERCUE_CHROME_AUTO_LAUNCH). CLAUDE.md dokumentiert Connection Modes und Env-Variablen.

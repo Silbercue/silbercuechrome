@@ -1375,14 +1375,14 @@ describe("resolveAutoLaunch", () => {
     expect(result).toBe(false);
   });
 
-  it("defaults to true when env unset and headless=true (server mode)", () => {
+  it("defaults to true when env unset and headless=true (zero-config UX)", () => {
     const result = resolveAutoLaunch({}, true);
     expect(result).toBe(true);
   });
 
-  it("defaults to false when env unset and headless=false (developer mode)", () => {
+  it("defaults to true when env unset and headless=false (zero-config UX)", () => {
     const result = resolveAutoLaunch({}, false);
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 
   it("defaults to true when env is undefined and headless=true", () => {
@@ -1393,12 +1393,12 @@ describe("resolveAutoLaunch", () => {
     expect(result).toBe(true);
   });
 
-  it("defaults to false when env is undefined and headless=false", () => {
+  it("defaults to true when env is undefined and headless=false", () => {
     const result = resolveAutoLaunch(
       { SILBERCUE_CHROME_AUTO_LAUNCH: undefined },
       false,
     );
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 
   it("returns false for invalid env values like 'foo' (safe default, no auto-launch)", () => {

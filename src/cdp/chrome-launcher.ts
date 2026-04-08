@@ -21,7 +21,7 @@ export interface ChromeConnectionOptions {
   port?: number;
   /** Auto-launch Chrome if no running instance found (default: true) */
   autoLaunch?: boolean;
-  /** Launch Chrome in headless mode (default: true) */
+  /** Launch Chrome in headless mode (default: false — browser is visible by default) */
   headless?: boolean;
   /** Pfad zu einem echten Chrome-Profil (user-data-dir). Opt-in: nur gesetzt = aktiv. */
   profilePath?: string;
@@ -43,23 +43,26 @@ interface LaunchResult {
 // ── AutoLaunch Resolution (Story 10.2) ────────────────────────────────
 
 /**
- * Resolve the autoLaunch setting from environment variables and headless mode.
+ * Resolve the autoLaunch setting from environment variables.
  * Pure function — no side effects, fully testable.
  *
  * - SILBERCUE_CHROME_AUTO_LAUNCH=true  → always auto-launch
  * - SILBERCUE_CHROME_AUTO_LAUNCH=false → never auto-launch
- * - unset → auto-launch when headless (server mode), skip when headed (developer mode)
+ * - unset → default: auto-launch (zero-config UX for new users)
+ *
+ * The `_headless` parameter is kept for backwards-compat with call-sites,
+ * but no longer influences the default — auto-launch is the standard path.
  */
 export function resolveAutoLaunch(
   env: Record<string, string | undefined>,
-  headless: boolean,
+  _headless: boolean,
 ): boolean {
   const val = env.SILBERCUE_CHROME_AUTO_LAUNCH;
   if (val === "true" || val === "1") return true;
   if (val === "false" || val === "0") return false;
   if (val === undefined) {
-    // Default: autoLaunch = true when headless (server mode), false when headed (developer mode)
-    return headless;
+    // Default: always auto-launch — user gets zero-config UX
+    return true;
   }
   // Invalid env value (e.g. "foo", "bar") → safe default: no auto-launch
   return false;
@@ -322,7 +325,7 @@ export class ChromeConnection {
     this._childProcess = childProcess;
     this._tmpDir = tmpDir;
     this._port = port ?? 9222;
-    this._headless = headless ?? true;
+    this._headless = headless ?? false;
     this._profilePath = profilePath;
 
     // C1 fix: Passive status tracking via CdpClient.onClose —
@@ -552,7 +555,7 @@ export class ChromeLauncher {
   constructor(options?: ChromeConnectionOptions) {
     this._port = options?.port ?? 9222;
     this._autoLaunch = options?.autoLaunch ?? true;
-    this._headless = options?.headless ?? true;
+    this._headless = options?.headless ?? false;
     this._profilePath = options?.profilePath;
   }
 

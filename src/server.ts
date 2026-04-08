@@ -27,7 +27,7 @@ interface TargetInfo {
 export async function startServer(): Promise<void> {
   // 1. Connect to Chrome (Story 1.3: WebSocket first, then Auto-Launch)
   const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
-  const headlessEnv = process.env.SILBERCUE_CHROME_HEADLESS !== "false";
+  const headlessEnv = process.env.SILBERCUE_CHROME_HEADLESS === "true";
   const autoLaunch = resolveAutoLaunch(process.env as Record<string, string | undefined>, headlessEnv);
   const launcher = new ChromeLauncher({ profilePath, headless: headlessEnv, autoLaunch });
   const connection = await launcher.connect();
