@@ -47,7 +47,7 @@ describe("ToolSequenceTracker", () => {
       expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(1);
     });
 
-    it("click/type/fill_form also reset the streak", () => {
+    it("click/type/fill_form/press_key all reset the streak", () => {
       const qs = new Set([FLAG_QUERY_SELECTOR]);
       tracker.record("evaluate", qs);
       tracker.record("evaluate", qs);
@@ -63,6 +63,14 @@ describe("ToolSequenceTracker", () => {
       tracker.record("evaluate", qs);
       tracker.record("fill_form");
       expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(0);
+
+      // BUG-018 follow-up (final review MEDIUM #5): press_key is now
+      // wired through the handler and must break a streak just like
+      // the other happy-path tools.
+      tracker.record("evaluate", qs);
+      tracker.record("evaluate", qs);
+      tracker.record("press_key");
+      expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(0);
     });
 
     it("ignores events older than the streak window", () => {
@@ -70,8 +78,8 @@ describe("ToolSequenceTracker", () => {
       const qs = new Set([FLAG_QUERY_SELECTOR]);
       tracker.record("evaluate", qs);
       tracker.record("evaluate", qs);
-      // Advance time past the 5-minute window
-      vi.advanceTimersByTime(6 * 60 * 1000);
+      // Advance time past the streak window (60 s)
+      vi.advanceTimersByTime(90 * 1000);
       tracker.record("evaluate", qs);
       // Only the fresh event counts
       expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(1);
