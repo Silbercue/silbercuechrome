@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
+import { toolSequence } from "../telemetry/tool-sequence.js";
 
 // --- Schema ---
 
@@ -199,6 +200,12 @@ export async function pressKeyHandler(
   const elapsedMs = Math.round(performance.now() - start);
   const modStr = params.modifiers?.length ? params.modifiers.join("+") + "+" : "";
   const targetStr = params.ref ? ` on ${params.ref}` : params.selector ? ` on ${params.selector}` : "";
+  // BUG-018 follow-up (final review MEDIUM #5): press_key is declared
+  // as a reset tool in tool-sequence.ts RESET_TOOLS but the handler
+  // never actually recorded anything. A successful keyboard interaction
+  // is just as valid a "happy path" signal as a click, so record it
+  // here so the evaluate streak detector treats it the same way.
+  toolSequence.record("press_key", undefined, sessionId);
   return {
     content: [{ type: "text", text: `Pressed ${modStr}${params.key}${targetStr}` }],
     _meta: { elapsedMs, method: "press_key" },

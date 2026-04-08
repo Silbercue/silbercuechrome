@@ -60,16 +60,23 @@ async function waitForElement(
       let found = false;
 
       if (isRef) {
-        // Ref path
-        const backendNodeId = a11yTree.resolveRef(selector);
-        if (backendNodeId !== undefined) {
-          // Resolve backendNodeId → objectId via DOM.resolveNode
+        // Ref path.
+        // BUG-016 follow-up (final review HIGH #2): use resolveRefFull
+        // so the DOM.resolveNode call routes to the ref's owner session,
+        // not blindly to the handler's current sessionId. Otherwise an
+        // OOPIF ref with a colliding backendNodeId would be checked in
+        // the wrong frame and silently time out.
+        const full = a11yTree.resolveRefFull(selector);
+        if (full !== undefined) {
+          const targetSessionId = full.sessionId;
+          // Resolve backendNodeId → objectId via DOM.resolveNode on the
+          // owner session
           const { object } = await cdpClient.send<{ object: { objectId: string } }>(
             "DOM.resolveNode",
-            { backendNodeId },
-            sessionId,
+            { backendNodeId: full.backendNodeId },
+            targetSessionId,
           );
-          // Check visibility via callFunctionOn
+          // Check visibility via callFunctionOn on the same session
           const { result } = await cdpClient.send<{ result: { value: boolean } }>(
             "Runtime.callFunctionOn",
             {
@@ -78,11 +85,11 @@ async function waitForElement(
                 "function() { const r = this.getBoundingClientRect(); return r.width > 0 && r.height > 0; }",
               returnByValue: true,
             },
-            sessionId,
+            targetSessionId,
           );
           found = result.value === true;
         }
-        // If resolveRef returns undefined, ref not in cache yet — keep polling
+        // If resolveRefFull returns undefined, ref not in cache yet — keep polling
       } else {
         // CSS path
         const checkExpression = `(() => {
@@ -217,8 +224,12 @@ async function elementTimeoutDiagnostic(
   const isRef = /^e\d+$/.test(selector);
 
   if (isRef) {
-    const backendNodeId = a11yTree.resolveRef(selector);
-    if (backendNodeId === undefined) {
+    // BUG-016 follow-up: resolveRefFull exposes the owning session, so
+    // the diagnostic can tell the LLM whether the ref lives in the main
+    // frame or in an OOPIF — useful when a wait_for times out because
+    // the ref belongs to a frame that was detached.
+    const full = a11yTree.resolveRefFull(selector);
+    if (full === undefined) {
       return "\nDebug: Ref not found in cache — page may have changed. Call read_page to get fresh refs.";
     }
     return "\nDebug: Ref exists in cache but element has zero size (hidden or not rendered).";

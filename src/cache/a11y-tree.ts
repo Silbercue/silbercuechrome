@@ -905,9 +905,16 @@ export class A11yTreeProcessor {
     );
     const currentUrl = urlResult.result.value;
     if (stripHash(currentUrl) !== stripHash(this.lastUrl)) {
+      // BUG-016 follow-up (final review MEDIUM #4): also clear
+      // sessionNodeMap and _renderSessionId so stale session-ownership
+      // can't influence the next round of cleanup/render decisions.
+      // Otherwise removeNodesForSession would still "know" about
+      // backendNodeIds that belonged to the previous document.
       this.refMap.clear();
       this.reverseMap.clear();
       this.nodeInfoMap.clear();
+      this.sessionNodeMap.clear();
+      this._renderSessionId = "";
       this.nextRef = 1;
       this.invalidatePrecomputed();
     }

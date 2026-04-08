@@ -4,9 +4,13 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { WaitForParams } from "./wait-for.js";
 
 // Mock a11yTree
+// BUG-016 follow-up: wait-for now uses resolveRefFull so it can route
+// DOM.resolveNode to the ref's owner session. The mock exposes both
+// methods; individual tests stub whichever one they exercise.
 vi.mock("../cache/a11y-tree.js", () => ({
   a11yTree: {
     resolveRef: vi.fn(),
+    resolveRefFull: vi.fn(),
   },
 }));
 
@@ -167,8 +171,12 @@ describe("waitForHandler — element condition", () => {
   });
 
   it("should succeed when ref selector (e.g. 'e5') resolves via a11yTree", async () => {
-    // Mock resolveRef to return a backendNodeId
-    vi.mocked(a11yTree.resolveRef).mockReturnValue(42);
+    // BUG-016 follow-up: wait-for now uses resolveRefFull so it can
+    // route DOM.resolveNode to the owner session.
+    vi.mocked(a11yTree.resolveRefFull).mockReturnValue({
+      backendNodeId: 42,
+      sessionId: "s1",
+    });
 
     const { cdpClient } = createMockCdp({
       "DOM.resolveNode": { object: { objectId: "obj-42" } },
@@ -188,7 +196,7 @@ describe("waitForHandler — element condition", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toContain("Condition 'element' met after");
     expect(result.content[0].text).toContain("selector: e5");
-    expect(a11yTree.resolveRef).toHaveBeenCalledWith("e5");
+    expect(a11yTree.resolveRefFull).toHaveBeenCalledWith("e5");
   });
 
   it("should return isError when element not found within timeout", async () => {
@@ -562,7 +570,10 @@ describe("waitForHandler — js timeout diagnostics", () => {
   });
 
   it("FR-H7: should add diagnostic for stale ref", async () => {
-    vi.mocked(a11yTree.resolveRef).mockReturnValue(undefined);
+    // BUG-016 follow-up: wait-for's ref path and diagnostic both use
+    // resolveRefFull now. Stub it to undefined so the handler hits the
+    // stale-ref branch.
+    vi.mocked(a11yTree.resolveRefFull).mockReturnValue(undefined);
 
     const { cdpClient } = createMockCdp({});
 
