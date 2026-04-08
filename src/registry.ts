@@ -2,8 +2,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
 import type { SessionManager } from "./cdp/session-manager.js";
 import type { DialogHandler } from "./cdp/dialog-handler.js";
+import type { ConsoleCollector } from "./cdp/console-collector.js";
+import type { NetworkCollector } from "./cdp/network-collector.js";
+import type { IBrowserSession } from "./cdp/browser-session.js";
 import type { TabStateCache } from "./cache/tab-state-cache.js";
-import type { ToolResponse, ToolContentBlock, ConnectionStatus } from "./types.js";
+import type { SessionDefaults as SessionDefaultsType } from "./cache/session-defaults.js";
+import { SessionDefaults } from "./cache/session-defaults.js";
+import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
+import type { ToolResponse, ToolContentBlock } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -36,10 +42,8 @@ import { fillFormSchema, fillFormHandler } from "./tools/fill-form.js";
 import type { FillFormParams } from "./tools/fill-form.js";
 import { consoleLogsSchema, consoleLogsHandler } from "./tools/console-logs.js";
 import type { ConsoleLogsParams } from "./tools/console-logs.js";
-import type { ConsoleCollector } from "./cdp/console-collector.js";
 import { networkMonitorSchema, networkMonitorHandler } from "./tools/network-monitor.js";
 import type { NetworkMonitorParams } from "./tools/network-monitor.js";
-import type { NetworkCollector } from "./cdp/network-collector.js";
 import { configureSessionSchema, configureSessionHandler } from "./tools/configure-session.js";
 import type { ConfigureSessionParams } from "./tools/configure-session.js";
 import { pressKeySchema, pressKeyHandler } from "./tools/press-key.js";
@@ -48,8 +52,7 @@ import { scrollSchema, scrollHandler } from "./tools/scroll.js";
 import type { ScrollParams } from "./tools/scroll.js";
 import { observeSchema, observeHandler } from "./tools/observe.js";
 import type { ObserveParams } from "./tools/observe.js";
-import type { SessionDefaults } from "./cache/session-defaults.js";
-import { injectOverlay, updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
+import { updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
 import type { LicenseStatus } from "./license/license-status.js";
 import type { FreeTierConfig } from "./license/free-tier-config.js";
@@ -165,7 +168,6 @@ function jsonSchemaPropToZod(prop: Record<string, unknown>): z.ZodTypeAny {
 }
 
 export class ToolRegistry implements ToolRegistryPublic {
-  private _sessionId: string;
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
 
@@ -214,69 +216,168 @@ export class ToolRegistry implements ToolRegistryPublic {
     this._registerProToolDelegate(name, description, schema, handler);
   }
 
-  private _getConnectionStatus: (() => ConnectionStatus) | null = null;
-  private _sessionManager: SessionManager | undefined;
-  private _dialogHandler: DialogHandler | undefined;
   private _licenseStatus: LicenseStatus;
   private _freeTierConfig: FreeTierConfig;
-  private _consoleCollector: ConsoleCollector | undefined;
-  private _networkCollector: NetworkCollector | undefined;
-  private _sessionDefaults: SessionDefaults | undefined;
-  // Story 13a.2: Callback to wait for Accessibility.nodesUpdated event
-  private _waitForAXChange: ((timeoutMs: number) => Promise<boolean>) | null = null;
 
   // FR-H: Track whether the LLM has checked browser context before acting
   private _contextChecked = false;
 
+  private _browserSession!: IBrowserSession;
+  /** Legacy-constructor state pointer (test-only). Null in production. */
+  private _legacyState: { cdpClient: CdpClient; sessionId: string } | null = null;
+
+  /**
+   * Lazy-launch architecture: all CDP-level state lives inside the
+   * BrowserSession. The Registry holds only a reference and delegates
+   * `cdpClient`, `sessionId`, collectors, etc. via getters so that the
+   * internal wiring is automatically refreshed after a silent relaunch.
+   *
+   * ## Constructor overloads
+   *
+   * The primary signature takes an `IBrowserSession` — this is what
+   * `startServer()` uses in production.
+   *
+   * A legacy signature (2nd arg = `CdpClient`, followed by the old
+   * positional parameter list) is preserved for the registry test suite
+   * (~80 instantiations). When the 2nd argument is detected as a raw
+   * CdpClient, a synthetic `IBrowserSession` adapter is built internally
+   * from the legacy parameters. This keeps the test surface stable while
+   * still exercising the new wiring through the same constructor.
+   */
+  constructor(server: McpServer, browserSession: IBrowserSession, licenseStatus?: LicenseStatus, freeTierConfig?: FreeTierConfig);
   constructor(
-    private server: McpServer,
-    public cdpClient: CdpClient,
+    server: McpServer,
+    cdpClient: CdpClient,
     sessionId: string,
-    private _tabStateCache: TabStateCache,
-    getConnectionStatus?: () => ConnectionStatus,
+    tabStateCache: TabStateCache,
+    getConnectionStatus?: (() => unknown) | undefined,
     sessionManager?: SessionManager,
     dialogHandler?: DialogHandler,
     licenseStatus?: LicenseStatus,
     freeTierConfig?: FreeTierConfig,
     consoleCollector?: ConsoleCollector,
     networkCollector?: NetworkCollector,
-    sessionDefaults?: SessionDefaults,
+    sessionDefaults?: SessionDefaultsType,
+    waitForAXChange?: (timeoutMs: number) => Promise<boolean>,
+  );
+  constructor(
+    private server: McpServer,
+    browserSessionOrCdpClient: IBrowserSession | CdpClient,
+    sessionIdOrLicense?: string | LicenseStatus,
+    tabStateCacheOrFreeTier?: TabStateCache | FreeTierConfig,
+    _getConnectionStatus?: unknown,
+    sessionManager?: SessionManager,
+    dialogHandler?: DialogHandler,
+    licenseStatusLegacy?: LicenseStatus,
+    freeTierConfigLegacy?: FreeTierConfig,
+    consoleCollector?: ConsoleCollector,
+    networkCollector?: NetworkCollector,
+    sessionDefaults?: SessionDefaultsType,
     waitForAXChange?: (timeoutMs: number) => Promise<boolean>,
   ) {
-    this._sessionId = sessionId;
-    this._getConnectionStatus = getConnectionStatus ?? null;
-    this._sessionManager = sessionManager;
-    this._dialogHandler = dialogHandler;
-    this._licenseStatus = licenseStatus ?? new FreeTierLicenseStatus();
-    this._freeTierConfig = freeTierConfig ?? loadFreeTierConfig();
-    this._consoleCollector = consoleCollector;
-    this._networkCollector = networkCollector;
-    this._sessionDefaults = sessionDefaults;
-    this._waitForAXChange = waitForAXChange ?? null;
+    // Detect which constructor signature is being used: the new path
+    // passes an IBrowserSession (which has an `ensureReady` method);
+    // the legacy path passes a raw CdpClient.
+    const looksLikeSession = (v: unknown): v is IBrowserSession =>
+      !!v && typeof v === "object" && typeof (v as { ensureReady?: unknown }).ensureReady === "function";
+
+    if (looksLikeSession(browserSessionOrCdpClient)) {
+      // New signature: (server, session, licenseStatus?, freeTierConfig?)
+      this._browserSession = browserSessionOrCdpClient;
+      this._licenseStatus = (sessionIdOrLicense as LicenseStatus | undefined) ?? new FreeTierLicenseStatus();
+      this._freeTierConfig = (tabStateCacheOrFreeTier as FreeTierConfig | undefined) ?? loadFreeTierConfig();
+    } else {
+      // Legacy signature (test-only): synthesise an IBrowserSession from
+      // the old positional parameters. `ensureReady()` is a no-op so
+      // tests that provide a raw CdpClient do not trip over the
+      // lazy-launch gate.
+      const legacyCdpClient = browserSessionOrCdpClient as CdpClient;
+      const legacySessionId = (sessionIdOrLicense as string | undefined) ?? "test-session";
+      const legacyTabCache =
+        (tabStateCacheOrFreeTier as TabStateCache | undefined) ?? new TabStateCacheCtor({ ttlMs: 30_000 });
+      const legacySessionDefaults = sessionDefaults ?? new SessionDefaults();
+      // Mutable wrapper so `applyTabSwitch()` / legacy `updateClient()` can
+      // update the returned getters.
+      const legacyState = { cdpClient: legacyCdpClient, sessionId: legacySessionId };
+      this._legacyState = legacyState;
+      const session: IBrowserSession = {
+        isReady: true,
+        wasEverReady: true,
+        get cdpClient() { return legacyState.cdpClient; },
+        get sessionId() { return legacyState.sessionId; },
+        headless: false,
+        tabStateCache: legacyTabCache,
+        sessionDefaults: legacySessionDefaults,
+        sessionManager,
+        dialogHandler,
+        consoleCollector,
+        networkCollector,
+        domWatcher: undefined,
+        ensureReady: async () => { /* legacy: no-op */ },
+        consumeRelaunchNotice: () => null,
+        waitForAXChange: waitForAXChange ?? (async () => false),
+        applyTabSwitch: (newSessionId: string) => { legacyState.sessionId = newSessionId; },
+        shutdown: async () => { /* legacy: no-op */ },
+      };
+      this._browserSession = session;
+      this._licenseStatus = licenseStatusLegacy ?? new FreeTierLicenseStatus();
+      this._freeTierConfig = freeTierConfigLegacy ?? loadFreeTierConfig();
+    }
+  }
+
+  /** Lazy-resolved CdpClient — throws if ensureReady() has not run yet. */
+  get cdpClient(): CdpClient {
+    return this._browserSession.cdpClient;
   }
 
   get sessionId(): string {
-    return this._sessionId;
+    return this._browserSession.sessionId;
   }
 
   /** Story 16.4: Public getter fuer OOPIF SessionManager (ToolRegistryPublic). */
   get sessionManager(): SessionManager | undefined {
-    return this._sessionManager;
+    return this._browserSession.sessionManager;
   }
 
+  /** Access to the underlying BrowserSession (for server shutdown hooks). */
+  get browserSession(): IBrowserSession {
+    return this._browserSession;
+  }
+
+  // ── Legacy API (test-only, no-op in production) ─────────────────────
+  //
+  // These methods exist only because the registry test suite was written
+  // against the pre-lazy-launch API and exercises direct
+  // `updateClient()` / `updateSession()` / `connectionStatus` paths. In
+  // production every tool wrapper goes through `browserSession.ensureReady()`
+  // which handles reconnect internally, so these methods have no callers
+  // outside of tests.
+
+  /** @deprecated Test-only. In production BrowserSession manages sessions. */
   updateSession(sessionId: string): void {
-    this._sessionId = sessionId;
+    if (this._legacyState) {
+      this._legacyState.sessionId = sessionId;
+    } else {
+      this._browserSession.applyTabSwitch(sessionId);
+    }
   }
 
-  /** Swap the CDP client and session after a successful reconnect */
+  /** @deprecated Test-only. In production BrowserSession manages the client. */
   updateClient(cdpClient: CdpClient, sessionId: string): void {
-    this.cdpClient = cdpClient;
-    this._sessionId = sessionId;
+    if (this._legacyState) {
+      this._legacyState.cdpClient = cdpClient;
+      this._legacyState.sessionId = sessionId;
+    }
+    // Production path: BrowserSession re-wires itself on re-launch.
   }
 
-  /** Get current connection status (connected, reconnecting, disconnected) */
-  get connectionStatus(): ConnectionStatus {
-    return this._getConnectionStatus?.() ?? "connected";
+  /**
+   * @deprecated Test-only. Lazy-launch made the old "disconnected" state
+   * invisible to tools (ensureReady recovers it transparently). Kept as a
+   * constant "connected" for test compatibility.
+   */
+  get connectionStatus(): string {
+    return "connected";
   }
 
   async executeTool(name: string, params: Record<string, unknown>, sessionIdOverride?: string): Promise<ToolResponse> {
@@ -289,19 +390,38 @@ export class ToolRegistry implements ToolRegistryPublic {
         _meta: { elapsedMs: 0, method: name, response_bytes: Buffer.byteLength(JSON.stringify(content), 'utf8') },
       };
     }
+    // Lazy-launch: ensure Chrome is reachable before the handler runs.
+    // On a fresh session this triggers the first ChromeLauncher.connect().
+    // On an established session with a lost connection, BrowserSession
+    // runs its smart-retry policy. A hard launch failure propagates here
+    // so the caller can return a proper error to the LLM.
+    try {
+      await this._browserSession.ensureReady();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const errContent: ToolContentBlock[] = [
+        { type: "text", text: `Chrome ist nicht erreichbar: ${msg}. Pruefe ob Chrome installiert ist, oder starte Chrome manuell mit --remote-debugging-port=9222 und rufe das Tool erneut auf.` },
+      ];
+      return {
+        content: errContent,
+        isError: true,
+        _meta: { elapsedMs: 0, method: name, response_bytes: Buffer.byteLength(JSON.stringify(errContent), 'utf8') },
+      };
+    }
     // Story 7.3: Track call and resolve session defaults for run_plan path
     // Skip trackCall/resolveParams for meta-tools (H2 fix)
     let resolvedParams = params;
     let suggestionText: string | undefined;
-    if (this._sessionDefaults && name !== "configure_session") {
-      this._sessionDefaults.trackCall(name, params);
+    const sessionDefaults = this._browserSession.sessionDefaults;
+    if (sessionDefaults && name !== "configure_session") {
+      sessionDefaults.trackCall(name, params);
       // H1 fix: Read suggestions immediately after trackCall (atomic with tracking)
-      const suggestions = this._sessionDefaults.getSuggestions();
+      const suggestions = sessionDefaults.getSuggestions();
       if (suggestions.length > 0) {
         const s = suggestions[0];
         suggestionText = `${s.param} '${s.value}' wurde ${s.count}x verwendet — setze als Default mit configure_session`;
       }
-      resolvedParams = this._sessionDefaults.resolveParams(name, params);
+      resolvedParams = sessionDefaults.resolveParams(name, params);
     }
     // Story 16.5: enhanceTool hook (Operator/Human Touch) — Pro-Repo injiziert
     // Callback-Funktionen (z.B. humanMouseMove) in params. Sync-Hook, kein await.
@@ -314,6 +434,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     }
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
+    this._injectRelaunchNotice(result);
     // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
     await this._runOnToolResultHook(result, name);
     // Story 7.3: Inject auto-promote suggestion into _meta
@@ -331,6 +452,19 @@ export class ToolRegistry implements ToolRegistryPublic {
       }
     }
     return result;
+  }
+
+  /**
+   * Inject the one-shot "we just silently relaunched Chrome" notice into
+   * any tool response. The BrowserSession sets this flag after a failed
+   * reconnect triggered a fresh launch, and we consume it here so the LLM
+   * finds out via the next tool result (without spammy repetition).
+   */
+  private _injectRelaunchNotice(result: ToolResponse): void {
+    const notice = this._browserSession.consumeRelaunchNotice();
+    if (notice) {
+      result.content.push({ type: "text", text: notice });
+    }
   }
 
   /**
@@ -396,10 +530,10 @@ export class ToolRegistry implements ToolRegistryPublic {
     const enhanced = await hooks.onToolResult(name, result, {
       a11yTree: a11yTreeFacade,
       a11yTreeDiffs: A11yTreeProcessor,
-      waitForAXChange: this._waitForAXChange ?? undefined,
-      cdpClient: this.cdpClient,
-      sessionId: this._sessionId,
-      sessionManager: this._sessionManager,
+      waitForAXChange: (ms: number) => this._browserSession.waitForAXChange(ms),
+      cdpClient: this._browserSession.cdpClient,
+      sessionId: this._browserSession.sessionId,
+      sessionManager: this._browserSession.sessionManager,
     });
 
     // Merge enhanced fields into the original result object so the `_meta`
@@ -417,7 +551,7 @@ export class ToolRegistry implements ToolRegistryPublic {
    * Called from both executeTool() (run_plan path) and server.tool() callbacks (direct MCP path).
    */
   private _injectDialogNotifications(result: ToolResponse): void {
-    const dialogs = this._dialogHandler?.consumeNotifications();
+    const dialogs = this._browserSession.dialogHandler?.consumeNotifications();
     if (dialogs && dialogs.length > 0) {
       const dialogText = dialogs
         .map((d) => `[dialog] ${d.type}: "${d.message}"`)
@@ -494,7 +628,33 @@ export class ToolRegistry implements ToolRegistryPublic {
     // injection so that pending dialogs reach the LLM regardless of call path
     // (direct MCP call vs executeTool/run_plan).
     // Story 7.3: Extended wrap to include session defaults tracking, resolution, and suggestion injection.
-    const sessionDefaults = this._sessionDefaults;
+    // Lazy-launch: Additionally, every wrapped tool call starts with
+    // `await this._browserSession.ensureReady()` — this triggers the Chrome
+    // launch on the very first tool call and handles silent re-launch after
+    // connection loss, all transparent to the individual tool handler.
+    const browserSession = this._browserSession;
+    const injectRelaunchNotice = (result: ToolResponse): void => {
+      const notice = browserSession.consumeRelaunchNotice();
+      if (notice) {
+        result.content.push({ type: "text", text: notice });
+      }
+    };
+    // Build a friendly launch-failure response so the LLM can react instead
+    // of seeing an opaque exception in the MCP transport layer.
+    const buildLaunchFailureResponse = (name: string, err: unknown): ToolResponse => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const text = `Chrome ist nicht erreichbar: ${msg}. Pruefe ob Chrome installiert ist, oder starte Chrome manuell mit --remote-debugging-port=9222 und rufe das Tool erneut auf.`;
+      const content: ToolContentBlock[] = [{ type: "text", text }];
+      return {
+        content,
+        isError: true,
+        _meta: {
+          elapsedMs: 0,
+          method: name,
+          response_bytes: Buffer.byteLength(JSON.stringify(content), "utf8"),
+        },
+      };
+    };
     // Story 12.1: Helper to inject response_bytes into _meta
     // Story 12.2: Also injects estimated_tokens for read_page and dom_snapshot
     const injectResponseBytes = (result: ToolResponse): void => {
@@ -510,52 +670,30 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     // Session overlay: show status before tool, clear after (with elapsed time)
     const overlayBefore = async (name: string) => {
-      await updateOverlayStatus(this.cdpClient, this._sessionId, getToolLabel(name));
+      await updateOverlayStatus(browserSession.cdpClient, browserSession.sessionId, getToolLabel(name));
     };
     const overlayAfter = async (elapsedMs?: number, meta?: Record<string, unknown>) => {
       if (elapsedMs !== undefined && elapsedMs > 0) setLastElapsed(elapsedMs);
       // Show click indicator at click position
       if (meta?.clickX !== undefined && meta?.clickY !== undefined) {
-        showClickIndicator(this.cdpClient, this._sessionId, meta.clickX as number, meta.clickY as number);
+        showClickIndicator(browserSession.cdpClient, browserSession.sessionId, meta.clickX as number, meta.clickY as number);
       }
-      await updateOverlayStatus(this.cdpClient, this._sessionId, "");
+      await updateOverlayStatus(browserSession.cdpClient, browserSession.sessionId, "");
     };
 
     const wrap = <T>(fn: (params: T) => Promise<ToolResponse>, toolName?: string) => {
       const dialogWrapped = this._wrapWithDialogInjection(fn);
-      if (!sessionDefaults) {
-        // Story 12.1: Inject response_bytes even without sessionDefaults
-        return async (params: T): Promise<ToolResponse> => {
-          const name = toolName ?? "unknown";
-          await overlayBefore(name);
-          let elapsed: number | undefined;
-          let meta: Record<string, unknown> | undefined;
-          try {
-            // Story 16.5: enhanceTool hook (Operator/Human Touch) — Pro-Repo
-            // injiziert Callback-Funktionen in params. Sync-Hook.
-            let effectiveParams = params;
-            const enhanceHooks = getProHooks();
-            const enhanced = enhanceHooks.enhanceTool?.(
-              name,
-              params as unknown as Record<string, unknown>,
-            );
-            if (enhanced) {
-              effectiveParams = enhanced as unknown as T;
-            }
-            const result = await dialogWrapped(effectiveParams);
-            elapsed = result._meta?.elapsedMs as number | undefined;
-            meta = result._meta as Record<string, unknown> | undefined;
-            // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
-            await this._runOnToolResultHook(result, name);
-            injectResponseBytes(result);
-            return result;
-          } finally {
-            await overlayAfter(elapsed, meta);
-          }
-        };
-      }
       return async (params: T): Promise<ToolResponse> => {
         const name = toolName ?? "unknown";
+        // Lazy-launch gate — triggers Chrome boot on first call, and handles
+        // silent reconnect after established-session drops.
+        try {
+          await browserSession.ensureReady();
+        } catch (err) {
+          return buildLaunchFailureResponse(name, err);
+        }
+
+        const sessionDefaults = browserSession.sessionDefaults;
         await overlayBefore(name);
         let elapsed: number | undefined;
         let meta: Record<string, unknown> | undefined;
@@ -564,6 +702,7 @@ export class ToolRegistry implements ToolRegistryPublic {
           if (name === "configure_session") {
             const result = await dialogWrapped(params);
             injectResponseBytes(result);
+            injectRelaunchNotice(result);
             return result;
           }
           // Track call for auto-promote analysis
@@ -604,6 +743,7 @@ export class ToolRegistry implements ToolRegistryPublic {
               result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
             }
           }
+          injectRelaunchNotice(result);
           elapsed = result._meta?.elapsedMs as number | undefined;
           meta = result._meta as Record<string, unknown> | undefined;
           return result;
@@ -662,8 +802,8 @@ export class ToolRegistry implements ToolRegistryPublic {
           params as unknown as VirtualDeskParams,
           this.cdpClient,
           this.sessionId,
-          this._tabStateCache,
-          this.connectionStatus,
+          this._browserSession.tabStateCache,
+          undefined /* connectionStatus removed in lazy-launch refactor */,
         );
       }, finalHooks), "virtual_desk"),
     );
@@ -679,7 +819,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         max_tokens: readPageSchema.shape.max_tokens,
       },
       wrap(async (params) => {
-        return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "read_page"),
     );
 
@@ -695,7 +835,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         y: clickSchema.shape.y,
       },
       wrap(async (params) => {
-        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "click"),
     );
 
@@ -709,7 +849,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         clear: typeSchema.shape.clear,
       },
       wrap(async (params) => {
-        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "type"),
     );
 
@@ -725,7 +865,7 @@ export class ToolRegistry implements ToolRegistryPublic {
           params as unknown as FillFormParams,
           this.cdpClient,
           this.sessionId,
-          this._sessionManager,
+          this._browserSession.sessionManager,
         );
       }, "fill_form"),
     );
@@ -741,7 +881,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         modifiers: pressKeySchema.shape.modifiers,
       },
       wrap(async (params) => {
-        return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "press_key"),
     );
 
@@ -758,7 +898,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         amount: scrollSchema.shape.amount,
       },
       wrap(async (params) => {
-        return scrollHandler(params as unknown as ScrollParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return scrollHandler(params as unknown as ScrollParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "scroll"),
     );
 
@@ -780,8 +920,8 @@ export class ToolRegistry implements ToolRegistryPublic {
             {} as VirtualDeskParams,
             this.cdpClient,
             this.sessionId,
-            this._tabStateCache,
-            this.connectionStatus,
+            this._browserSession.tabStateCache,
+            undefined /* connectionStatus removed in lazy-launch refactor */,
           );
           const tabList = vdResult.content?.[0]?.type === "text" ? vdResult.content[0].text : "";
           return {
@@ -806,11 +946,11 @@ export class ToolRegistry implements ToolRegistryPublic {
           params as unknown as SwitchTabParams,
           this.cdpClient,
           this.sessionId,
-          this._tabStateCache,
+          this._browserSession.tabStateCache,
           (newSessionId) => {
-            this.updateSession(newSessionId);
+            this._browserSession.applyTabSwitch(newSessionId);
           },
-          this._sessionManager,
+          this._browserSession.sessionManager,
         );
       }, finalHooks), "switch_tab"),
     );
@@ -825,8 +965,8 @@ export class ToolRegistry implements ToolRegistryPublic {
           params as unknown as TabStatusParams,
           this.cdpClient,
           this.sessionId,
-          this._tabStateCache,
-          this.connectionStatus,
+          this._browserSession.tabStateCache,
+          undefined /* connectionStatus removed in lazy-launch refactor */,
         );
       }, "tab_status"),
     );
@@ -861,7 +1001,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         timeout: observeSchema.shape.timeout,
       },
       wrap(async (params) => {
-        return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "observe"),
     );
 
@@ -875,7 +1015,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       },
       wrap(async (params) => {
         // Check for minimized window before taking screenshot
-        const activeTarget = this._tabStateCache.activeTargetId;
+        const activeTarget = this._browserSession.tabStateCache.activeTargetId;
         if (activeTarget) {
           try {
             const { bounds } = await this.cdpClient.send<{ windowId: number; bounds: { windowState: string } }>(
@@ -893,7 +1033,7 @@ export class ToolRegistry implements ToolRegistryPublic {
             /* best-effort — proceed with screenshot */
           }
         }
-        const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+        const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
         // Preventive hint: screenshots cannot drive click/type — steer back to read_page
         if (!result.isError && result.content?.length > 0) {
           const somHint = (params as unknown as ScreenshotParams).som
@@ -912,14 +1052,14 @@ export class ToolRegistry implements ToolRegistryPublic {
         ref: domSnapshotSchema.shape.ref,
       },
       wrap(this.wrapWithGate("dom_snapshot", async (params) => {
-        return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+        return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, finalHooks), "dom_snapshot"),
     );
 
     // --- 7. Special interactions (handle_dialog/file_upload) ---
     // Story 6.1: handle_dialog — configure dialog handling before triggering actions
     // H3 fix: Route through wrap for default-resolution and suggestion-injection
-    if (this._dialogHandler) {
+    if (this._browserSession.dialogHandler) {
       this.server.tool(
         "handle_dialog",
         "Configure how the browser handles JavaScript dialogs (alerts, confirms, prompts). Pre-configure before triggering actions, or check dialog status.",
@@ -928,7 +1068,7 @@ export class ToolRegistry implements ToolRegistryPublic {
           text: handleDialogSchema.shape.text,
         },
         wrap(async (params) => {
-          return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
+          return handleDialogHandler(params as unknown as HandleDialogParams, this._browserSession.dialogHandler!);
         }, "handle_dialog"),
       );
     }
@@ -947,14 +1087,14 @@ export class ToolRegistry implements ToolRegistryPublic {
           params as unknown as FileUploadParams,
           this.cdpClient,
           this.sessionId,
-          this._sessionManager,
+          this._browserSession.sessionManager,
         );
       }, "file_upload"),
     );
 
     // --- 8. Debugging (console_logs/network_monitor) ---
     // Story 7.1: console_logs — retrieve and filter console output
-    if (this._consoleCollector) {
+    if (this._browserSession.consoleCollector) {
       this.server.tool(
         "console_logs",
         "Retrieve collected browser console logs. Filter by level (info/warning/error/debug) and/or regex pattern. Optionally clear the buffer after reading.",
@@ -964,13 +1104,13 @@ export class ToolRegistry implements ToolRegistryPublic {
           clear: consoleLogsSchema.shape.clear,
         },
         wrap(async (params) => {
-          return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._consoleCollector!);
+          return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._browserSession.consoleCollector!);
         }, "console_logs"),
       );
     }
 
     // Story 7.2: network_monitor — start/stop/get network request monitoring
-    if (this._networkCollector) {
+    if (this._browserSession.networkCollector) {
       this.server.tool(
         "network_monitor",
         "Monitor network requests: start recording, retrieve recorded requests (with optional filter/pattern), or stop and return all collected data.",
@@ -980,14 +1120,14 @@ export class ToolRegistry implements ToolRegistryPublic {
           pattern: networkMonitorSchema.shape.pattern,
         },
         wrap(async (params) => {
-          return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._networkCollector!);
+          return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._browserSession.networkCollector!);
         }, "network_monitor"),
       );
     }
 
     // --- 9. Meta (configure_session/run_plan) ---
     // Story 7.3: configure_session — set session defaults and auto-promote
-    if (this._sessionDefaults) {
+    if (this._browserSession.sessionDefaults) {
       this.server.tool(
         "configure_session",
         "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions.",
@@ -996,7 +1136,7 @@ export class ToolRegistry implements ToolRegistryPublic {
           autoPromote: configureSessionSchema.shape.autoPromote,
         },
         wrap(async (params) => {
-          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
+          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._browserSession.sessionDefaults!);
         }, "configure_session"),
       );
     }
@@ -1013,8 +1153,8 @@ export class ToolRegistry implements ToolRegistryPublic {
       wrap(async (params) => {
         const result = await runPlanHandler(params as unknown as RunPlanParams, this, {
           cdpClient: this.cdpClient,
-          sessionId: this._sessionId,
-          sessionManager: this._sessionManager,
+          sessionId: this._browserSession.sessionId,
+          sessionManager: this._browserSession.sessionManager,
         }, this.planStateStore, this._licenseStatus, this._freeTierConfig);
         // Convert SuspendedPlanResponse to ToolResponse for MCP transport
         if ("status" in result && (result as { status: string }).status === "suspended") {
@@ -1066,30 +1206,30 @@ export class ToolRegistry implements ToolRegistryPublic {
       return navigateHandler(params as unknown as NavigateParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
     this._handlers.set("read_page", async (params, sessionIdOverride?) => {
-      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("screenshot", async (params, sessionIdOverride?) => {
-      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("wait_for", async (params, sessionIdOverride?) => {
       return waitForHandler(params as unknown as WaitForParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
     this._handlers.set("observe", async (params, sessionIdOverride?) => {
-      return observeHandler(params as unknown as ObserveParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return observeHandler(params as unknown as ObserveParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("click", async (params, sessionIdOverride?) => {
-      return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return clickHandler(params as unknown as ClickParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("type", async (params, sessionIdOverride?) => {
-      return typeHandler(params as unknown as TypeParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return typeHandler(params as unknown as TypeParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("tab_status", async (params, sessionIdOverride?) => {
       return tabStatusHandler(
         params as unknown as TabStatusParams,
         this.cdpClient,
         sessionIdOverride ?? this.sessionId,
-        this._tabStateCache,
-        this.connectionStatus,
+        this._browserSession.tabStateCache,
+        undefined /* connectionStatus removed in lazy-launch refactor */,
       );
     });
     this._handlers.set("switch_tab", async (params, sessionIdOverride?) => {
@@ -1113,11 +1253,11 @@ export class ToolRegistry implements ToolRegistryPublic {
         params as unknown as SwitchTabParams,
         this.cdpClient,
         this.sessionId,
-        this._tabStateCache,
+        this._browserSession.tabStateCache,
         (newSessionId) => {
-          this.updateSession(newSessionId);
+          this._browserSession.applyTabSwitch(newSessionId);
         },
-        this._sessionManager,
+        this._browserSession.sessionManager,
       );
     });
     this._handlers.set("virtual_desk", async (params, sessionIdOverride?) => {
@@ -1133,8 +1273,8 @@ export class ToolRegistry implements ToolRegistryPublic {
         params as unknown as VirtualDeskParams,
         this.cdpClient,
         sessionIdOverride ?? this.sessionId,
-        this._tabStateCache,
-        this.connectionStatus,
+        this._browserSession.tabStateCache,
+        undefined /* connectionStatus removed in lazy-launch refactor */,
       );
     });
     this._handlers.set("dom_snapshot", async (params, sessionIdOverride?) => {
@@ -1146,12 +1286,12 @@ export class ToolRegistry implements ToolRegistryPublic {
         }
         return proFeatureError("dom_snapshot");
       }
-      return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._sessionManager);
+      return domSnapshotHandler(params as unknown as DomSnapshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
-    if (this._dialogHandler) {
+    if (this._browserSession.dialogHandler) {
       this._handlers.set("handle_dialog", async (params, _sessionIdOverride?) => {
         // C2 fix: accept sessionIdOverride for parallel-context compatibility
-        return handleDialogHandler(params as unknown as HandleDialogParams, this._dialogHandler!);
+        return handleDialogHandler(params as unknown as HandleDialogParams, this._browserSession.dialogHandler!);
       });
     }
     this._handlers.set("file_upload", async (params, sessionIdOverride?) => {
@@ -1159,7 +1299,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         params as unknown as FileUploadParams,
         this.cdpClient,
         sessionIdOverride ?? this.sessionId,
-        this._sessionManager,
+        this._browserSession.sessionManager,
       );
     });
     this._handlers.set("fill_form", async (params, sessionIdOverride?) => {
@@ -1167,22 +1307,22 @@ export class ToolRegistry implements ToolRegistryPublic {
         params as unknown as FillFormParams,
         this.cdpClient,
         sessionIdOverride ?? this.sessionId,
-        this._sessionManager,
+        this._browserSession.sessionManager,
       );
     });
-    if (this._consoleCollector) {
+    if (this._browserSession.consoleCollector) {
       this._handlers.set("console_logs", async (params) => {
-        return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._consoleCollector!);
+        return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._browserSession.consoleCollector!);
       });
     }
-    if (this._networkCollector) {
+    if (this._browserSession.networkCollector) {
       this._handlers.set("network_monitor", async (params) => {
-        return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._networkCollector!);
+        return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._browserSession.networkCollector!);
       });
     }
-    if (this._sessionDefaults) {
+    if (this._browserSession.sessionDefaults) {
       this._handlers.set("configure_session", async (params) => {
-        return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
+        return configureSessionHandler(params as unknown as ConfigureSessionParams, this._browserSession.sessionDefaults!);
       });
     }
 

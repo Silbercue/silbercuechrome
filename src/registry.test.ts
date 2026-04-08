@@ -33,10 +33,15 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    // Story 15.2: 17 Free-Tools. `inspect_element` is Pro-only and is
-    // only registered when the Pro-Repo calls `registerProTools` — no
-    // stub fallback in the Free tier.
-    expect(toolFn).toHaveBeenCalledTimes(17);
+    // Story 15.2: 17 Free-Tools + configure_session = 18. `inspect_element`
+    // is Pro-only and is only registered when the Pro-Repo calls
+    // `registerProTools` — no stub fallback in the Free tier.
+    //
+    // Lazy-launch refactor: configure_session is now ALWAYS registered
+    // because BrowserSession always provides a SessionDefaults instance
+    // (previously the registration was gated on an optional constructor
+    // parameter that most tests didn't pass).
+    expect(toolFn).toHaveBeenCalledTimes(18);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad use: automatic recovery after a click\/type\/fill_form failure/s),
@@ -269,22 +274,23 @@ describe("ToolRegistry", () => {
     expect((newClient as { send: ReturnType<typeof vi.fn> }).send).toHaveBeenCalled();
   });
 
-  it("connectionStatus returns status from callback", () => {
+  // Legacy connectionStatus accessor: in the lazy-launch architecture
+  // the old "reconnecting" / "disconnected" states are no longer surfaced
+  // to tools — BrowserSession.ensureReady() handles reconnect transparently.
+  // The getter is kept as a constant "connected" for test compatibility.
+  it("connectionStatus is a constant 'connected' in the lazy-launch architecture", () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
-    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never, () => "reconnecting");
+    // Even when a legacy getConnectionStatus callback is passed, the new
+    // registry ignores it — the lazy-launch gate owns reconnect semantics.
+    const registryWithCallback = new ToolRegistry(
+      mockServer, {} as never, "session-1", {} as never, () => "reconnecting",
+    );
+    expect(registryWithCallback.connectionStatus).toBe("connected");
 
-    expect(registry.connectionStatus).toBe("reconnecting");
-  });
-
-  it("connectionStatus defaults to connected when no callback", () => {
-    const toolFn = vi.fn();
-    const mockServer = { tool: toolFn } as never;
-
-    const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
-
-    expect(registry.connectionStatus).toBe("connected");
+    const registryNoCallback = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
+    expect(registryNoCallback.connectionStatus).toBe("connected");
   });
 
   // --- Story 6.1: Dialog notification injection tests (C1) ---
@@ -2054,7 +2060,12 @@ describe("ToolRegistry", () => {
       expect(calledCtx.a11yTree.diffSnapshots).toBe(A11yTreeProcessor.diffSnapshots);
       expect(calledCtx.a11yTree.formatDomDiff).toBe(A11yTreeProcessor.formatDomDiff);
       expect(calledCtx.a11yTreeDiffs).toBe(A11yTreeProcessor);
-      expect(calledCtx.waitForAXChange).toBe(waitForAXChange);
+      // waitForAXChange is now passed through a thin wrapper that forwards
+      // to BrowserSession — the hook receives a fresh callable that must
+      // still delegate to the original spy.
+      expect(typeof calledCtx.waitForAXChange).toBe("function");
+      await calledCtx.waitForAXChange(123);
+      expect(waitForAXChange).toHaveBeenCalledWith(123);
       expect(calledCtx.cdpClient).toBe(mockCdpClient);
       expect(calledCtx.sessionId).toBe("session-1");
       expect(calledCtx.sessionManager).toBeUndefined();
