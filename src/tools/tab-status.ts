@@ -16,13 +16,30 @@ export async function tabStatusHandler(
 ): Promise<ToolResponse> {
   const start = performance.now();
 
-  // If disconnected or reconnecting, report status immediately
+  // If disconnected or reconnecting, report status with actionable hint.
+  // BUG: Previously this returned a single non-actionable line
+  // ("Connection: disconnected — tool calls may fail until reconnected").
+  // An LLM agent had no way to distinguish a transient dropout from a
+  // permanently-lost Chrome, and no guidance on what to do next. Now we
+  // emit a multi-line text block with Reason + Hint for each sub-state.
   if (connectionStatus && connectionStatus !== "connected") {
     const elapsedMs = Math.round(performance.now() - start);
+    const lines = [`Connection: ${connectionStatus}`];
+    if (connectionStatus === "reconnecting") {
+      lines.push(
+        "Reason: CDP transport dropped — automatic reconnect in progress (up to 5 attempts with exponential backoff).",
+        "Hint: Wait ~2-3 seconds and retry this call. No manual action needed; if reconnect succeeds, subsequent calls return to normal.",
+      );
+    } else {
+      lines.push(
+        "Reason: Chrome was closed or crashed and all automatic reconnect attempts failed. The MCP server can no longer reach Chrome via CDP.",
+        "Hint: Restart the MCP server (or your Claude Code session) so SilbercueChrome can auto-launch a fresh Chrome. Alternatively, start Chrome yourself with --remote-debugging-port=9222 before restarting. Auto-launch only runs at server startup — calling navigate/switch_tab now will not recover the connection.",
+      );
+    }
     return {
-      content: [{ type: "text", text: `Connection: ${connectionStatus} — tool calls may fail until reconnected` }],
+      content: [{ type: "text", text: lines.join("\n") }],
       isError: true,
-      _meta: { elapsedMs, method: "tab_status" },
+      _meta: { elapsedMs, method: "tab_status", connectionStatus },
     };
   }
 

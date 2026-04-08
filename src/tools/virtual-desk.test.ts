@@ -305,27 +305,38 @@ describe("virtualDeskHandler", () => {
     expect(result._meta?.method).toBe("virtual_desk");
   });
 
-  it("shows connection status when disconnected", async () => {
+  it("returns structured, actionable message when disconnected", async () => {
     const cdp = createMockCdp();
     const cache = new TabStateCache({ ttlMs: 30_000 });
 
     const result = await virtualDeskHandler({}, cdp, undefined, cache, "disconnected");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Connection: disconnected");
-    expect(result.content[0].text).toContain("tool calls may fail");
+    const text = result.content[0].text;
+    expect(text).toContain("Connection: disconnected");
+    expect(text).toMatch(/Reason:.*Chrome/i);
+    expect(text).toMatch(/reconnect/i);
+    expect(text).toMatch(/Hint:/);
+    expect(text).toMatch(/restart/i);
+    expect(text).toMatch(/auto-launch only runs at server startup/i);
     expect(result._meta?.method).toBe("virtual_desk");
+    expect(result._meta?.connectionStatus).toBe("disconnected");
   });
 
-  it("shows connection status when reconnecting", async () => {
+  it("returns wait-and-retry hint when reconnecting", async () => {
     const cdp = createMockCdp();
     const cache = new TabStateCache({ ttlMs: 30_000 });
 
     const result = await virtualDeskHandler({}, cdp, undefined, cache, "reconnecting");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Connection: reconnecting");
+    const text = result.content[0].text;
+    expect(text).toContain("Connection: reconnecting");
+    expect(text).toMatch(/Reason:.*reconnect/i);
+    expect(text).toMatch(/Hint:.*(wait|retry)/i);
+    expect(text).not.toMatch(/restart the MCP server/i);
     expect(result._meta?.method).toBe("virtual_desk");
+    expect(result._meta?.connectionStatus).toBe("reconnecting");
   });
 
   it("returns friendly error when CDP connection is lost", async () => {

@@ -138,7 +138,7 @@ describe("tabStatusHandler", () => {
     expect(errorLine!.length).toBe(4 + 200);
   });
 
-  it("shows connection status when disconnected", async () => {
+  it("returns structured, actionable message when disconnected", async () => {
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("tab1");
     const cdp = createMockCdp();
@@ -146,12 +146,23 @@ describe("tabStatusHandler", () => {
     const result = await tabStatusHandler({}, cdp, "s1", cache, "disconnected");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Connection: disconnected");
-    expect(result.content[0].text).toContain("tool calls may fail");
+    const text = result.content[0].text;
+    // Status line
+    expect(text).toContain("Connection: disconnected");
+    // Reason explains why (Chrome lost + reconnect exhausted)
+    expect(text).toMatch(/Reason:.*Chrome/i);
+    expect(text).toMatch(/reconnect/i);
+    // Hint is actionable — must tell the LLM to restart the MCP server
+    expect(text).toMatch(/Hint:/);
+    expect(text).toMatch(/restart/i);
+    // Must NOT suggest that navigate will auto-launch (auto-launch only runs at startup)
+    expect(text).toMatch(/auto-launch only runs at server startup/i);
+    // Structured _meta for programmatic consumers
     expect(result._meta?.method).toBe("tab_status");
+    expect(result._meta?.connectionStatus).toBe("disconnected");
   });
 
-  it("shows connection status when reconnecting", async () => {
+  it("returns wait-and-retry hint when reconnecting", async () => {
     const cache = new TabStateCache({ ttlMs: 30_000 });
     cache.setActiveTarget("tab1");
     const cdp = createMockCdp();
@@ -159,8 +170,14 @@ describe("tabStatusHandler", () => {
     const result = await tabStatusHandler({}, cdp, "s1", cache, "reconnecting");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("Connection: reconnecting");
+    const text = result.content[0].text;
+    expect(text).toContain("Connection: reconnecting");
+    expect(text).toMatch(/Reason:.*reconnect/i);
+    // Reconnecting is transient — hint says wait & retry, NOT restart
+    expect(text).toMatch(/Hint:.*(wait|retry)/i);
+    expect(text).not.toMatch(/restart the MCP server/i);
     expect(result._meta?.method).toBe("tab_status");
+    expect(result._meta?.connectionStatus).toBe("reconnecting");
   });
 
   it("_meta includes elapsedMs and method", async () => {
