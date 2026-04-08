@@ -1,8 +1,14 @@
 {
-  "name": "@silbercuechrome/mcp",
-  "version": "0.1.0",
+  "name": "@silbercue/chrome",
+  "version": "0.2.0",
   "description": "SilbercueChrome MCP Server — Chrome browser automation via CDP",
   "type": "module",
+  "files": [
+    "build/",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
   "bin": {
     "silbercuechrome": "./build/index.js"
   },
