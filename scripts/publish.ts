@@ -27,7 +27,7 @@ const __dirname = dirname(__filename);
 export const CONFIG = {
   FREE_REPO: resolve(__dirname, ".."),
   PRO_REPO: resolve(__dirname, "../../silbercuechrome-pro"),
-  NPM_PACKAGE: "@silbercuechrome/mcp",
+  NPM_PACKAGE: "@silbercue/chrome",
   GITHUB_REPO_FREE: "Silbercue/SilbercueChrome",
   GITHUB_REPO_PRO: "Silbercue/SilbercueChromePro",
   /**

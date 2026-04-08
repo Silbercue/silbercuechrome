@@ -101,7 +101,7 @@ export function readPackageVersion(currentFileUrl: string): { name: string; vers
         const raw = fs.readFileSync(candidate, "utf-8");
         const pkg = JSON.parse(raw) as { name?: string; version?: string };
         return {
-          name: pkg.name ?? "@silbercuechrome/mcp",
+          name: pkg.name ?? "@silbercue/chrome",
           version: pkg.version ?? "0.0.0",
         };
       }
@@ -112,7 +112,7 @@ export function readPackageVersion(currentFileUrl: string): { name: string; vers
   } catch {
     // Fall through to fallback below.
   }
-  return { name: "@silbercuechrome/mcp", version: "0.0.0" };
+  return { name: "@silbercue/chrome", version: "0.0.0" };
 }
 
 /** Shape der Free-Tier Cache-Datei (read-only fuer status). */
@@ -187,7 +187,7 @@ export async function dispatchTopLevelCli(
       if (cache && cache.valid) {
         console.log("");
         console.log("A license cache was found, but license validation requires");
-        console.log("the Pro tier. Install @silbercuechrome/mcp-pro to activate.");
+        console.log("the Pro tier. Install @silbercue/chrome-pro to activate.");
       }
       console.log("");
       console.log(`Upgrade to Pro: ${UPGRADE_URL}`);
@@ -199,7 +199,7 @@ export async function dispatchTopLevelCli(
       console.log("License activation requires the Pro tier.");
       console.log("");
       console.log("Install SilbercueChrome Pro to validate license keys:");
-      console.log("  npm install -g @silbercuechrome/mcp-pro");
+      console.log("  npm install -g @silbercue/chrome-pro");
       console.log("");
       console.log(`More info: ${UPGRADE_URL}`);
       process.exit(1);
@@ -210,7 +210,7 @@ export async function dispatchTopLevelCli(
       console.log("License deactivation requires the Pro tier.");
       console.log("");
       console.log("Install SilbercueChrome Pro to manage license keys:");
-      console.log("  npm install -g @silbercuechrome/mcp-pro");
+      console.log("  npm install -g @silbercue/chrome-pro");
       console.log("");
       console.log(`More info: ${UPGRADE_URL}`);
       process.exit(1);

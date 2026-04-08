@@ -36,11 +36,11 @@ const isSeaBuild = (() => {
 // Build-time-Konstante fuer den Package-Name (vom esbuild --define injiziert
 // im SEA-Bundle). Wird genutzt um zu erkennen, ob das Free-Repo gerade als
 // EIGENE SEA-Binary laeuft (Free-Bundle) oder als Library in einem Fremd-
-// bundle (z.B. Pro-Bundle, das `startServer` aus `@silbercuechrome/mcp`
+// bundle (z.B. Pro-Bundle, das `startServer` aus `@silbercue/chrome`
 // importiert). Im Source-Mode ist die Konstante nicht definiert.
 declare const __SCC_NAME__: string;
 
-const FREE_PACKAGE_NAME = "@silbercuechrome/mcp";
+const FREE_PACKAGE_NAME = "@silbercue/chrome";
 
 // Nur als CLI ausfuehren, wenn die Datei direkt gestartet wurde
 // (nicht wenn sie als Library importiert wird — z.B. vom Pro-Repo).
@@ -48,7 +48,7 @@ const FREE_PACKAGE_NAME = "@silbercuechrome/mcp";
 const isMainModule = (() => {
   if (isSeaBuild) {
     // Im SEA-Bundle: Wenn ein Build-Time-Marker gesetzt ist, der NICHT auf
-    // das Free-Package zeigt (z.B. "@silbercuechrome/mcp-pro"), dann sind
+    // das Free-Package zeigt (z.B. "@silbercue/chrome-pro"), dann sind
     // wir nur eine ein-gebundelte Library — NICHT der Entry-Point.
     if (typeof __SCC_NAME__ === "string" && __SCC_NAME__ !== "" && __SCC_NAME__ !== FREE_PACKAGE_NAME) {
       return false;

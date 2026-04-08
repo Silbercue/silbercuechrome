@@ -10,7 +10,7 @@
  *
  * UNTERSCHIEDE zur Free-Variante (siehe Story 16.7 Task 4):
  *   1. `cwd` zeigt auf das Pro-Repo (silbercuechrome-pro), damit
- *      `node_modules/@silbercuechrome/mcp` per `file:`-Dependency aufloest.
+ *      `node_modules/@silbercue/chrome` per `file:`-Dependency aufloest.
  *   2. `args` zeigt auf `build/index.js` im Pro-Repo (relative path).
  *
  * SEMANTISCH INVERTIERTE ASSERTS gegenueber der Free-Variante:

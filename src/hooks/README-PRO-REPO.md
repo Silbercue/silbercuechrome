@@ -3,7 +3,7 @@
 ## Uebersicht
 
 Das Pro-Repo (`silbercuechrome-pro`) erweitert den Free-Tier-Code mit Pro-Features.
-Es importiert `@silbercuechrome/mcp` als Dependency und registriert Pro-Implementierungen
+Es importiert `@silbercue/chrome` als Dependency und registriert Pro-Implementierungen
 ueber das Hook-System.
 
 ## Pro-Repo Struktur
@@ -23,14 +23,14 @@ silbercuechrome-pro/
 
 ```json
 {
-  "name": "@silbercuechrome/mcp-pro",
+  "name": "@silbercue/chrome-pro",
   "type": "module",
   "main": "./build/index.js",
   "bin": {
     "silbercuechrome-pro": "./build/index.js"
   },
   "dependencies": {
-    "@silbercuechrome/mcp": "file:../silbercuechrome"
+    "@silbercue/chrome": "file:../silbercuechrome"
   }
 }
 ```
@@ -59,8 +59,8 @@ Nach npm-Publish kann `file:../silbercuechrome` durch eine Versionsreferenz erse
 
 ```typescript
 #!/usr/bin/env node
-import { registerProHooks } from "@silbercuechrome/mcp/hooks";
-import { startServer } from "@silbercuechrome/mcp";
+import { registerProHooks } from "@silbercue/chrome/hooks";
+import { startServer } from "@silbercue/chrome";
 
 // Register Pro-Feature-Implementierungen VOR startServer()
 registerProHooks({
@@ -113,7 +113,7 @@ startServer();
 ## Abhaengigkeitsrichtung
 
 ```
-silbercuechrome-pro  -->  @silbercuechrome/mcp
+silbercuechrome-pro  -->  @silbercue/chrome
      (privat)              (oeffentlich)
 ```
 
@@ -124,7 +124,7 @@ Kein `try/catch`-Import, kein bedingter `require()`.
 
 ```bash
 # Im Pro-Repo:
-npm install          # Installiert @silbercuechrome/mcp als Dependency
+npm install          # Installiert @silbercue/chrome als Dependency
 npm run build        # Kompiliert Pro-Code
 node build/index.js  # Startet Pro-Server
 ```

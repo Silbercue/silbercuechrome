@@ -51,7 +51,7 @@ function writeCache(dir: string, data: Record<string, unknown>): void {
 describe("readPackageVersion", () => {
   it("findet die package.json relativ zur src-Datei", () => {
     const result = readPackageVersion(import.meta.url);
-    expect(result.name).toBe("@silbercuechrome/mcp");
+    expect(result.name).toBe("@silbercue/chrome");
     expect(result.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
@@ -121,7 +121,7 @@ describe("dispatchTopLevelCli", () => {
         dispatchTopLevelCli(["node", "index.js", "version"], import.meta.url),
       ).rejects.toThrow("__exit__");
       const out = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(out).toContain("@silbercuechrome/mcp");
+      expect(out).toContain("@silbercue/chrome");
       expect(out).toMatch(/\d+\.\d+\.\d+/);
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
@@ -169,7 +169,7 @@ describe("dispatchTopLevelCli", () => {
       const out = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(out).toContain("Free");
       expect(out).toContain("license cache was found");
-      expect(out).toContain("@silbercuechrome/mcp-pro");
+      expect(out).toContain("@silbercue/chrome-pro");
     });
 
     it("ignores invalid cache structure", async () => {
@@ -190,7 +190,7 @@ describe("dispatchTopLevelCli", () => {
       ).rejects.toThrow("__exit__");
       const out = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(out).toContain("requires the Pro tier");
-      expect(out).toContain("@silbercuechrome/mcp-pro");
+      expect(out).toContain("@silbercue/chrome-pro");
       expect(out).toContain(UPGRADE_URL);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
@@ -216,7 +216,7 @@ describe("dispatchTopLevelCli", () => {
       ).rejects.toThrow("__exit__");
       const out = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(out).toContain("requires the Pro tier");
-      expect(out).toContain("@silbercuechrome/mcp-pro");
+      expect(out).toContain("@silbercue/chrome-pro");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
