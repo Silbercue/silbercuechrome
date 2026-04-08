@@ -81,9 +81,9 @@ async function licenseStatus(): Promise<void> {
 
   if (!cache) {
     console.log("Tier:          Free");
-    console.log("License Key:   Nicht konfiguriert");
+    console.log("License Key:   Not configured");
     console.log("");
-    console.log("Um Pro zu aktivieren: silbercuechrome license activate <key>");
+    console.log("To activate Pro: silbercuechrome license activate <key>");
     return;
   }
 
@@ -91,7 +91,7 @@ async function licenseStatus(): Promise<void> {
     console.log("Tier:          Pro");
     console.log(`License Key:   ${maskKey(cache.key)}`);
     console.log(`Last Check:    ${formatDate(cache.lastCheck)}`);
-    console.log(`Gueltig bis:   ${formatValidUntil(cache)}`);
+    console.log(`Valid until:   ${formatValidUntil(cache)}`);
 
     const gracePeriodInfo = formatGracePeriod(cache.lastCheck);
     if (gracePeriodInfo) {
@@ -104,9 +104,9 @@ async function licenseStatus(): Promise<void> {
   } else {
     console.log("Tier:          Free");
     console.log(`License Key:   ${maskKey(cache.key)}`);
-    console.log("Status:        Key ungueltig");
+    console.log("Status:        Invalid key");
     console.log("");
-    console.log("Um Pro zu aktivieren: silbercuechrome license activate <key>");
+    console.log("To activate Pro: silbercuechrome license activate <key>");
   }
 }
 
@@ -115,11 +115,11 @@ async function licenseStatus(): Promise<void> {
  * Story 15.5: LicenseValidator ist im Pro-Repo, activate ist nur dort verfuegbar.
  */
 async function licenseActivate(_key: string | undefined): Promise<void> {
-  console.log("License-Aktivierung ist ein Pro-Feature.");
-  console.log("Installiere SilbercueChrome Pro fuer License-Key-Validierung:");
+  console.log("License activation is a Pro feature.");
+  console.log("Install SilbercueChrome Pro for license-key validation:");
   console.log("  npm install silbercuechrome-pro");
   console.log("");
-  console.log("Mehr Infos: https://silbercuechrome.com/pro");
+  console.log("More info: https://silbercuechrome.com/pro");
   process.exit(1);
 }
 
@@ -133,15 +133,15 @@ function licenseDeactivate(): void {
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
-      console.log(`Fehler beim Loeschen der Cache-Datei: ${(err as Error).message}`);
+      console.log(`Failed to delete cache file: ${(err as Error).message}`);
       process.exit(1);
       return;
     }
     // ENOENT — file doesn't exist, that's fine (idempotent)
   }
 
-  console.log("License deaktiviert — Server laeuft im Free-Tier.");
-  console.log("Um Pro wieder zu aktivieren: silbercuechrome license activate <key>");
+  console.log("License deactivated — server is running in Free tier.");
+  console.log("To re-activate Pro: silbercuechrome license activate <key>");
   process.exit(0);
 }
 
@@ -150,9 +150,9 @@ function printUsage(): void {
   console.log("SilbercueChrome License Management");
   console.log("");
   console.log("Usage:");
-  console.log("  silbercuechrome license status              Lizenz-Status anzeigen");
-  console.log("  silbercuechrome license activate <key>      License-Key aktivieren");
-  console.log("  silbercuechrome license deactivate          License-Key deaktivieren");
+  console.log("  silbercuechrome license status              Show license status");
+  console.log("  silbercuechrome license activate <key>      Activate a license key");
+  console.log("  silbercuechrome license deactivate          Remove the license key");
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ function readCacheDirectly(cacheDir: string): LicenseCache | null {
 /** Formats an ISO date string for human-readable display. */
 function formatDate(isoString: string): string {
   const ts = Date.parse(isoString);
-  if (Number.isNaN(ts)) return "Unbekannt";
+  if (Number.isNaN(ts)) return "Unknown";
   const d = new Date(ts);
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -201,18 +201,18 @@ function formatGracePeriod(lastCheck: string): string | null {
   const ts = Date.parse(lastCheck);
   if (Number.isNaN(ts)) return null;
   const age = Date.now() - ts;
-  if (age < 0) return "Unbekannt (Systemzeit-Problem)";
+  if (age < 0) return "Unknown (system clock issue)";
 
   const remaining = GRACE_PERIOD_MS - age;
-  if (remaining <= 0) return "Abgelaufen";
+  if (remaining <= 0) return "Expired";
 
   const days = Math.floor(remaining / (24 * 60 * 60 * 1000));
   const hours = Math.floor((remaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
 
   if (days > 0) {
-    return `${days} Tag${days !== 1 ? "e" : ""} ${hours} Stunde${hours !== 1 ? "n" : ""} verbleibend`;
+    return `${days} day${days !== 1 ? "s" : ""} ${hours} hour${hours !== 1 ? "s" : ""} remaining`;
   }
-  return `${hours} Stunde${hours !== 1 ? "n" : ""} verbleibend`;
+  return `${hours} hour${hours !== 1 ? "s" : ""} remaining`;
 }
 
 /**
@@ -226,6 +226,6 @@ function formatValidUntil(cache: LicenseCache): string {
   }
   // Fallback: lastCheck + grace period (7 days)
   const ts = Date.parse(cache.lastCheck);
-  if (Number.isNaN(ts)) return "Unbekannt";
+  if (Number.isNaN(ts)) return "Unknown";
   return formatDate(new Date(ts + GRACE_PERIOD_MS).toISOString());
 }

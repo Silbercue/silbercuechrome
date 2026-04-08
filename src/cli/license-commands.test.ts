@@ -120,8 +120,8 @@ describe("runLicenseCommand", () => {
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(output).toContain("Free");
-      expect(output).toContain("Nicht konfiguriert");
-      expect(output).toContain("Um Pro zu aktivieren");
+      expect(output).toContain("Not configured");
+      expect(output).toContain("To activate Pro");
     });
 
     it("shows Pro tier with valid cache and displays valid-until date", async () => {
@@ -136,8 +136,8 @@ describe("runLicenseCommand", () => {
       expect(output).toContain("Pro");
       expect(output).toContain("sk-p...cdef");
       expect(output).toContain("dom_snapshot, extended_run_plan");
-      expect(output).toContain("verbleibend");
-      expect(output).toContain("Gueltig bis:");
+      expect(output).toContain("remaining");
+      expect(output).toContain("Valid until:");
     });
 
     it("shows validUntil from cache when present", async () => {
@@ -150,7 +150,7 @@ describe("runLicenseCommand", () => {
       });
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("Gueltig bis:");
+      expect(output).toContain("Valid until:");
       expect(output).toContain("2026-05-04");
     });
 
@@ -177,7 +177,7 @@ describe("runLicenseCommand", () => {
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(output).toContain("Free");
-      expect(output).toContain("Key ungueltig");
+      expect(output).toContain("Invalid key");
     });
 
     it("shows expired grace period for very old cache", async () => {
@@ -193,7 +193,7 @@ describe("runLicenseCommand", () => {
       });
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("Abgelaufen");
+      expect(output).toContain("Expired");
 
       vi.useRealTimers();
     });
@@ -211,8 +211,8 @@ describe("runLicenseCommand", () => {
       });
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("4 Tage");
-      expect(output).toContain("verbleibend");
+      expect(output).toContain("4 days");
+      expect(output).toContain("remaining");
 
       vi.useRealTimers();
     });
@@ -224,7 +224,7 @@ describe("runLicenseCommand", () => {
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(output).toContain("Free");
-      expect(output).toContain("Nicht konfiguriert");
+      expect(output).toContain("Not configured");
     });
 
     it("handles structurally invalid cache (missing key field)", async () => {
@@ -236,7 +236,7 @@ describe("runLicenseCommand", () => {
       await runLicenseCommand(["status"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
       expect(output).toContain("Free");
-      expect(output).toContain("Nicht konfiguriert");
+      expect(output).toContain("Not configured");
     });
   });
 
@@ -245,14 +245,14 @@ describe("runLicenseCommand", () => {
     it("shows Pro-Feature hint and exits with 1 (no key)", async () => {
       await runLicenseCommand(["activate"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("Pro-Feature");
+      expect(output).toContain("Pro feature");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 
     it("shows Pro-Feature hint and exits with 1 (with key)", async () => {
       await runLicenseCommand(["activate", "sk-valid-key-1234"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("Pro-Feature");
+      expect(output).toContain("Pro feature");
       expect(output).toContain("silbercuechrome-pro");
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
@@ -273,8 +273,8 @@ describe("runLicenseCommand", () => {
 
       await runLicenseCommand(["deactivate"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("License deaktiviert");
-      expect(output).toContain("Um Pro wieder zu aktivieren");
+      expect(output).toContain("License deactivated");
+      expect(output).toContain("To re-activate Pro");
       expect(exitSpy).toHaveBeenCalledWith(0);
       // Verify cache file was deleted
       expect(fs.existsSync(path.join(cd, "license-cache.json"))).toBe(false);
@@ -283,7 +283,7 @@ describe("runLicenseCommand", () => {
     it("succeeds even when no cache file exists (idempotent)", async () => {
       await runLicenseCommand(["deactivate"]);
       const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-      expect(output).toContain("License deaktiviert");
+      expect(output).toContain("License deactivated");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
@@ -302,7 +302,7 @@ describe("runLicenseCommand", () => {
       try {
         await runLicenseCommand(["deactivate"]);
         const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
-        expect(output).toContain("Fehler beim Loeschen");
+        expect(output).toContain("Failed to delete");
         expect(exitSpy).toHaveBeenCalledWith(1);
       } finally {
         // Restore permissions for cleanup
