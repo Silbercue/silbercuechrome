@@ -39,7 +39,7 @@ describe("ToolRegistry", () => {
     expect(toolFn).toHaveBeenCalledTimes(17);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
+      "Execute JavaScript in the browser page context and return the result. Use this to COMPUTE values or trigger side effects no other tool covers — NOT to discover elements. If you're using querySelector/getElementById/innerText to find interactive elements or read visible text, prefer read_page (stable refs survive DOM changes, selectors don't) or fill_form. Common anti-patterns that evaluate will detect and hint you about: DOM-queried buttons/inputs, .innerText/.textContent reads, .click()/.scrollIntoView(), Tests.*.toString() introspection. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
       expect.objectContaining({
         expression: expect.anything(),
         await_promise: expect.anything(),
@@ -48,7 +48,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "navigate",
-      "Navigate to a URL or go back, waits for page to settle before returning",
+      "Navigate the ACTIVE tab to a URL (or action:'back'). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
       expect.objectContaining({
         url: expect.anything(),
         action: expect.anything(),
@@ -58,7 +58,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "read_page",
-      "Read page content via accessibility tree with stable element refs",
+      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). ~10-30x cheaper than screenshot.",
       expect.objectContaining({
         depth: expect.anything(),
         ref: expect.anything(),
@@ -68,7 +68,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "screenshot",
-      "Take a compressed WebP screenshot of the current page (max 800px wide, <100KB)",
+      "Capture a WebP image of the page (max 800px, <100KB). You CANNOT use screenshots as input for click/type — use read_page for element refs. Only use for visual verification, canvas pages, or explicit user requests. ~10-30x more tokens than read_page.",
       expect.objectContaining({
         full_page: expect.anything(),
       }),
@@ -87,7 +87,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically.",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state.",
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
@@ -98,7 +98,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
+      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
@@ -109,13 +109,13 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "tab_status",
-      "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
+      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use read_page.",
       {},
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(
       "switch_tab",
-      "Open, switch to, or close browser tabs",
+      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
       expect.objectContaining({
         action: expect.anything(),
         url: expect.anything(),
@@ -125,13 +125,13 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "virtual_desk",
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
+      "PRIMARY orientation tool — call first in every new session, after reconnect, or when unsure. Lists all tabs with IDs, URLs, state. Use returned IDs with switch_tab(tab: '<id>') instead of opening duplicates via navigate. Cheap, call liberally.",
       {},
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(
       "dom_snapshot",
-      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
       expect.objectContaining({
         ref: expect.anything(),
       }),
@@ -149,7 +149,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "fill_form",
-      "Fill a complete form with one call. Each field needs ref or CSS selector plus value. Supports text inputs, selects, checkboxes, and radio buttons. Partial errors do not abort — each field reports its own status.",
+      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status.",
       expect.objectContaining({
         fields: expect.anything(),
       }),
@@ -567,7 +567,7 @@ describe("ToolRegistry", () => {
     );
     expect(domSnapshotCall).toBeDefined();
     expect(domSnapshotCall![1]).toBe(
-      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
     );
   });
 
@@ -1278,7 +1278,9 @@ describe("ToolRegistry", () => {
       (call: unknown[]) => call[0] === "switch_tab",
     );
     expect(switchTabCall).toBeDefined();
-    expect(switchTabCall![1]).toBe("Open, switch to, or close browser tabs");
+    expect(switchTabCall![1]).toBe(
+      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
+    );
   });
 
   it("virtual_desk is registered in server.tool() regardless of license tier (discoverability)", () => {
@@ -1297,7 +1299,7 @@ describe("ToolRegistry", () => {
     );
     expect(virtualDeskCall).toBeDefined();
     expect(virtualDeskCall![1]).toBe(
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
+      "PRIMARY orientation tool — call first in every new session, after reconnect, or when unsure. Lists all tabs with IDs, URLs, state. Use returned IDs with switch_tab(tab: '<id>') instead of opening duplicates via navigate. Cheap, call liberally.",
     );
   });
 

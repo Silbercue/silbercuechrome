@@ -644,51 +644,34 @@ export class ToolRegistry implements ToolRegistryPublic {
     // than maintaining a fake stub that clutters the tool list in the free tier.
     finalHooks.registerProTools?.(this);
 
+    // Tool order matters for LLM selection (Positional Bias — BiasBusters
+    // arXiv:2510.00307). High-priority workflow tools come first; evaluate
+    // is deliberately last so it is NOT the default for text/element tasks.
+    //
+    // Order: orientation → reading → interaction → tab-mgmt → timing →
+    //        visual → special → debug → meta → evaluate (last resort).
+
+    // --- 1. Orientation ---
     this.server.tool(
-      "evaluate",
-      "Execute JavaScript in the browser page context and return the result. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE to prevent redeclaration errors. Tip: if/else blocks may return undefined — use ternary (a ? b : c) or explicit return for reliable values. Prefer the click tool over element.click() in JS — click dispatches the full pointer event chain (pointerdown → mousedown → pointerup → mouseup → click) which works with custom widgets that only listen to mousedown/pointerdown.",
-      {
-        expression: evaluateSchema.shape.expression,
-        await_promise: evaluateSchema.shape.await_promise,
-      },
-      wrap(async (params) => {
-        return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
-      }, "evaluate"),
+      "virtual_desk",
+      "PRIMARY orientation tool — call first in every new session, after reconnect, or when unsure. Lists all tabs with IDs, URLs, state. Use returned IDs with switch_tab(tab: '<id>') instead of opening duplicates via navigate. Cheap, call liberally.",
+      {},
+      wrap(this.wrapWithGate("virtual_desk", async (params) => {
+        this._contextChecked = true;
+        return virtualDeskHandler(
+          params as unknown as VirtualDeskParams,
+          this.cdpClient,
+          this.sessionId,
+          this._tabStateCache,
+          this.connectionStatus,
+        );
+      }, finalHooks), "virtual_desk"),
     );
 
-    this.server.tool(
-      "navigate",
-      "Navigate to a URL or go back, waits for page to settle before returning",
-      {
-        url: navigateSchema.shape.url,
-        action: navigateSchema.shape.action,
-        settle_ms: navigateSchema.shape.settle_ms,
-      },
-      wrap(async (params) => {
-        // FR-H: If virtual_desk hasn't been called yet, run it instead of navigating.
-        // This prevents overwriting the user's active tab blindly.
-        if (!this._contextChecked) {
-          this._contextChecked = true;
-          const vdResult = await virtualDeskHandler(
-            {} as VirtualDeskParams,
-            this.cdpClient,
-            this.sessionId,
-            this._tabStateCache,
-            this.connectionStatus,
-          );
-          const tabList = vdResult.content?.[0]?.type === "text" ? vdResult.content[0].text : "";
-          return {
-            content: [{ type: "text" as const, text: `Navigation blocked — virtual_desk was not called yet. Here are your open tabs:\n\n${tabList}\n\nUse switch_tab(tab: "<id>") to go to an existing tab, or call navigate again to open a new page.` }],
-            _meta: { elapsedMs: vdResult._meta?.elapsedMs ?? 0, method: "navigate", intercepted: true },
-          };
-        }
-        return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
-      }, "navigate"),
-    );
-
+    // --- 2. Reading ---
     this.server.tool(
       "read_page",
-      "Read page content via accessibility tree with stable element refs",
+      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). ~10-30x cheaper than screenshot.",
       {
         depth: readPageSchema.shape.depth,
         ref: readPageSchema.shape.ref,
@@ -700,62 +683,10 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "read_page"),
     );
 
-    this.server.tool(
-      "screenshot",
-      "Take a compressed WebP screenshot of the current page (max 800px wide, <100KB)",
-      {
-        full_page: screenshotSchema.shape.full_page,
-        som: screenshotSchema.shape.som,
-      },
-      wrap(async (params) => {
-        // Check for minimized window before taking screenshot
-        const activeTarget = this._tabStateCache.activeTargetId;
-        if (activeTarget) {
-          try {
-            const { bounds } = await this.cdpClient.send<{ windowId: number; bounds: { windowState: string } }>(
-              "Browser.getWindowForTarget",
-              { targetId: activeTarget },
-            );
-            if (bounds.windowState === "minimized") {
-              return {
-                content: [{ type: "text", text: "Warning: Window is minimized — screenshot may be empty or stale. Use switch_tab to bring the window to foreground first, or call Browser.setWindowBounds to restore it." }],
-                isError: true,
-                _meta: { elapsedMs: 0, method: "screenshot", windowMinimized: true },
-              };
-            }
-          } catch {
-            /* best-effort — proceed with screenshot */
-          }
-        }
-        const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
-        // Hint: nudge LLM toward read_page for interaction
-        if (!result.isError && result.content?.length > 0) {
-          const somHint = (params as unknown as ScreenshotParams).som
-            ? ""
-            : " Add som: true to overlay labeled element refs on the image.";
-          result.content.push({ type: "text", text: `Tip: Use read_page for element refs — it's faster and cheaper than screenshots.${somHint}` });
-        }
-        return result;
-      }, "screenshot"),
-    );
-
-    this.server.tool(
-      "wait_for",
-      "Wait for a condition: element visible, network idle, or JS expression true",
-      {
-        condition: waitForSchema.shape.condition,
-        selector: waitForSchema.shape.selector,
-        expression: waitForSchema.shape.expression,
-        timeout: waitForSchema.shape.timeout,
-      },
-      wrap(async (params) => {
-        return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
-      }, "wait_for"),
-    );
-
+    // --- 3. Interaction (click/type/fill_form/press_key/scroll) ---
     this.server.tool(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically.",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state.",
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
@@ -770,7 +701,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     this.server.tool(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
+      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead.",
       {
         ref: typeSchema.shape.ref,
         selector: typeSchema.shape.selector,
@@ -780,6 +711,23 @@ export class ToolRegistry implements ToolRegistryPublic {
       wrap(async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._sessionManager);
       }, "type"),
+    );
+
+    // Story 6.3: fill_form — fill complete forms with one call
+    this.server.tool(
+      "fill_form",
+      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status.",
+      {
+        fields: fillFormSchema.shape.fields,
+      },
+      wrap(async (params) => {
+        return fillFormHandler(
+          params as unknown as FillFormParams,
+          this.cdpClient,
+          this.sessionId,
+          this._sessionManager,
+        );
+      }, "fill_form"),
     );
 
     // FR-C: press_key — real CDP keyboard events (not JS dispatchEvent)
@@ -814,44 +762,40 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "scroll"),
     );
 
-    // FR-009: observe — passively watch DOM changes
+    // --- 4. Tab management (navigate/switch_tab/tab_status) ---
     this.server.tool(
-      "observe",
-      "Watch an element for changes over time — use this INSTEAD of writing MutationObserver/setInterval/setTimeout code in evaluate. Two modes: (1) collect — watch for 'duration' ms, return all text/attribute changes (e.g. collect 3 values that appear one after another). (2) until — wait for a condition, then optionally click immediately (e.g. click Capture when counter hits 8). Use click_first to trigger the action that causes changes (observer is set up BEFORE the click, so nothing is missed).",
+      "navigate",
+      "Navigate the ACTIVE tab to a URL (or action:'back'). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
       {
-        selector: observeSchema.shape.selector,
-        duration: observeSchema.shape.duration,
-        until: observeSchema.shape.until,
-        then_click: observeSchema.shape.then_click,
-        click_first: observeSchema.shape.click_first,
-        collect: observeSchema.shape.collect,
-        interval: observeSchema.shape.interval,
-        timeout: observeSchema.shape.timeout,
+        url: navigateSchema.shape.url,
+        action: navigateSchema.shape.action,
+        settle_ms: navigateSchema.shape.settle_ms,
       },
       wrap(async (params) => {
-        return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._sessionManager);
-      }, "observe"),
-    );
-
-    this.server.tool(
-      "tab_status",
-      "Get cached tab state: URL, title, DOM-ready status, console errors. Instant from cache.",
-      {},
-      wrap(async (params) => {
-        this._contextChecked = true;
-        return tabStatusHandler(
-          params as unknown as TabStatusParams,
-          this.cdpClient,
-          this.sessionId,
-          this._tabStateCache,
-          this.connectionStatus,
-        );
-      }, "tab_status"),
+        // FR-H: If virtual_desk hasn't been called yet, run it instead of navigating.
+        // This prevents overwriting the user's active tab blindly.
+        if (!this._contextChecked) {
+          this._contextChecked = true;
+          const vdResult = await virtualDeskHandler(
+            {} as VirtualDeskParams,
+            this.cdpClient,
+            this.sessionId,
+            this._tabStateCache,
+            this.connectionStatus,
+          );
+          const tabList = vdResult.content?.[0]?.type === "text" ? vdResult.content[0].text : "";
+          return {
+            content: [{ type: "text" as const, text: `Navigation blocked — virtual_desk was not called yet. Here are your open tabs:\n\n${tabList}\n\nUse switch_tab(tab: "<id>") to go to an existing tab, or call navigate again to open a new page.` }],
+            _meta: { elapsedMs: vdResult._meta?.elapsedMs ?? 0, method: "navigate", intercepted: true },
+          };
+        }
+        return navigateHandler(params as unknown as NavigateParams, this.cdpClient, this.sessionId);
+      }, "navigate"),
     );
 
     this.server.tool(
       "switch_tab",
-      "Open, switch to, or close browser tabs",
+      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab.",
       {
         action: switchTabSchema.shape.action,
         url: switchTabSchema.shape.url,
@@ -872,24 +816,98 @@ export class ToolRegistry implements ToolRegistryPublic {
     );
 
     this.server.tool(
-      "virtual_desk",
-      "Lists all open tabs with IDs and state. Use this first when starting a session, after reconnect, or when a tab session is lost. Then use switch_tab(tab: \"<id>\") to switch to an existing tab.",
+      "tab_status",
+      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use read_page.",
       {},
-      wrap(this.wrapWithGate("virtual_desk", async (params) => {
+      wrap(async (params) => {
         this._contextChecked = true;
-        return virtualDeskHandler(
-          params as unknown as VirtualDeskParams,
+        return tabStatusHandler(
+          params as unknown as TabStatusParams,
           this.cdpClient,
           this.sessionId,
           this._tabStateCache,
           this.connectionStatus,
         );
-      }, finalHooks), "virtual_desk"),
+      }, "tab_status"),
+    );
+
+    // --- 5. Timing (wait_for/observe) ---
+    this.server.tool(
+      "wait_for",
+      "Wait for a condition: element visible, network idle, or JS expression true",
+      {
+        condition: waitForSchema.shape.condition,
+        selector: waitForSchema.shape.selector,
+        expression: waitForSchema.shape.expression,
+        timeout: waitForSchema.shape.timeout,
+      },
+      wrap(async (params) => {
+        return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
+      }, "wait_for"),
+    );
+
+    // FR-009: observe — passively watch DOM changes
+    this.server.tool(
+      "observe",
+      "Watch an element for changes over time — use this INSTEAD of writing MutationObserver/setInterval/setTimeout code in evaluate. Two modes: (1) collect — watch for 'duration' ms, return all text/attribute changes (e.g. collect 3 values that appear one after another). (2) until — wait for a condition, then optionally click immediately (e.g. click Capture when counter hits 8). Use click_first to trigger the action that causes changes (observer is set up BEFORE the click, so nothing is missed).",
+      {
+        selector: observeSchema.shape.selector,
+        duration: observeSchema.shape.duration,
+        until: observeSchema.shape.until,
+        then_click: observeSchema.shape.then_click,
+        click_first: observeSchema.shape.click_first,
+        collect: observeSchema.shape.collect,
+        interval: observeSchema.shape.interval,
+        timeout: observeSchema.shape.timeout,
+      },
+      wrap(async (params) => {
+        return observeHandler(params as unknown as ObserveParams, this.cdpClient, this.sessionId, this._sessionManager);
+      }, "observe"),
+    );
+
+    // --- 6. Visual (screenshot/dom_snapshot — last resort for visual tasks) ---
+    this.server.tool(
+      "screenshot",
+      "Capture a WebP image of the page (max 800px, <100KB). You CANNOT use screenshots as input for click/type — use read_page for element refs. Only use for visual verification, canvas pages, or explicit user requests. ~10-30x more tokens than read_page.",
+      {
+        full_page: screenshotSchema.shape.full_page,
+        som: screenshotSchema.shape.som,
+      },
+      wrap(async (params) => {
+        // Check for minimized window before taking screenshot
+        const activeTarget = this._tabStateCache.activeTargetId;
+        if (activeTarget) {
+          try {
+            const { bounds } = await this.cdpClient.send<{ windowId: number; bounds: { windowState: string } }>(
+              "Browser.getWindowForTarget",
+              { targetId: activeTarget },
+            );
+            if (bounds.windowState === "minimized") {
+              return {
+                content: [{ type: "text", text: "Warning: Window is minimized — screenshot may be empty or stale. Use switch_tab to bring the window to foreground first, or call Browser.setWindowBounds to restore it." }],
+                isError: true,
+                _meta: { elapsedMs: 0, method: "screenshot", windowMinimized: true },
+              };
+            }
+          } catch {
+            /* best-effort — proceed with screenshot */
+          }
+        }
+        const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._sessionManager);
+        // Preventive hint: screenshots cannot drive click/type — steer back to read_page
+        if (!result.isError && result.content?.length > 0) {
+          const somHint = (params as unknown as ScreenshotParams).som
+            ? " SoM labels match read_page refs — pass them to click/type directly."
+            : " Add som: true to overlay numbered ref labels matching read_page.";
+          result.content.push({ type: "text", text: `Reminder: screenshots cannot be used as input for click/type — you need refs from read_page for any interaction.${somHint}` });
+        }
+        return result;
+      }, "screenshot"),
     );
 
     this.server.tool(
       "dom_snapshot",
-      "Get a compact visual snapshot of the page: element positions, colors, z-order, clickability. Mapped to read_page refs.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
       {
         ref: domSnapshotSchema.shape.ref,
       },
@@ -898,6 +916,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, finalHooks), "dom_snapshot"),
     );
 
+    // --- 7. Special interactions (handle_dialog/file_upload) ---
     // Story 6.1: handle_dialog — configure dialog handling before triggering actions
     // H3 fix: Route through wrap for default-resolution and suggestion-injection
     if (this._dialogHandler) {
@@ -933,23 +952,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "file_upload"),
     );
 
-    // Story 6.3: fill_form — fill complete forms with one call
-    this.server.tool(
-      "fill_form",
-      "Fill a complete form with one call. Each field needs ref or CSS selector plus value. Supports text inputs, selects, checkboxes, and radio buttons. Partial errors do not abort — each field reports its own status.",
-      {
-        fields: fillFormSchema.shape.fields,
-      },
-      wrap(async (params) => {
-        return fillFormHandler(
-          params as unknown as FillFormParams,
-          this.cdpClient,
-          this.sessionId,
-          this._sessionManager,
-        );
-      }, "fill_form"),
-    );
-
+    // --- 8. Debugging (console_logs/network_monitor) ---
     // Story 7.1: console_logs — retrieve and filter console output
     if (this._consoleCollector) {
       this.server.tool(
@@ -979,6 +982,22 @@ export class ToolRegistry implements ToolRegistryPublic {
         wrap(async (params) => {
           return networkMonitorHandler(params as unknown as NetworkMonitorParams, this._networkCollector!);
         }, "network_monitor"),
+      );
+    }
+
+    // --- 9. Meta (configure_session/run_plan) ---
+    // Story 7.3: configure_session — set session defaults and auto-promote
+    if (this._sessionDefaults) {
+      this.server.tool(
+        "configure_session",
+        "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions.",
+        {
+          defaults: configureSessionSchema.shape.defaults,
+          autoPromote: configureSessionSchema.shape.autoPromote,
+        },
+        wrap(async (params) => {
+          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
+        }, "configure_session"),
       );
     }
 
@@ -1021,20 +1040,19 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "run_plan"),
     );
 
-    // Story 7.3: configure_session — set session defaults and auto-promote
-    if (this._sessionDefaults) {
-      this.server.tool(
-        "configure_session",
-        "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions.",
-        {
-          defaults: configureSessionSchema.shape.defaults,
-          autoPromote: configureSessionSchema.shape.autoPromote,
-        },
-        wrap(async (params) => {
-          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._sessionDefaults!);
-        }, "configure_session"),
-      );
-    }
+    // --- 10. Last resort: evaluate (intentionally registered last so LLMs
+    // don't default to it for text/element tasks — Positional Bias fix) ---
+    this.server.tool(
+      "evaluate",
+      "Execute JavaScript in the browser page context and return the result. Use this to COMPUTE values or trigger side effects no other tool covers — NOT to discover elements. If you're using querySelector/getElementById/innerText to find interactive elements or read visible text, prefer read_page (stable refs survive DOM changes, selectors don't) or fill_form. Common anti-patterns that evaluate will detect and hint you about: DOM-queried buttons/inputs, .innerText/.textContent reads, .click()/.scrollIntoView(), Tests.*.toString() introspection. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
+      {
+        expression: evaluateSchema.shape.expression,
+        await_promise: evaluateSchema.shape.await_promise,
+      },
+      wrap(async (params) => {
+        return evaluateHandler(params as unknown as EvaluateParams, this.cdpClient, this.sessionId);
+      }, "evaluate"),
+    );
 
     // Register tool handlers for executeTool dispatch
     // IMPORTANT: run_plan is NOT registered here to prevent recursive invocation
