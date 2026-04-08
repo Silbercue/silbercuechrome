@@ -571,7 +571,7 @@ describe("ToolRegistry", () => {
     );
   });
 
-  it("Free-Tier: dom_snapshot via MCP returns isError with Pro-Feature message", async () => {
+  it("Free-Tier: dom_snapshot via MCP returns isError with warm Pro-Feature message", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
@@ -595,13 +595,13 @@ describe("ToolRegistry", () => {
     const result = await domSnapshotCallback({ ref: "e1" });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("dom_snapshot (Pro)");
+    expect(text).toContain("read_page"); // Free alternative mentioned
+    expect(text).toContain("silbercuechrome license activate"); // Upgrade path
   });
 
-  it("Free-Tier: dom_snapshot via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+  it("Free-Tier: dom_snapshot via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
@@ -615,10 +615,10 @@ describe("ToolRegistry", () => {
     const result = await registry.executeTool("dom_snapshot", { ref: "e1" });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("dom_snapshot (Pro)");
+    expect(text).toContain("read_page");
+    expect(text).toContain("silbercuechrome license activate");
   });
 
   it("Pro-Tier: dom_snapshot via executeTool is NOT blocked by feature gate", async () => {
@@ -637,9 +637,10 @@ describe("ToolRegistry", () => {
     // but that's a handler error — not a gate block.
     const result = await registry.executeTool("dom_snapshot", {});
 
-    // The gate-blocked message is very specific — verify it's NOT that
+    // Verify the gate did NOT block — neither the legacy nor the new warm
+    // Pro-Feature marketing message should appear in a Pro-tier response.
     const text = (result.content[0] as { text: string }).text;
-    expect(text).not.toContain("ist ein Pro-Feature");
+    expect(text).not.toContain("silbercuechrome license activate");
   });
 
   // --- Story 7.2: network_monitor registration with NetworkCollector ---
@@ -1132,13 +1133,13 @@ describe("ToolRegistry", () => {
     const result = await switchTabCallback({ action: "list" });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("switch_tab (Pro)");
+    expect(text).toContain("navigate"); // Free alternative
+    expect(text).toContain("silbercuechrome license activate");
   });
 
-  it("Free-Tier: virtual_desk via MCP returns isError with Pro-Feature message", async () => {
+  it("Free-Tier: virtual_desk via MCP returns isError with warm Pro-Feature message", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
@@ -1161,13 +1162,13 @@ describe("ToolRegistry", () => {
     const result = await virtualDeskCallback({});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "virtual_desk ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("virtual_desk (Pro)");
+    expect(text).toContain("tab_status"); // Free alternative
+    expect(text).toContain("silbercuechrome license activate");
   });
 
-  it("Free-Tier: switch_tab via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+  it("Free-Tier: switch_tab via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
@@ -1181,13 +1182,13 @@ describe("ToolRegistry", () => {
     const result = await registry.executeTool("switch_tab", { action: "list" });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("switch_tab (Pro)");
+    expect(text).toContain("navigate");
+    expect(text).toContain("silbercuechrome license activate");
   });
 
-  it("Free-Tier: virtual_desk via executeTool (run_plan path) returns isError with Pro-Feature message", async () => {
+  it("Free-Tier: virtual_desk via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;
 
@@ -1201,10 +1202,10 @@ describe("ToolRegistry", () => {
     const result = await registry.executeTool("virtual_desk", {});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "virtual_desk ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("virtual_desk (Pro)");
+    expect(text).toContain("tab_status");
+    expect(text).toContain("silbercuechrome license activate");
   });
 
   it("Pro-Tier: switch_tab via executeTool is NOT blocked by feature gate", async () => {
@@ -1229,9 +1230,9 @@ describe("ToolRegistry", () => {
     // by its internal try/catch and returned as isError with a CDP error message
     const result = await registry.executeTool("switch_tab", { action: "open" });
 
-    // The gate-blocked message is very specific — verify it's NOT that
+    // Verify the gate did NOT block — neither legacy nor new warm Pro messages appear.
     const text = (result.content[0] as { text: string }).text;
-    expect(text).not.toContain("ist ein Pro-Feature");
+    expect(text).not.toContain("silbercuechrome license activate");
   });
 
   it("Pro-Tier: virtual_desk via executeTool is NOT blocked by feature gate", async () => {
@@ -1259,7 +1260,7 @@ describe("ToolRegistry", () => {
 
     if (result.content[0]) {
       const text = (result.content[0] as { text: string }).text;
-      expect(text).not.toContain("ist ein Pro-Feature");
+      expect(text).not.toContain("silbercuechrome license activate");
     }
   });
 
@@ -1318,12 +1319,10 @@ describe("ToolRegistry", () => {
     const result = await registry.executeTool("switch_tab", { action: "list" }, "tab-override");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty(
-      "text",
-      "switch_tab ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    );
-    // Explicitly NOT the parallel error
     const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("switch_tab (Pro)");
+    expect(text).toContain("silbercuechrome license activate");
+    // Explicitly NOT the parallel error
     expect(text).not.toContain("parallelen Plan-Gruppen");
   });
 
