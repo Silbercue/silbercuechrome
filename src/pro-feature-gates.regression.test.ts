@@ -204,16 +204,17 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       return registry;
     }
 
-    it("dom_snapshot via executeTool returns Pro-Feature error", async () => {
+    it("dom_snapshot via executeTool returns warm Pro-Feature error", async () => {
       const registry = buildRegistryForGating();
       const result = await registry.executeTool("dom_snapshot", { ref: "e1" });
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("dom_snapshot ist ein Pro-Feature");
+      expect(textOf(result)).toContain("dom_snapshot (Pro)");
+      expect(textOf(result)).toContain("read_page"); // Free alternative
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
 
-    it("switch_tab via executeTool returns Pro-Feature error", async () => {
+    it("switch_tab via executeTool returns warm Pro-Feature error", async () => {
       const registry = buildRegistryForGating();
       const result = await registry.executeTool("switch_tab", {
         action: "open",
@@ -221,16 +222,18 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       });
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("switch_tab ist ein Pro-Feature");
+      expect(textOf(result)).toContain("switch_tab (Pro)");
+      expect(textOf(result)).toContain("navigate"); // Free alternative
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
 
-    it("virtual_desk via executeTool returns Pro-Feature error", async () => {
+    it("virtual_desk via executeTool returns warm Pro-Feature error", async () => {
       const registry = buildRegistryForGating();
       const result = await registry.executeTool("virtual_desk", {});
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("virtual_desk ist ein Pro-Feature");
+      expect(textOf(result)).toContain("virtual_desk (Pro)");
+      expect(textOf(result)).toContain("tab_status"); // Free alternative
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
 

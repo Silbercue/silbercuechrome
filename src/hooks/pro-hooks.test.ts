@@ -282,19 +282,52 @@ describe("ProHooks", () => {
 
   // --- Story 9.6: proFeatureError ---
 
-  it("proFeatureError returns isError response with correct format", () => {
+  it("proFeatureError returns warm marketing message for dom_snapshot", () => {
     const result = proFeatureError("dom_snapshot");
 
     expect(result.isError).toBe(true);
     expect(result.content).toHaveLength(1);
-    expect(result.content[0]).toEqual({
-      type: "text",
-      text: "dom_snapshot ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'",
-    });
+    const text = (result.content[0] as { text: string }).text;
+    // Must name the tool and flag it as Pro
+    expect(text).toContain("dom_snapshot (Pro)");
+    // Must briefly describe what the Pro tool does
+    expect(text).toMatch(/DOM-Tree-Snapshot/i);
+    // Must mention the Free alternative so the LLM can continue
+    expect(text).toContain("read_page");
+    // Must provide a clear upgrade path
+    expect(text).toContain("Upgrade:");
+    expect(text).toContain("silbercuechrome license activate");
     expect(result._meta).toEqual({ elapsedMs: 0, method: "dom_snapshot" });
   });
 
-  it("proFeatureError uses the provided tool name in message and meta", () => {
+  it("proFeatureError returns warm marketing message for virtual_desk", () => {
+    const result = proFeatureError("virtual_desk");
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("virtual_desk (Pro)");
+    // Describes the value proposition
+    expect(text).toMatch(/Fenster-Layout|Multi-Tab/i);
+    // Points to the Free alternative
+    expect(text).toContain("tab_status");
+    // Upgrade path
+    expect(text).toContain("Upgrade:");
+  });
+
+  it("proFeatureError returns warm marketing message for switch_tab", () => {
+    const result = proFeatureError("switch_tab");
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("switch_tab (Pro)");
+    expect(text).toMatch(/Multi-Tab-Workflows/i);
+    expect(text).toContain("navigate");
+    expect(text).toContain("Upgrade:");
+  });
+
+  it("proFeatureError falls back to generic message for unknown tool names", () => {
+    // Tools like `parallel` and `use_operator` from run_plan use the generic
+    // fallback since they're not traditional tool names but feature flags.
     const result = proFeatureError("some_future_tool");
 
     expect(result.isError).toBe(true);

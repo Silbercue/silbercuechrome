@@ -143,10 +143,42 @@ export function getProHooks(): ProHooks {
   return _hooks;
 }
 
+/**
+ * Warme, werbewirksame Fehlermeldungen fuer Pro-gated Tools.
+ * Der Free-Nutzer sieht diese mit hoher Wahrscheinlichkeit als ersten
+ * Kontaktpunkt (virtual_desk steht vorn im Workflow), darum sollte jede
+ * Message: (1) kurz erklaeren was das Pro-Tool leistet, (2) die Free-
+ * Alternative nennen damit der LLM weiterarbeiten kann, (3) einen
+ * klaren Upgrade-Hinweis geben.
+ *
+ * Fuer unbekannte Tool-Namen (z.B. `parallel`, `use_operator` aus run_plan)
+ * greift der Fallback-Text am Ende der Funktion.
+ */
+const PRO_FEATURE_MESSAGES: Record<string, string> = {
+  virtual_desk: [
+    "virtual_desk (Pro) — zeigt alle offenen Chrome-Fenster und Tabs auf einen Blick: Fenster-Layout, Tab-IDs fuer switch_tab, aktiver Tab, Status jedes Tabs. Ideal um den Ueberblick im Multi-Tab-Chaos zu behalten.",
+    "Free: tab_status liefert URL/Titel/Zustand des aktiven Tabs.",
+    "Upgrade: silbercuechrome license activate <key>",
+  ].join("\n\n"),
+  switch_tab: [
+    "switch_tab (Pro) — oeffnet, wechselt oder schliesst Tabs ohne die aktive Seite zu stoeren. Perfekt fuer saubere Multi-Tab-Workflows.",
+    "Free: navigate(url) nutzt den aktiven Tab stattdessen.",
+    "Upgrade: silbercuechrome license activate <key>",
+  ].join("\n\n"),
+  dom_snapshot: [
+    "dom_snapshot (Pro) — kompletter DOM-Tree-Snapshot mit allen Attributen und Styles fuer tiefe Seiten-Analyse.",
+    "Free: read_page (Accessibility Tree, ~10-30x guenstiger) deckt die meisten Faelle ab.",
+    "Upgrade: silbercuechrome license activate <key>",
+  ].join("\n\n"),
+};
+
 /** Einheitliche Pro-Feature Error-Response. */
 export function proFeatureError(toolName: string): ToolResponse {
+  const text =
+    PRO_FEATURE_MESSAGES[toolName] ??
+    `${toolName} ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'`;
   return {
-    content: [{ type: "text", text: `${toolName} ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'` }],
+    content: [{ type: "text", text }],
     isError: true,
     _meta: { elapsedMs: 0, method: toolName },
   };
