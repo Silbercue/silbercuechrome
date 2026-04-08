@@ -158,7 +158,7 @@ describe("runPlanHandler — use_operator:true returns Pro-Feature error (Story 
 
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("Pro-Feature");
+    expect(text).toContain("Pro feature");
     expect(text).toContain("use_operator");
   });
 
@@ -174,7 +174,7 @@ describe("runPlanHandler — use_operator:true returns Pro-Feature error (Story 
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
     expect(text).toContain("use_operator");
-    expect(text).toContain("Pro-Feature");
+    expect(text).toContain("Pro feature");
     // Must NOT be the mode-validation error message
     expect(text).not.toContain("Eines von 'steps', 'parallel' oder 'resume' muss angegeben werden");
   });
@@ -559,7 +559,7 @@ describe("runPlanHandler — parallel (Story 7.6)", () => {
 
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("parallel ist ein Pro-Feature");
+    expect(text).toContain("parallel is a Pro feature");
   });
 
   it("parallel with use_operator returns Pro-Feature error (Story 15.1)", async () => {
@@ -574,7 +574,7 @@ describe("runPlanHandler — parallel (Story 7.6)", () => {
 
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("Pro-Feature");
+    expect(text).toContain("Pro feature");
     expect(text).toContain("use_operator");
   });
 
@@ -633,7 +633,7 @@ describe("runPlanHandler — parallel (Story 7.6)", () => {
 
     expect((result as ToolResponse).isError).toBe(true);
     const text = ((result as ToolResponse).content[0] as { type: "text"; text: string }).text;
-    expect(text).toContain("parallel ist ein Pro-Feature");
+    expect(text).toContain("parallel is a Pro feature");
   });
 
   it("parallel with Pro license and registered hook delegates to hook", async () => {

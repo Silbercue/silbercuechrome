@@ -551,7 +551,7 @@ describe("ToolRegistry", () => {
     const result = await gated({});
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty("text", "my_tool ist ein Pro-Feature — aktiviere mit 'silbercuechrome license activate <key>'");
+    expect(result.content[0]).toHaveProperty("text", "my_tool is a Pro feature — activate with 'silbercuechrome license activate <key>'");
   });
 
   // --- Story 9.6: dom_snapshot Pro-Feature-Gate ---
@@ -1111,7 +1111,7 @@ describe("ToolRegistry", () => {
     const result = await registry.executeTool("switch_tab", { action: "list" }, "tab-session-override");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("parallelen Plan-Gruppen nicht erlaubt"));
+    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("not allowed in parallel plan groups"));
   });
 
   // --- Story 9.9: Pro-Feature-Gates for switch_tab, virtual_desk, Human Touch ---
@@ -1329,7 +1329,7 @@ describe("ToolRegistry", () => {
     expect(text).toContain("switch_tab (Pro)");
     expect(text).toContain("silbercuechrome license activate");
     // Explicitly NOT the parallel error
-    expect(text).not.toContain("parallelen Plan-Gruppen");
+    expect(text).not.toContain("parallel plan groups");
   });
 
   // --- Story 12.1: _meta.response_bytes in all tool responses ---

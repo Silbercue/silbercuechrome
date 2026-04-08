@@ -121,7 +121,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       const result = (await runPlanHandler(params, registry)) as ToolResponse;
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("parallel ist ein Pro-Feature");
+      expect(textOf(result)).toContain("parallel is a Pro feature");
       // The helper's canonical message must be present so clients can parse it.
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
@@ -161,7 +161,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       const result = (await runPlanHandler(params, registry)) as ToolResponse;
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("use_operator ist ein Pro-Feature");
+      expect(textOf(result)).toContain("use_operator is a Pro feature");
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
 
@@ -178,7 +178,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       const result = (await runPlanHandler(params, registry)) as ToolResponse;
 
       expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("use_operator ist ein Pro-Feature");
+      expect(textOf(result)).toContain("use_operator is a Pro feature");
       expect(textOf(result)).not.toContain(
         "Eines von 'steps', 'parallel' oder 'resume' muss angegeben werden",
       );
