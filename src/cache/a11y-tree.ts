@@ -910,6 +910,11 @@ export class A11yTreeProcessor {
     // Build tree text from root (main frame)
     const root = nodes[0];
     const lines: string[] = [];
+    // Ticket-1: Pre-scan the whole tree (main + OOPIFs) to identify groups
+    // of ≥10 same-class leaves that should collapse into summary lines.
+    // Must run BEFORE renderNode so anchors/suppressed ids are visible to
+    // every walk path.
+    this.prepareAggregateGroups(root, nodeMap, oopifSections, filter);
     this.renderNode(root, nodeMap, 0, filter, lines, visualMap);
 
     // Append OOPIF sections
@@ -923,6 +928,7 @@ export class A11yTreeProcessor {
         this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines, visualMap);
       }
     }
+    this.clearAggregateGroups();
 
     // H5: Count only actual element lines, not separator lines (--- iframe: ... ---)
     const refCount = lines.filter((l) => !l.startsWith("--- ")).length;
@@ -1602,6 +1608,25 @@ export class A11yTreeProcessor {
     const role = this.getRole(node);
     const passesFilter = this.passesFilter(node, role, filter);
 
+    // Ticket-1 global aggregation: suppressed members produce no line AND
+    // no recursion — they are guaranteed leaves by prepareAggregateGroups.
+    if (
+      node.backendDOMNodeId !== undefined &&
+      this._aggregateSuppressed?.has(node.backendDOMNodeId)
+    ) {
+      return;
+    }
+    // Anchor members emit the collapse summary at their position instead of
+    // the normal formatLine output, then return (leaves have no children
+    // worth rendering).
+    if (node.backendDOMNodeId !== undefined) {
+      const anchor = this._aggregateAnchors?.get(node.backendDOMNodeId);
+      if (anchor) {
+        this.emitAggregateLine(anchor, indentLevel, lines);
+        return;
+      }
+    }
+
     if (passesFilter && node.backendDOMNodeId !== undefined) {
       const refNum = this.refMap.get(node.backendDOMNodeId);
       if (refNum !== undefined) {
@@ -1630,13 +1655,37 @@ export class A11yTreeProcessor {
   }
 
   /**
-   * Ticket-1 / Token-Aggregation: minimum number of consecutive same-class
-   * sibling leaf elements before they are collapsed into a single line.
-   * Set to 10 so we never aggregate small/medium lists (button bars, nav
-   * menus, dialog actions) but reliably catch large generated lists like
-   * the 240-button benchmark page.
+   * Ticket-1 / Token-Aggregation: minimum number of same-class leaf elements
+   * inside the rendered subtree before they are collapsed into one summary
+   * line at the first occurrence. Set to 10 so we never aggregate small or
+   * medium lists (button bars, nav menus, dialog actions) but reliably catch
+   * large generated lists like the 240-button benchmark page, even when they
+   * are interleaved with headings/paragraphs/links.
    */
   private static readonly AGGREGATE_MIN_COUNT = 10;
+
+  /**
+   * Ticket-1: Per-render state built by {@link prepareAggregateGroups}. Keys
+   * the first backendDOMNodeId of a ≥10-member aggregation bucket to the
+   * info needed to emit the summary line. Null when no aggregation pass has
+   * been executed (e.g. during subtree renders or tests that bypass getTree).
+   */
+  private _aggregateAnchors: Map<number, {
+    count: number;
+    role: string;
+    firstName: string;
+    lastName: string;
+    firstRef: number;
+    lastRef: number;
+  }> | null = null;
+
+  /**
+   * Ticket-1: All non-first member backendDOMNodeIds for ≥10-member buckets.
+   * renderNode skips any node whose backendDOMNodeId is in this set — the
+   * line they would have produced is already covered by the anchor's
+   * summary line.
+   */
+  private _aggregateSuppressed: Set<number> | null = null;
 
   /**
    * Ticket-1: Build a stable aggregation key for a leaf element. Two
@@ -1691,54 +1740,109 @@ export class A11yTreeProcessor {
   }
 
   /**
-   * Ticket-1: Try to emit an aggregate line for a run of consecutive
-   * sibling leaves starting at `startIdx`. Returns the number of children
-   * consumed (0 if no aggregation happened). The caller advances by the
-   * returned amount. Aggregation never produces output longer than the
-   * individual lines because the threshold guarantees ≥10 collapsed lines.
+   * Ticket-1: Walk the renderable subtree (main + OOPIFs) and compute which
+   * leaves should be collapsed into summary lines. Leaves are bucketed by
+   * aggregation key; any bucket with ≥{@link AGGREGATE_MIN_COUNT} members
+   * becomes a collapse group. The first member in DOM order becomes the
+   * "anchor" (its position emits the summary line) and the rest land in
+   * the suppressed set so renderNode skips them.
+   *
+   * This runs independently of the ≥10-consecutive-siblings assumption,
+   * which is why it catches the T4.7 benchmark case where 120 "Action N"
+   * buttons are interleaved with headings, paragraphs, and inputs inside
+   * 60 sections that share a single DOM parent.
    */
-  private tryAggregateSiblingRun(
-    childIds: string[],
-    startIdx: number,
+  private prepareAggregateGroups(
+    root: AXNode,
     nodeMap: Map<string, AXNode>,
-    indentLevel: number,
+    oopifSections: Array<{ url: string; nodes: AXNode[]; sessionId: string }>,
     filter: string,
-    lines: string[],
-  ): number {
-    const firstChild = nodeMap.get(childIds[startIdx]);
-    if (!firstChild || !this.isRenderableLeaf(firstChild, nodeMap, filter)) return 0;
+  ): void {
+    const buckets = new Map<string, AXNode[]>();
 
-    const role = this.getRole(firstChild);
-    const firstName = (firstChild.name?.value as string | undefined) ?? "";
-    const key = this.aggregationKey(role, firstName);
-    if (key === null) return 0;
+    const walk = (node: AXNode, map: Map<string, AXNode>): void => {
+      if (
+        !node.ignored &&
+        node.backendDOMNodeId !== undefined &&
+        this.isRenderableLeaf(node, map, filter)
+      ) {
+        const role = this.getRole(node);
+        const name = (node.name?.value as string | undefined) ?? "";
+        const key = this.aggregationKey(role, name);
+        if (key !== null) {
+          let bucket = buckets.get(key);
+          if (!bucket) {
+            bucket = [];
+            buckets.set(key, bucket);
+          }
+          bucket.push(node);
+          // Leaves by definition have no renderable descendants — skip recursion.
+          return;
+        }
+      }
+      if (node.childIds) {
+        for (const childId of node.childIds) {
+          const child = map.get(childId);
+          if (child) walk(child, map);
+        }
+      }
+    };
 
-    let runLength = 1;
-    while (startIdx + runLength < childIds.length) {
-      const sibling = nodeMap.get(childIds[startIdx + runLength]);
-      if (!sibling) break;
-      if (!this.isRenderableLeaf(sibling, nodeMap, filter)) break;
-      const sibName = (sibling.name?.value as string | undefined) ?? "";
-      if (this.aggregationKey(this.getRole(sibling), sibName) !== key) break;
-      runLength++;
+    walk(root, nodeMap);
+    for (const section of oopifSections) {
+      const oopifMap = new Map<string, AXNode>();
+      for (const n of section.nodes) oopifMap.set(n.nodeId, n);
+      if (section.nodes.length > 0) walk(section.nodes[0], oopifMap);
     }
 
-    if (runLength < A11yTreeProcessor.AGGREGATE_MIN_COUNT) return 0;
+    this._aggregateAnchors = new Map();
+    this._aggregateSuppressed = new Set();
+    for (const bucket of buckets.values()) {
+      if (bucket.length < A11yTreeProcessor.AGGREGATE_MIN_COUNT) continue;
+      const first = bucket[0];
+      const last = bucket[bucket.length - 1];
+      const firstId = first.backendDOMNodeId!;
+      const firstRef = this.refMap.get(firstId);
+      const lastRef = this.refMap.get(last.backendDOMNodeId!);
+      if (firstRef === undefined || lastRef === undefined) continue;
+      this._aggregateAnchors.set(firstId, {
+        count: bucket.length,
+        role: this.getRole(first),
+        firstName: (first.name?.value as string | undefined) ?? "",
+        lastName: (last.name?.value as string | undefined) ?? "",
+        firstRef,
+        lastRef,
+      });
+      for (let i = 1; i < bucket.length; i++) {
+        this._aggregateSuppressed.add(bucket[i].backendDOMNodeId!);
+      }
+    }
+  }
 
-    const lastSibling = nodeMap.get(childIds[startIdx + runLength - 1])!;
-    const firstRef = this.refMap.get(firstChild.backendDOMNodeId!)!;
-    const lastRef = this.refMap.get(lastSibling.backendDOMNodeId!)!;
-    const lastName = (lastSibling.name?.value as string | undefined) ?? "";
+  /** Reset the per-render aggregation state set up by prepareAggregateGroups. */
+  private clearAggregateGroups(): void {
+    this._aggregateAnchors = null;
+    this._aggregateSuppressed = null;
+  }
 
+  /**
+   * Ticket-1: Emit the summary line for a collapse-group anchor. Format is
+   * intentionally compact and still carries the addressable ref band so the
+   * LLM can click({ ref: "eN" }) on any individual element inside it.
+   */
+  private emitAggregateLine(
+    anchor: { count: number; role: string; firstName: string; lastName: string; firstRef: number; lastRef: number },
+    indentLevel: number,
+    lines: string[],
+  ): void {
     const indent = "  ".repeat(indentLevel);
-    let line = `${indent}[e${firstRef}..e${lastRef}] ${runLength}× ${role}`;
-    if (firstName && lastName && firstName !== lastName) {
-      line += ` "${firstName}" .. "${lastName}"`;
-    } else if (firstName) {
-      line += ` "${firstName}"`;
+    let line = `${indent}[e${anchor.firstRef}..e${anchor.lastRef}] ${anchor.count}× ${anchor.role}`;
+    if (anchor.firstName && anchor.lastName && anchor.firstName !== anchor.lastName) {
+      line += ` "${anchor.firstName}" .. "${anchor.lastName}"`;
+    } else if (anchor.firstName) {
+      line += ` "${anchor.firstName}"`;
     }
     lines.push(line);
-    return runLength;
   }
 
   private renderChildren(
@@ -1750,30 +1854,11 @@ export class A11yTreeProcessor {
     visualMap?: Map<number, VisualInfo>,
   ): void {
     if (!node.childIds) return;
-    const childIds = node.childIds;
-    let i = 0;
-    while (i < childIds.length) {
-      // Ticket-1: Try to fold a run of similar leaf siblings into one line
-      // before falling back to per-child rendering. Aggregation only kicks in
-      // for ≥10 consecutive matches, so the typical small-list case is
-      // unaffected.
-      const consumed = this.tryAggregateSiblingRun(
-        childIds,
-        i,
-        nodeMap,
-        indentLevel,
-        filter,
-        lines,
-      );
-      if (consumed > 0) {
-        i += consumed;
-        continue;
-      }
-      const child = nodeMap.get(childIds[i]);
+    for (const childId of node.childIds) {
+      const child = nodeMap.get(childId);
       if (child) {
         this.renderNode(child, nodeMap, indentLevel, filter, lines, visualMap);
       }
-      i++;
     }
   }
 

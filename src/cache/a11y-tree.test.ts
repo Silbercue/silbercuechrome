@@ -3071,5 +3071,216 @@ describe("A11yTreeProcessor", () => {
       expect(processor.resolveRef("e8")).toBe(1007);
       expect(processor.resolveRef("e16")).toBe(1015);
     });
+
+    // --- Container-scan / interleaved tests (T4.7 case) ---
+
+    it("aggregates leaves that are interleaved with unrelated content", async () => {
+      // The T4.7 benchmark pattern: 12 sections in one container, each a
+      // sequence of (heading, paragraph, button "Action N", link, textbox).
+      // No run of ≥10 consecutive buttons — every button is bracketed by
+      // other kinds of leaves. The global aggregator must still collapse
+      // the 12 buttons into one summary line.
+      const childIds: string[] = [];
+      const children: AXNode[] = [];
+      let backendId = 1000;
+      for (let sec = 0; sec < 12; sec++) {
+        const hId = `h${sec}`;
+        const pId = `p${sec}`;
+        const bId = `btn${sec}`;
+        const lId = `lnk${sec}`;
+        const tId = `tb${sec}`;
+        childIds.push(hId, pId, bId, lId, tId);
+        children.push(
+          makeNode({
+            nodeId: hId,
+            parentId: "root",
+            role: { type: "role", value: "heading" },
+            name: { type: "computedString", value: `Section ${sec + 1}` },
+            backendDOMNodeId: backendId++,
+          }),
+          makeNode({
+            nodeId: pId,
+            parentId: "root",
+            role: { type: "role", value: "paragraph" },
+            name: { type: "computedString", value: `Body ${sec + 1}` },
+            backendDOMNodeId: backendId++,
+          }),
+          makeNode({
+            nodeId: bId,
+            parentId: "root",
+            role: { type: "role", value: "button" },
+            name: { type: "computedString", value: `Action ${sec + 1}` },
+            backendDOMNodeId: backendId++,
+          }),
+          makeNode({
+            nodeId: lId,
+            parentId: "root",
+            role: { type: "role", value: "link" },
+            name: { type: "computedString", value: `Section ${sec + 1} anchor` },
+            backendDOMNodeId: backendId++,
+            properties: [{ name: "url", value: { type: "string", value: `/#s${sec}` } }],
+          }),
+          makeNode({
+            nodeId: tId,
+            parentId: "root",
+            role: { type: "role", value: "textbox" },
+            name: { type: "computedString", value: `Input ${sec + 1}` },
+            backendDOMNodeId: backendId++,
+          }),
+        );
+      }
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "root",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Interleaved" },
+          backendDOMNodeId: 999,
+          childIds,
+        }),
+        ...children,
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/interleaved");
+      const result = await processor.getTree(cdp, "s1");
+
+      // 12 buttons → above threshold → one aggregate line spanning the band
+      // The first button has backendDOMNodeId 1002 (h0=1000, p0=1001, btn0=1002),
+      // ref = e4 (e1=root, e2=h0 is not interactive so not present, but
+      // interactive filter means headings ARE included as context... let me
+      // assert the structural properties instead of exact ref numbers).
+      expect(result.text).toMatch(/\d+× button "Action 1" \.\. "Action 12"/);
+      // The individual button lines must NOT appear — they are suppressed.
+      expect(result.text).not.toContain('button "Action 3"');
+      expect(result.text).not.toContain('button "Action 7"');
+      // Links are NOT aggregated because their names are all different
+      // ("Section 1 anchor" .. "Section 12 anchor" strips to "Section " and
+      // matches! Actually wait — "Section 1 anchor" ends in "anchor", not
+      // digits, so the fallback is exact-name match and the names differ).
+      // Each link should appear individually.
+      expect(result.text).toContain('"Section 1 anchor"');
+      expect(result.text).toContain('"Section 12 anchor"');
+      // Textboxes ARE aggregated: "Input 1" .. "Input 12" → key "textbox::Input "
+      expect(result.text).toMatch(/\d+× textbox "Input 1" \.\. "Input 12"/);
+    });
+
+    it("reproduces the T4.7 benchmark pattern (120 buttons across 60 sections)", async () => {
+      // Faithful reproduction of test-hardest/index.html t4_7_generate(): a
+      // single container with 60 sections, each [heading, 4 paragraphs,
+      // 2 div/span groups, ul/4 li, button (Action 2n+1), button (Action
+      // 2n+2), link, textbox]. 120 buttons total (note: aria-labels in the
+      // real benchmark are sec*4+1/sec*4+2, we mirror that).
+      const childIds: string[] = [];
+      const children: AXNode[] = [];
+      let backendId = 1000;
+      const addLeaf = (role: string, name: string) => {
+        const id = `n${childIds.length}`;
+        childIds.push(id);
+        children.push(
+          makeNode({
+            nodeId: id,
+            parentId: "root",
+            role: { type: "role", value: role },
+            name: { type: "computedString", value: name },
+            backendDOMNodeId: backendId++,
+          }),
+        );
+      };
+      for (let sec = 0; sec < 60; sec++) {
+        addLeaf("heading", `Section ${sec + 1}`);
+        for (let p = 0; p < 4; p++) addLeaf("paragraph", `para ${sec}-${p}`);
+        // Two generic wrappers in the real page — omitted here since they
+        // would be ignored by the interactive filter anyway.
+        addLeaf("button", `Action ${sec * 4 + 1}`);
+        addLeaf("button", `Action ${sec * 4 + 2}`);
+        addLeaf("link", `Link ${sec + 1}`);
+        addLeaf("textbox", `Input ${sec + 1}`);
+      }
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "root",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "T4.7 repro" },
+          backendDOMNodeId: 999,
+          childIds,
+        }),
+        ...children,
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/t4-7-repro");
+      const result = await processor.getTree(cdp, "s1");
+
+      // All 120 action buttons collapse into one line
+      expect(result.text).toMatch(
+        /120× button "Action 1" \.\. "Action 238"/,
+      );
+      // None of the individual "Action N" lines for N in the middle of the
+      // range should remain.
+      expect(result.text).not.toContain('button "Action 57"');
+      expect(result.text).not.toContain('button "Action 199"');
+      // The 60 textboxes with "Input 1..60" also aggregate.
+      expect(result.text).toMatch(/60× textbox "Input 1" \.\. "Input 60"/);
+      // The 60 links with "Link 1..60" also aggregate.
+      expect(result.text).toMatch(/60× link "Link 1" \.\. "Link 60"/);
+      // Total interactive token count must be comfortably below the
+      // benchmark's 2000-token budget. The old render produced ~2585; the
+      // global aggregator should take this under 500.
+      expect(result.tokenCount).toBeLessThan(500);
+      // Standard render path, not downsampled.
+      expect(result.downsampled).toBeUndefined();
+    });
+
+    it("resolves refs for every member of an interleaved aggregated bucket", async () => {
+      // Same interleaved pattern as the first interleaved test, but this
+      // time we assert that every individual button's ref still resolves
+      // back to its backendDOMNodeId so click({ref}) keeps working on any
+      // element inside the aggregated band.
+      const childIds: string[] = [];
+      const children: AXNode[] = [];
+      const buttonBackendIds: number[] = [];
+      let backendId = 500;
+      for (let sec = 0; sec < 15; sec++) {
+        const hId = `h${sec}`;
+        const bId = `btn${sec}`;
+        childIds.push(hId, bId);
+        children.push(
+          makeNode({
+            nodeId: hId,
+            parentId: "root",
+            role: { type: "role", value: "heading" },
+            name: { type: "computedString", value: `H${sec}` },
+            backendDOMNodeId: backendId++,
+          }),
+        );
+        buttonBackendIds.push(backendId);
+        children.push(
+          makeNode({
+            nodeId: bId,
+            parentId: "root",
+            role: { type: "role", value: "button" },
+            name: { type: "computedString", value: `Step ${sec + 1}` },
+            backendDOMNodeId: backendId++,
+          }),
+        );
+      }
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "root",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Refs" },
+          backendDOMNodeId: 499,
+          childIds,
+        }),
+        ...children,
+      ];
+      const cdp = mockCdpClient(nodes, "https://example.com/refs-interleaved");
+      await processor.getTree(cdp, "s1");
+
+      // Every button backendId must resolve via its ref, including the ones
+      // that were suppressed in the text output.
+      for (const backend of buttonBackendIds) {
+        const ref = Array.from({ length: 50 })
+          .map((_, i) => `e${i + 1}`)
+          .find((r) => processor.resolveRef(r) === backend);
+        expect(ref).toBeDefined();
+      }
+    });
   });
 });
