@@ -228,13 +228,24 @@ interface NodeInfo {
 }
 
 export class A11yTreeProcessor {
-  private refMap = new Map<number, number>(); // backendDOMNodeId → refNumber
-  private reverseMap = new Map<number, number>(); // refNumber → backendDOMNodeId
+  // BUG-016: refMap is keyed by COMPOSITE `${sessionId}:${backendNodeId}`.
+  // Chrome's `backendNodeId` is unique per renderer process, not globally —
+  // Out-of-Process iframes (and new tabs) have their own namespace and can
+  // collide with the main frame. The composite key makes the mapping
+  // collision-free across CDP sessions. `nextRef` stays global so that
+  // exposed refs (e1, e2, ...) remain unique across the entire user output.
+  private refMap = new Map<string, number>(); // `${sessionId}:${backendNodeId}` → refNumber
+  private reverseMap = new Map<number, { backendNodeId: number; sessionId: string }>(); // refNumber → owner
   // Story 13a.2: Extended with widget-state props for pre-click classification
   private nodeInfoMap = new Map<number, NodeInfo>(); // backendDOMNodeId → NodeInfo
   private sessionNodeMap = new Map<string, Set<number>>(); // sessionId → Set<backendDOMNodeId>
   private nextRef = 1;
   private lastUrl = "";
+
+  // BUG-016: Set by getTree/downsample* for the duration of a render pass so
+  // that deep render helpers (which only carry backendNodeId) can still look
+  // up the composite refMap key. Always restored to "" after the pass.
+  private _renderSessionId = "";
 
   // Precomputed cache state (Story 7.4)
   private _precomputedNodes: AXNode[] | null = null;
@@ -259,8 +270,56 @@ export class A11yTreeProcessor {
     this.sessionNodeMap.clear();
     this.nextRef = 1;
     this.lastUrl = "";
+    this._renderSessionId = "";
     this._cacheVersion++;
     this.invalidatePrecomputed();
+  }
+
+  /**
+   * BUG-016: Build a composite key for the refMap from backendNodeId and
+   * sessionId. Centralizing this avoids template-string sprawl.
+   */
+  private refKey(backendNodeId: number, sessionId: string): string {
+    return `${sessionId}:${backendNodeId}`;
+  }
+
+  /**
+   * BUG-016: Look up a refNumber by backendNodeId. Caller preference order:
+   *   1. Explicit `sessionId` argument (most precise — collision-free).
+   *   2. `_renderSessionId` (set by the active render pass).
+   *   3. Linear scan across all sessions — backward-compat fallback for
+   *      legacy callers that never knew about sessionId. Returns the FIRST
+   *      composite-key match. Not collision-safe under OOPIF duplication,
+   *      but keeps existing tests and tools working. Prefer the explicit
+   *      form in new code.
+   */
+  private refLookup(backendNodeId: number, sessionId?: string): number | undefined {
+    const sid = sessionId ?? this._renderSessionId;
+    if (sid) {
+      return this.refMap.get(this.refKey(backendNodeId, sid));
+    }
+    // Fallback: linear scan. Keys look like `${sessionId}:${backendNodeId}`.
+    const suffix = `:${backendNodeId}`;
+    for (const [key, refNum] of this.refMap) {
+      if (key.endsWith(suffix)) return refNum;
+    }
+    return undefined;
+  }
+
+  /**
+   * BUG-016: Existence check against the composite refMap with the same
+   * precedence rules as `refLookup`.
+   */
+  private refExists(backendNodeId: number, sessionId?: string): boolean {
+    const sid = sessionId ?? this._renderSessionId;
+    if (sid) {
+      return this.refMap.has(this.refKey(backendNodeId, sid));
+    }
+    const suffix = `:${backendNodeId}`;
+    for (const key of this.refMap.keys()) {
+      if (key.endsWith(suffix)) return true;
+    }
+    return false;
   }
 
   /** Invalidiert den Precomputed-Cache (z.B. nach Navigation oder Reconnect) */
@@ -301,12 +360,15 @@ export class A11yTreeProcessor {
     if (!result.nodes || result.nodes.length === 0) return;
 
     // 3. Ref-IDs zuweisen (STABIL — bestehende Refs bleiben, neue bekommen neue Nummern)
+    // BUG-016: composite-key writes — a backendNodeId from a different
+    // session never overwrites an existing entry.
     for (const node of result.nodes) {
       if (node.ignored || node.backendDOMNodeId === undefined) continue;
-      if (!this.refMap.has(node.backendDOMNodeId)) {
+      const key = this.refKey(node.backendDOMNodeId, sessionId);
+      if (!this.refMap.has(key)) {
         const refNum = this.nextRef++;
-        this.refMap.set(node.backendDOMNodeId, refNum);
-        this.reverseMap.set(refNum, node.backendDOMNodeId);
+        this.refMap.set(key, refNum);
+        this.reverseMap.set(refNum, { backendNodeId: node.backendDOMNodeId, sessionId });
       }
       this.nodeInfoMap.set(node.backendDOMNodeId, extractNodeInfo(node));
       if (!this.sessionNodeMap.has(sessionId)) {
@@ -376,18 +438,59 @@ export class A11yTreeProcessor {
     const nodeIds = this.sessionNodeMap.get(sessionId);
     if (!nodeIds) return;
 
+    // BUG-016: delete composite-key entries only. Another session's
+    // identical backendNodeId is untouched because the key differs.
     for (const backendNodeId of nodeIds) {
-      const refNum = this.refMap.get(backendNodeId);
+      const key = this.refKey(backendNodeId, sessionId);
+      const refNum = this.refMap.get(key);
       if (refNum !== undefined) {
         this.reverseMap.delete(refNum);
       }
-      this.refMap.delete(backendNodeId);
-      this.nodeInfoMap.delete(backendNodeId);
+      this.refMap.delete(key);
+      // nodeInfoMap is keyed by bare backendNodeId — only safe to delete
+      // when no other session owns this node. Conservative: keep it for
+      // now (harmless stale metadata, cleaned on full reset). Aggressive
+      // cleanup is out of scope for BUG-016.
+      if (!this._isBackendNodeIdUsedByOtherSessions(backendNodeId, sessionId)) {
+        this.nodeInfoMap.delete(backendNodeId);
+      }
     }
     this.sessionNodeMap.delete(sessionId);
   }
 
+  /**
+   * BUG-016: Helper for removeNodesForSession. Returns true if another
+   * session still references this backendNodeId, so the shared nodeInfo
+   * metadata must be kept.
+   */
+  private _isBackendNodeIdUsedByOtherSessions(
+    backendNodeId: number,
+    excludeSessionId: string,
+  ): boolean {
+    for (const [sid, ids] of this.sessionNodeMap.entries()) {
+      if (sid === excludeSessionId) continue;
+      if (ids.has(backendNodeId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * BUG-016: Legacy backward-compat — returns only the backendNodeId for a
+   * ref. Prefer `resolveRefFull` when you also need the owning sessionId,
+   * which every caller that routes CDP commands does. Kept so tests and
+   * non-critical callers don't need to change.
+   */
   resolveRef(ref: string): number | undefined {
+    return this.resolveRefFull(ref)?.backendNodeId;
+  }
+
+  /**
+   * BUG-016: Returns both backendNodeId AND the owning sessionId for a
+   * ref, eliminating the SessionManager-linear-scan in the hot path.
+   * This is the canonical lookup for click/type/fill_form and any caller
+   * that sends a CDP command that must be routed to the correct session.
+   */
+  resolveRefFull(ref: string): { backendNodeId: number; sessionId: string } | undefined {
     const match = ref.match(/^e(\d+)$/);
     if (!match) return undefined;
     const refNum = parseInt(match[1], 10);
@@ -412,7 +515,10 @@ export class A11yTreeProcessor {
     const iexact: Candidate[] = [];
     const partial: Candidate[] = [];
 
-    for (const [refNum, backendNodeId] of this.reverseMap) {
+    // BUG-016: reverseMap value is now { backendNodeId, sessionId }; we
+    // expose only the backendNodeId in the public return type for
+    // backward compat. Callers that need sessionId should use resolveRefFull.
+    for (const [refNum, { backendNodeId }] of this.reverseMap) {
       const info = this.nodeInfoMap.get(backendNodeId);
       if (!info || !info.name) continue;
       const interactive = INTERACTIVE_ROLES.has(info.role) || !!info.isClickable;
@@ -451,8 +557,14 @@ export class A11yTreeProcessor {
     return this.lastUrl;
   }
 
-  getRefForBackendNodeId(backendNodeId: number): string | undefined {
-    const refNum = this.refMap.get(backendNodeId);
+  /**
+   * BUG-016: Now takes an optional sessionId so composite-key lookups are
+   * unambiguous. When sessionId is omitted we fall back to the current
+   * render pass (`_renderSessionId`) — this keeps legacy callers in the
+   * render/downsample pipeline working without rewiring every signature.
+   */
+  getRefForBackendNodeId(backendNodeId: number, sessionId?: string): string | undefined {
+    const refNum = this.refLookup(backendNodeId, sessionId);
     return refNum !== undefined ? `e${refNum}` : undefined;
   }
 
@@ -491,8 +603,11 @@ export class A11yTreeProcessor {
     for (let ni = 0; ni < totalNodes; ni++) {
       const backendNodeId = doc.nodes.backendNodeId[ni];
 
-      // Only process nodes that have a ref (i.e., are in the A11y tree)
-      if (!this.refMap.has(backendNodeId)) continue;
+      // Only process nodes that have a ref (i.e., are in the A11y tree).
+      // BUG-016: composite-key lookup — `sessionId` is the parameter of
+      // this method, guaranteeing the correct namespace for main-frame
+      // DOMSnapshot data.
+      if (!this.refExists(backendNodeId, sessionId)) continue;
 
       const li = layoutMap.get(ni);
 
@@ -681,12 +796,13 @@ export class A11yTreeProcessor {
     const requested = parseInt(match[1], 10);
 
     // Build candidate list, optionally filtered by role
+    // BUG-016: reverseMap value shape is `{ backendNodeId, sessionId }`.
     const candidates: Array<{ refNum: number; backendNodeId: number; role: string; name: string }> = [];
-    for (const [refNum, backendNodeId] of this.reverseMap.entries()) {
-      const info = this.nodeInfoMap.get(backendNodeId);
+    for (const [refNum, owner] of this.reverseMap.entries()) {
+      const info = this.nodeInfoMap.get(owner.backendNodeId);
       const role = info?.role ?? "";
       if (roleFilter && !roleFilter.has(role)) continue;
-      candidates.push({ refNum, backendNodeId, role, name: info?.name ?? "" });
+      candidates.push({ refNum, backendNodeId: owner.backendNodeId, role, name: info?.name ?? "" });
     }
 
     if (candidates.length === 0) return null;
@@ -800,12 +916,14 @@ export class A11yTreeProcessor {
     }
 
     // Assign refs to all non-ignored nodes with backendDOMNodeId (main frame)
+    // BUG-016: composite-key so OOPIF backendNodeIds can't collide with main.
     for (const node of nodes) {
       if (node.ignored || node.backendDOMNodeId === undefined) continue;
-      if (!this.refMap.has(node.backendDOMNodeId)) {
+      const key = this.refKey(node.backendDOMNodeId, sessionId);
+      if (!this.refMap.has(key)) {
         const refNum = this.nextRef++;
-        this.refMap.set(node.backendDOMNodeId, refNum);
-        this.reverseMap.set(refNum, node.backendDOMNodeId);
+        this.refMap.set(key, refNum);
+        this.reverseMap.set(refNum, { backendNodeId: node.backendDOMNodeId, sessionId });
       }
       // Always update nodeInfoMap with latest role/name
       this.nodeInfoMap.set(node.backendDOMNodeId, extractNodeInfo(node));
@@ -847,14 +965,21 @@ export class A11yTreeProcessor {
             oopifSections.push(oopifResult);
 
             // Assign refs and register nodes for OOPIF
+            // BUG-016: OOPIF backendNodeIds live in a different per-process
+            // namespace and must be keyed by the OOPIF's sessionId to avoid
+            // colliding with the main frame.
             for (const node of oopifResult.nodes) {
               // Add to nodeMap with session-prefixed keys to avoid collisions
               nodeMap.set(`${oopifResult.sessionId}:${node.nodeId}`, node);
               if (node.ignored || node.backendDOMNodeId === undefined) continue;
-              if (!this.refMap.has(node.backendDOMNodeId)) {
+              const oopifKey = this.refKey(node.backendDOMNodeId, oopifResult.sessionId);
+              if (!this.refMap.has(oopifKey)) {
                 const refNum = this.nextRef++;
-                this.refMap.set(node.backendDOMNodeId, refNum);
-                this.reverseMap.set(refNum, node.backendDOMNodeId);
+                this.refMap.set(oopifKey, refNum);
+                this.reverseMap.set(refNum, {
+                  backendNodeId: node.backendDOMNodeId,
+                  sessionId: oopifResult.sessionId,
+                });
               }
               this.nodeInfoMap.set(node.backendDOMNodeId, {
                 role: (node.role?.value as string) ?? "",
@@ -891,17 +1016,53 @@ export class A11yTreeProcessor {
 
     // Handle subtree query
     if (options.ref) {
-      // For subtree, search across all nodes (main + OOPIF)
-      const allNodes = [...nodes];
-      for (const section of oopifSections) {
-        allNodes.push(...section.nodes);
+      // BUG-016 (codex review, CRITICAL #4): the old "combine main + all
+      // OOPIFs into one nodeMap" strategy was broken. Chrome reuses short
+      // `nodeId` strings ("1", "2", ...) per session, so merging two
+      // sessions' nodeMaps silently overwrote entries. Worse, the
+      // `nodes.find(n => n.backendDOMNodeId === targetId)` lookup in
+      // getSubtree returned the FIRST match — under a backendNodeId
+      // collision between main and an OOPIF, that was the wrong frame.
+      //
+      // Fix: pick the correct frame up-front using the ref's owner
+      // sessionId, then build the nodeMap from that frame's nodes only.
+      const full = this.resolveRefFull(options.ref);
+      if (!full) {
+        const availableRefs = this.getAvailableRefsRange();
+        const suggestion = this.suggestClosestRef(options.ref);
+        let errorText = `Element ${options.ref} not found.`;
+        if (availableRefs) errorText += ` Available refs: ${availableRefs}.`;
+        if (suggestion) errorText += ` Did you mean ${suggestion}?`;
+        throw new RefNotFoundError(errorText);
       }
-      // Build a combined nodeMap for subtree
-      const combinedNodeMap = new Map<string, AXNode>();
-      for (const node of allNodes) {
-        combinedNodeMap.set(node.nodeId, node);
+
+      let frameNodes: AXNode[];
+      if (full.sessionId === sessionId) {
+        frameNodes = nodes;
+      } else {
+        const section = oopifSections.find((s) => s.sessionId === full.sessionId);
+        if (!section) {
+          throw new RefNotFoundError(
+            `Element ${options.ref} belongs to a session that is no longer attached.`,
+          );
+        }
+        frameNodes = section.nodes;
       }
-      return this.getSubtree(options.ref, combinedNodeMap, allNodes, filter, depth, visualMap, visualDataFailed, options.max_tokens);
+
+      const frameNodeMap = new Map<string, AXNode>();
+      for (const node of frameNodes) {
+        frameNodeMap.set(node.nodeId, node);
+      }
+      return this.getSubtree(
+        options.ref,
+        frameNodeMap,
+        frameNodes,
+        filter,
+        depth,
+        visualMap,
+        visualDataFailed,
+        options.max_tokens,
+      );
     }
 
     // Get page title from root node
@@ -914,8 +1075,15 @@ export class A11yTreeProcessor {
     // of ≥10 same-class leaves that should collapse into summary lines.
     // Must run BEFORE renderNode so anchors/suppressed ids are visible to
     // every walk path.
-    this.prepareAggregateGroups(root, nodeMap, oopifSections, filter);
-    this.renderNode(root, nodeMap, 0, filter, lines, visualMap);
+    // BUG-016: set render session so helpers (renderNode, prepareAggregateGroups,
+    // etc.) can resolve backendNodeId → ref via the composite-keyed refMap.
+    this._renderSessionId = sessionId;
+    try {
+      this.prepareAggregateGroups(root, nodeMap, oopifSections, filter);
+      this.renderNode(root, nodeMap, 0, filter, lines, visualMap);
+    } finally {
+      this._renderSessionId = "";
+    }
 
     // Append OOPIF sections
     for (const section of oopifSections) {
@@ -925,7 +1093,13 @@ export class A11yTreeProcessor {
       }
       lines.push(`--- iframe: ${section.url} ---`);
       if (section.nodes.length > 0) {
-        this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines, visualMap);
+        // BUG-016: switch render session context for this OOPIF.
+        this._renderSessionId = section.sessionId;
+        try {
+          this.renderNode(section.nodes[0], oopifNodeMap, 0, filter, lines, visualMap);
+        } finally {
+          this._renderSessionId = "";
+        }
       }
     }
     this.clearAggregateGroups();
@@ -946,10 +1120,14 @@ export class A11yTreeProcessor {
     const effectiveMaxTokens = options.max_tokens ?? DEFAULT_MAX_TOKENS;
     const currentTokens = estimateTokens(text);
     if (currentTokens > effectiveMaxTokens) {
+      // BUG-016: re-establish render session for downsample's main-frame
+      // render passes. downsampleTree manages OOPIF session context internally.
+      this._renderSessionId = sessionId;
       const downsampled = this.downsampleTree(
         root, nodeMap, filter, effectiveMaxTokens,
         oopifSections, visualMap,
       );
+      this._renderSessionId = "";
       const dsHeader = this.formatDownsampledHeader(
         pageTitle, downsampled.refCount, filter, depth,
         currentTokens, downsampled.level,
@@ -999,10 +1177,22 @@ export class A11yTreeProcessor {
     oopifSections: Array<{ url: string; nodes: AXNode[]; sessionId: string }>,
     visualMap?: Map<number, VisualInfo>,
   ): { lines: string[]; refCount: number; level: number } {
+    // BUG-016: downsampleTree is always called from getTree(), which has
+    // already captured the main-frame sessionId in `_renderSessionId`.
+    // However, downsampleTree may be retried across multiple levels and
+    // restores `_renderSessionId` after each OOPIF section — we re-set it
+    // back to the main session at each iteration to stay robust.
+    const mainSessionId = this._renderSessionId;
+
     // Try levels 0-4 sequentially until budget is met
     for (let level = 0; level <= 4; level++) {
       const lines: string[] = [];
-      this.renderNodeDownsampled(root, nodeMap, 0, filter, lines, level, visualMap);
+      this._renderSessionId = mainSessionId;
+      try {
+        this.renderNodeDownsampled(root, nodeMap, 0, filter, lines, level, visualMap);
+      } finally {
+        this._renderSessionId = "";
+      }
 
       // Append OOPIF sections
       for (const section of oopifSections) {
@@ -1012,7 +1202,12 @@ export class A11yTreeProcessor {
         }
         lines.push(`--- iframe: ${section.url} ---`);
         if (section.nodes.length > 0) {
-          this.renderNodeDownsampled(section.nodes[0], oopifNodeMap, 0, filter, lines, level, visualMap);
+          this._renderSessionId = section.sessionId;
+          try {
+            this.renderNodeDownsampled(section.nodes[0], oopifNodeMap, 0, filter, lines, level, visualMap);
+          } finally {
+            this._renderSessionId = "";
+          }
         }
       }
 
@@ -1020,13 +1215,19 @@ export class A11yTreeProcessor {
       // Estimate tokens including a header estimate (~60 chars)
       const estimatedTotal = estimateTokens(lines.join("\n")) + 15;
       if (estimatedTotal <= maxTokens) {
+        this._renderSessionId = mainSessionId; // restore for caller
         return { lines, refCount, level };
       }
     }
 
     // Level 4 still too large → truncate as last resort
     const lines: string[] = [];
-    this.renderNodeDownsampled(root, nodeMap, 0, filter, lines, 4, visualMap);
+    this._renderSessionId = mainSessionId;
+    try {
+      this.renderNodeDownsampled(root, nodeMap, 0, filter, lines, 4, visualMap);
+    } finally {
+      this._renderSessionId = "";
+    }
 
     // Append OOPIF sections
     for (const section of oopifSections) {
@@ -1036,10 +1237,16 @@ export class A11yTreeProcessor {
       }
       lines.push(`--- iframe: ${section.url} ---`);
       if (section.nodes.length > 0) {
-        this.renderNodeDownsampled(section.nodes[0], oopifNodeMap, 0, filter, lines, 4, visualMap);
+        this._renderSessionId = section.sessionId;
+        try {
+          this.renderNodeDownsampled(section.nodes[0], oopifNodeMap, 0, filter, lines, 4, visualMap);
+        } finally {
+          this._renderSessionId = "";
+        }
       }
     }
 
+    this._renderSessionId = mainSessionId; // restore for caller
     return this.truncateToFit(lines, maxTokens);
   }
 
@@ -1216,7 +1423,8 @@ export class A11yTreeProcessor {
       return;
     }
 
-    const refNum = this.refMap.get(node.backendDOMNodeId);
+    // BUG-016: composite-key lookup via `_renderSessionId` set by getTree().
+    const refNum = this.refLookup(node.backendDOMNodeId);
     if (refNum === undefined) {
       this.renderChildrenDownsampled(node, nodeMap, indentLevel, filter, lines, level, visualMap);
       return;
@@ -1482,8 +1690,11 @@ export class A11yTreeProcessor {
     visualDataFailed = false,
     maxTokens?: number,
   ): TreeResult {
-    const backendId = this.resolveRef(ref);
-    if (backendId === undefined) {
+    // BUG-016: resolveRefFull returns owner session alongside backendNodeId
+    // so subtree rendering can set `_renderSessionId` correctly. Without
+    // this, renderNode's refLookup would miss every composite-key entry.
+    const full = this.resolveRefFull(ref);
+    if (!full) {
       const availableRefs = this.getAvailableRefsRange();
       const suggestion = this.suggestClosestRef(ref);
       let errorText = `Element ${ref} not found.`;
@@ -1491,6 +1702,7 @@ export class A11yTreeProcessor {
       if (suggestion) errorText += ` Did you mean ${suggestion}?`;
       throw new RefNotFoundError(errorText);
     }
+    const backendId = full.backendNodeId;
 
     // Find the AXNode with this backendDOMNodeId
     const targetNode = nodes.find((n) => n.backendDOMNodeId === backendId);
@@ -1499,7 +1711,12 @@ export class A11yTreeProcessor {
     }
 
     const lines: string[] = [];
-    this.renderNode(targetNode, nodeMap, 0, filter, lines, visualMap);
+    this._renderSessionId = full.sessionId;
+    try {
+      this.renderNode(targetNode, nodeMap, 0, filter, lines, visualMap);
+    } finally {
+      this._renderSessionId = "";
+    }
 
     const refCount = lines.length;
     const header = `Subtree for ${ref} — ${refCount} elements`;
@@ -1509,10 +1726,14 @@ export class A11yTreeProcessor {
     if (maxTokens) {
       const currentTokens = estimateTokens(text);
       if (currentTokens > maxTokens) {
-        // Downsample the subtree using the same pipeline
+        // Downsample the subtree using the same pipeline.
+        // BUG-016: propagate the owner session so the downsample render
+        // pipeline uses the correct composite-key scope.
+        this._renderSessionId = full.sessionId;
         const downsampled = this.downsampleSubtree(
           targetNode, nodeMap, filter, maxTokens, visualMap,
         );
+        this._renderSessionId = "";
         const dsHeader = `Subtree for ${ref} — ${downsampled.refCount} elements (downsampled L${downsampled.level} from ~${currentTokens} tokens)`;
         // C2: Final budget check on subtree too
         let dsBody = downsampled.lines.join("\n");
@@ -1628,7 +1849,8 @@ export class A11yTreeProcessor {
     }
 
     if (passesFilter && node.backendDOMNodeId !== undefined) {
-      const refNum = this.refMap.get(node.backendDOMNodeId);
+      // BUG-016: composite-key lookup via `_renderSessionId`.
+      const refNum = this.refLookup(node.backendDOMNodeId);
       if (refNum !== undefined) {
         const indent = "  ".repeat(indentLevel);
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
@@ -1722,7 +1944,8 @@ export class A11yTreeProcessor {
   ): boolean {
     if (node.ignored) return false;
     if (node.backendDOMNodeId === undefined) return false;
-    if (this.refMap.get(node.backendDOMNodeId) === undefined) return false;
+    // BUG-016: composite-key existence check via `_renderSessionId`.
+    if (!this.refExists(node.backendDOMNodeId)) return false;
     const role = this.getRole(node);
     if (!this.passesFilter(node, role, filter)) return false;
     if (!node.childIds || node.childIds.length === 0) return true;
@@ -1758,9 +1981,16 @@ export class A11yTreeProcessor {
     oopifSections: Array<{ url: string; nodes: AXNode[]; sessionId: string }>,
     filter: string,
   ): void {
-    const buckets = new Map<string, AXNode[]>();
+    // BUG-016: Track which session each aggregated node belongs to so the
+    // composite-keyed refMap can resolve its ref correctly. A single bucket
+    // may legitimately span multiple sessions when they share the same
+    // role+name signature — in that case we bail out of aggregation to keep
+    // things simple (aggregation is a rendering optimization, not a
+    // correctness requirement).
+    type BucketEntry = { node: AXNode; sessionId: string };
+    const buckets = new Map<string, BucketEntry[]>();
 
-    const walk = (node: AXNode, map: Map<string, AXNode>): void => {
+    const walk = (node: AXNode, map: Map<string, AXNode>, sid: string): void => {
       if (
         !node.ignored &&
         node.backendDOMNodeId !== undefined &&
@@ -1775,7 +2005,7 @@ export class A11yTreeProcessor {
             bucket = [];
             buckets.set(key, bucket);
           }
-          bucket.push(node);
+          bucket.push({ node, sessionId: sid });
           // Leaves by definition have no renderable descendants — skip recursion.
           return;
         }
@@ -1783,27 +2013,32 @@ export class A11yTreeProcessor {
       if (node.childIds) {
         for (const childId of node.childIds) {
           const child = map.get(childId);
-          if (child) walk(child, map);
+          if (child) walk(child, map, sid);
         }
       }
     };
 
-    walk(root, nodeMap);
+    // Main frame walk — use the main render session set by getTree().
+    walk(root, nodeMap, this._renderSessionId);
     for (const section of oopifSections) {
       const oopifMap = new Map<string, AXNode>();
       for (const n of section.nodes) oopifMap.set(n.nodeId, n);
-      if (section.nodes.length > 0) walk(section.nodes[0], oopifMap);
+      if (section.nodes.length > 0) walk(section.nodes[0], oopifMap, section.sessionId);
     }
 
     this._aggregateAnchors = new Map();
     this._aggregateSuppressed = new Set();
     for (const bucket of buckets.values()) {
       if (bucket.length < A11yTreeProcessor.AGGREGATE_MIN_COUNT) continue;
-      const first = bucket[0];
-      const last = bucket[bucket.length - 1];
+      // Skip mixed-session buckets — aggregation assumes a contiguous
+      // ref-range, which mixed sessions cannot guarantee.
+      const firstSid = bucket[0].sessionId;
+      if (bucket.some((b) => b.sessionId !== firstSid)) continue;
+      const first = bucket[0].node;
+      const last = bucket[bucket.length - 1].node;
       const firstId = first.backendDOMNodeId!;
-      const firstRef = this.refMap.get(firstId);
-      const lastRef = this.refMap.get(last.backendDOMNodeId!);
+      const firstRef = this.refLookup(firstId, firstSid);
+      const lastRef = this.refLookup(last.backendDOMNodeId!, firstSid);
       if (firstRef === undefined || lastRef === undefined) continue;
       this._aggregateAnchors.set(firstId, {
         count: bucket.length,
@@ -1814,7 +2049,7 @@ export class A11yTreeProcessor {
         lastRef,
       });
       for (let i = 1; i < bucket.length; i++) {
-        this._aggregateSuppressed.add(bucket[i].backendDOMNodeId!);
+        this._aggregateSuppressed.add(bucket[i].node.backendDOMNodeId!);
       }
     }
   }
@@ -2073,9 +2308,10 @@ export class A11yTreeProcessor {
     const match = ref.match(/^e?(\d+)$/);
     if (!match) return "static";
     const refNum = parseInt(match[1], 10);
-    const backendNodeId = this.reverseMap.get(refNum);
-    if (backendNodeId === undefined) return "static";
-    const info = this.nodeInfoMap.get(backendNodeId);
+    // BUG-016: reverseMap value is `{ backendNodeId, sessionId }`.
+    const owner = this.reverseMap.get(refNum);
+    if (!owner) return "static";
+    const info = this.nodeInfoMap.get(owner.backendNodeId);
     if (!info) return "static";
     if (info.disabled) return "disabled";
     // hasPopup can be "false" (string) — only classify as widget-state for truthy popup types
@@ -2098,8 +2334,9 @@ export class A11yTreeProcessor {
     const lines: string[] = [];
     const sortedRefs = [...this.reverseMap.entries()].sort((a, b) => a[0] - b[0]);
 
-    for (const [refNum, backendNodeId] of sortedRefs) {
-      const info = this.nodeInfoMap.get(backendNodeId);
+    // BUG-016: reverseMap value is `{ backendNodeId, sessionId }`.
+    for (const [refNum, owner] of sortedRefs) {
+      const info = this.nodeInfoMap.get(owner.backendNodeId);
       if (!info || !(INTERACTIVE_ROLES.has(info.role) || info.isClickable)) continue;
       const name = info.name ? ` '${info.name}'` : "";
       const idSuffix = info.htmlId ? `#${info.htmlId}` : "";
@@ -2117,8 +2354,9 @@ export class A11yTreeProcessor {
    */
   getSnapshotMap(): SnapshotMap {
     const map: SnapshotMap = new Map();
-    for (const [refNum, backendNodeId] of this.reverseMap) {
-      const info = this.nodeInfoMap.get(backendNodeId);
+    // BUG-016: reverseMap value is `{ backendNodeId, sessionId }`.
+    for (const [refNum, owner] of this.reverseMap) {
+      const info = this.nodeInfoMap.get(owner.backendNodeId);
       if (!info || (!info.name && !CONTEXT_ROLES.has(info.role) && !INTERACTIVE_ROLES.has(info.role) && !info.isClickable)) continue;
       map.set(refNum, `${info.role}\0${info.name ?? ""}`);
     }
@@ -2226,8 +2464,9 @@ export class A11yTreeProcessor {
 
     const sortedRefs = [...this.reverseMap.entries()].sort((a, b) => a[0] - b[0]);
 
-    for (const [refNum, backendNodeId] of sortedRefs) {
-      const info = this.nodeInfoMap.get(backendNodeId);
+    // BUG-016: reverseMap value is `{ backendNodeId, sessionId }`.
+    for (const [refNum, owner] of sortedRefs) {
+      const info = this.nodeInfoMap.get(owner.backendNodeId);
       if (!info) continue;
 
       let line: string | null = null;
@@ -2259,7 +2498,7 @@ export class A11yTreeProcessor {
       const lineTokens = Math.ceil(line.length / 4);
 
       if (tokensSoFar + lineTokens > maxTokens) {
-        const remaining = sortedRefs.filter(([, id]) => INTERACTIVE_ROLES.has(this.nodeInfoMap.get(id)?.role ?? "")).length - interactiveLines.length;
+        const remaining = sortedRefs.filter(([, o]) => INTERACTIVE_ROLES.has(this.nodeInfoMap.get(o.backendNodeId)?.role ?? "")).length - interactiveLines.length;
         interactiveLines.push(`... (${remaining} more)`);
         break;
       }

@@ -438,7 +438,9 @@ describe("screenshotHandler — SoM Pipeline", () => {
       off: vi.fn(),
     } as unknown as CdpClient;
 
-    await a11yTree.getTree(mockCdp, "seed-session", {});
+    // BUG-016: seed under "s1" so composite-key refMap matches the
+    // session screenshotHandler will use in the tests.
+    await a11yTree.getTree(mockCdp, "s1", {});
   }
 
   // Test S4: som: true calls DOMSnapshot.captureSnapshot
@@ -610,7 +612,9 @@ describe("screenshotHandler — SoM Viewport Filter", () => {
       }),
       on: vi.fn(), once: vi.fn(), off: vi.fn(),
     } as unknown as CdpClient;
-    await a11yTree.getTree(mockCdp, "seed-session", {});
+    // BUG-016: seed under "s1" so composite-key refMap matches the
+    // session screenshotHandler will use in the tests.
+    await a11yTree.getTree(mockCdp, "s1", {});
   }
 
   // Test S9: Elements outside viewport (x > 1280 or y > 800) are not labelled
@@ -714,7 +718,9 @@ describe("screenshotHandler — SoM Meta", () => {
       }),
       on: vi.fn(), once: vi.fn(), off: vi.fn(),
     } as unknown as CdpClient;
-    await a11yTree.getTree(mockCdp, "seed-session", {});
+    // BUG-016: seed under "s1" so composite-key refMap matches the
+    // session screenshotHandler will use in the tests.
+    await a11yTree.getTree(mockCdp, "s1", {});
   }
 
   // Test S12: _meta.somElements contains count when som: true

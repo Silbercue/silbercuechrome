@@ -7,6 +7,9 @@ import type { ObserveParams } from "./observe.js";
 vi.mock("../cache/a11y-tree.js", () => ({
   a11yTree: {
     resolveRef: vi.fn(),
+    // BUG-016: resolveRefFull returns { backendNodeId, sessionId }. Tests
+    // that care about the ref path mock this; default returns undefined.
+    resolveRefFull: vi.fn(),
     getNodeInfo: vi.fn(() => ({ role: "button", name: "Test" })),
     currentUrl: "http://test.local",
     refCount: 10,
@@ -200,7 +203,11 @@ describe("observeHandler", () => {
   });
 
   it("should resolve ref and call Runtime.callFunctionOn", async () => {
+    // BUG-016: element-utils now uses resolveRefFull to get both
+    // backendNodeId and owner sessionId in one lookup.
     vi.mocked(a11yTree.resolveRef).mockReturnValue(42);
+    (a11yTree as unknown as { resolveRefFull: { mockReturnValue: (v: unknown) => void } })
+      .resolveRefFull.mockReturnValue({ backendNodeId: 42, sessionId: SESSION_ID });
 
     const { cdpClient, sendFn } = createMockCdp({
       "DOM.resolveNode": { object: { objectId: "obj-ref" } },

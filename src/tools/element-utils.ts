@@ -72,12 +72,15 @@ export async function resolveElement(
     }
 
     // --- Normal Ref Resolution ---
-    const backendNodeId = a11yTree.resolveRef(target.ref);
-    if (backendNodeId === undefined) {
+    // BUG-016: resolveRefFull returns both backendNodeId AND the owning
+    // sessionId in a single lookup. Eliminates the SessionManager linear
+    // scan and the silent-wrong-session collision that caused T2.5 to
+    // type into a Chrome Webstore iframe.
+    const full = a11yTree.resolveRefFull(target.ref);
+    if (!full) {
       throw new RefNotFoundError(`Element ${target.ref} not found.`);
     }
-    // Determine the correct session for this node (main or OOPIF)
-    const targetSessionId = sessionManager?.getSessionForNode(backendNodeId) ?? sessionId;
+    const { backendNodeId, sessionId: targetSessionId } = full;
 
     // Safety net: ensure DOM domain is enabled before resolveNode.
     // DOM.getDocument implicitly enables DOM and is idempotent.
@@ -188,7 +191,7 @@ export function buildRefNotFoundError(
     (!suggestion.name && CONTAINER_ROLES.has(suggestion.role));
 
   if (isUseless) {
-    return `Element ${ref} not found — refs may be stale after page navigation or DOM changes. Use read_page to get fresh refs, or use a CSS selector instead.`;
+    return `Element ${ref} not found (possibly stale after navigation, DOM change, or tab/frame switch). Call read_page for fresh refs and retry; avoid selector-based evaluate as default recovery.`;
   }
 
   return `Element ${ref} not found. Did you mean ${suggestion.ref} (${suggestion.role} '${suggestion.name}')?`;

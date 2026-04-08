@@ -253,8 +253,10 @@ export async function domSnapshotHandler(
       if (!isSubtreeRoot && (w < MIN_SIZE || h < MIN_SIZE)) continue;
 
       // Stage 5: Ref assignment
+      // BUG-016: dom_snapshot runs against the main frame session only;
+      // pass sessionId so composite-keyed refMap lookup works.
       const backendNodeId = doc.nodes.backendNodeId[ni];
-      const ref = a11yTree.getRefForBackendNodeId(backendNodeId);
+      const ref = a11yTree.getRefForBackendNodeId(backendNodeId, sessionId);
       if (!ref) continue;
 
       // Get a11y node info for name

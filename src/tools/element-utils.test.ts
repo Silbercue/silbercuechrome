@@ -64,6 +64,10 @@ function mockCdpForTree(nodes: AXNode[], url = "https://example.com"): CdpClient
 describe("resolveElement", () => {
   beforeEach(() => {
     a11yTree.reset();
+    // BUG-016: selectorCache is a module-level singleton; carry-over from
+    // prior tests would hit the cache branch before resolveRefFull runs
+    // and mask routing regressions.
+    selectorCache.invalidate();
   });
 
   it("resolves ref to backendNodeId and objectId on main session", async () => {
@@ -98,8 +102,8 @@ describe("resolveElement", () => {
     expect(result.name).toBe("OK");
   });
 
-  it("routes to OOPIF session via sessionManager", async () => {
-    // Set up refs
+  it("BUG-016: routes to OOPIF session from resolveRefFull owner info", async () => {
+    // Set up a node under main-session via getTree.
     const nodes: AXNode[] = [
       makeNode({
         nodeId: "1",
@@ -116,18 +120,19 @@ describe("resolveElement", () => {
       }),
     ];
     const treeCdp = mockCdpForTree(nodes);
-    await a11yTree.getTree(treeCdp, "main-session");
+    await a11yTree.getTree(treeCdp, "oopif-session-1");
+
+    // With the composite-key schema, routing is driven directly by
+    // resolveRefFull — no linear scan in SessionManager is needed.
+    const full = a11yTree.resolveRefFull("e2");
+    expect(full).toEqual({ backendNodeId: 201, sessionId: "oopif-session-1" });
 
     const cdp = mockCdpClient();
-    const sessionManager = {
-      getSessionForNode: vi.fn().mockReturnValue("oopif-session-1"),
-    } as unknown as SessionManager;
+    const result = await resolveElement(cdp, "main-session", { ref: "e2" });
 
-    const result = await resolveElement(cdp, "main-session", { ref: "e2" }, sessionManager);
-
-    expect(sessionManager.getSessionForNode).toHaveBeenCalledWith(201);
+    // resolveElement MUST route DOM.resolveNode to the OOPIF session stored
+    // in the refMap, not to the `sessionId` parameter it was called with.
     expect(result.resolvedSessionId).toBe("oopif-session-1");
-    // DOM.resolveNode should have been called on the OOPIF session
     expect(cdp.send).toHaveBeenCalledWith(
       "DOM.resolveNode",
       { backendNodeId: 201 },
@@ -135,7 +140,7 @@ describe("resolveElement", () => {
     );
   });
 
-  it("falls back to main session when sessionManager returns main", async () => {
+  it("BUG-016: routes to main session when the node was registered under main", async () => {
     const nodes: AXNode[] = [
       makeNode({
         nodeId: "1",
@@ -154,11 +159,7 @@ describe("resolveElement", () => {
     await a11yTree.getTree(treeCdp, "main-session");
 
     const cdp = mockCdpClient();
-    const sessionManager = {
-      getSessionForNode: vi.fn().mockReturnValue("main-session"),
-    } as unknown as SessionManager;
-
-    const result = await resolveElement(cdp, "main-session", { ref: "e2" }, sessionManager);
+    const result = await resolveElement(cdp, "main-session", { ref: "e2" });
 
     expect(result.resolvedSessionId).toBe("main-session");
   });
@@ -307,7 +308,7 @@ describe("buildRefNotFoundError", () => {
   it("returns stale-refs message when no refs exist (findClosestRef returns null)", () => {
     const error = buildRefNotFoundError("e1");
     expect(error).toContain("e1 not found");
-    expect(error).toContain("refs may be stale");
+    expect(error).toContain("possibly stale");
     expect(error).toContain("read_page");
     expect(error).not.toContain("Did you mean");
   });
@@ -336,7 +337,7 @@ describe("buildRefNotFoundError", () => {
     // e2 exists in the tree — findClosestRef("e2") returns { ref: "e2", ... }
     const error = buildRefNotFoundError("e2");
     expect(error).toContain("e2 not found");
-    expect(error).toContain("refs may be stale");
+    expect(error).toContain("possibly stale");
     expect(error).not.toContain("Did you mean");
   });
 
@@ -362,7 +363,7 @@ describe("buildRefNotFoundError", () => {
     // e99 doesn't exist — closest is e2 (generic '') which is useless
     const error = buildRefNotFoundError("e99");
     expect(error).toContain("e99 not found");
-    expect(error).toContain("refs may be stale");
+    expect(error).toContain("possibly stale");
     expect(error).not.toContain("Did you mean");
   });
 
@@ -579,7 +580,11 @@ describe("Selector Cache Integration", () => {
 
   // --- M1 fix: session mismatch invalidates cache hit ---
 
-  it("M1: cache hit with session mismatch falls through to normal resolution", async () => {
+  it("BUG-016: cache hit with stale session falls through to fresh refMap lookup", async () => {
+    // The tree is built under main-session. refMap therefore owns the
+    // node under main-session. If a cache entry accidentally claims an
+    // unrelated session, resolveElement must fall through and use the
+    // refMap owner — this prevents silent-wrong session routing.
     const nodes: AXNode[] = [
       makeNode({
         nodeId: "1",
@@ -598,25 +603,25 @@ describe("Selector Cache Integration", () => {
     const treeCdp = mockCdpForTree(nodes);
     await a11yTree.getTree(treeCdp, "main-session");
 
-    // Cache entry with old session
+    // Plant a cache entry with a stale session.
     const fp = selectorCache.computeFingerprint("https://example.com", a11yTree.refCount);
     selectorCache.updateFingerprint(fp);
     selectorCache.set("e2", 101, "old-session");
 
     const cdp = mockCdpClient();
-    // SessionManager returns a different session than what's cached
     const sessionManager = {
-      getSessionForNode: vi.fn().mockReturnValue("new-session"),
+      getSessionForNode: vi.fn().mockReturnValue("main-session"),
     } as unknown as SessionManager;
 
     const result = await resolveElement(cdp, "main-session", { ref: "e2" }, sessionManager);
 
-    // Should resolve via normal path (not cache), using the new session
-    expect(result.resolvedSessionId).toBe("new-session");
+    // Falls through cache, hits refMap, routes to the owner session
+    // (main-session) — NOT the stale "old-session" in the cache.
+    expect(result.resolvedSessionId).toBe("main-session");
     expect(result.backendNodeId).toBe(101);
-    // The cache entry should be updated with the new session
+    // The fresh cache entry should be updated with the correct session.
     const cached = selectorCache.get("e2");
     expect(cached).toBeDefined();
-    expect(cached!.sessionId).toBe("new-session");
+    expect(cached!.sessionId).toBe("main-session");
   });
 });

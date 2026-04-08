@@ -64,6 +64,7 @@ interface SomLabel {
 
 function collectSomLabels(
   snapshot: SomCaptureSnapshotResponse,
+  sessionId?: string,
 ): SomLabel[] {
   if (!snapshot.documents || snapshot.documents.length === 0) return [];
 
@@ -83,7 +84,9 @@ function collectSomLabels(
     const backendNodeId = doc.nodes.backendNodeId[ni];
 
     // Must have an A11y ref
-    const ref = a11yTree.getRefForBackendNodeId(backendNodeId);
+    // BUG-016: screenshot/SoM run against the main-frame session; pass
+    // sessionId so the composite-keyed refMap resolves the owner.
+    const ref = a11yTree.getRefForBackendNodeId(backendNodeId, sessionId);
     if (!ref) continue;
 
     // Must have layout data
@@ -287,7 +290,7 @@ export async function screenshotHandler(
           sessionId,
         );
 
-        const labels = collectSomLabels(snapshot);
+        const labels = collectSomLabels(snapshot, sessionId);
         somElements = labels.length;
 
         if (labels.length > 0) {

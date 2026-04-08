@@ -7,6 +7,7 @@ import { settle } from "../cdp/settle.js";
 import { DEVICE_METRICS_OVERRIDE, isHeadless } from "../cdp/emulation.js";
 import { wrapCdpError } from "./error-utils.js";
 import { injectOverlay } from "../overlay/session-overlay.js";
+import { a11yTree } from "../cache/a11y-tree.js";
 
 export const switchTabSchema = z.object({
   action: z
@@ -127,6 +128,14 @@ async function activateSession(
 
   // 4. Propagate new session to ToolRegistry
   onSessionChange(newSessionId);
+
+  // BUG-017: Every ref in the a11y-cache belongs to the previous tab's
+  // document and sits in a completely different backendNodeId namespace.
+  // Reset the cache so the next read_page builds a fresh ref table —
+  // this makes the existing STALE_REFS_HINT (Z. 91) truthful for the
+  // first time. Without this reset, a stale ref could silently resolve
+  // to an unrelated node in the new tab via the old refNum.
+  a11yTree.reset();
 
   // 5. Inject session overlay into the new tab
   await injectOverlay(cdpClient, newSessionId);
