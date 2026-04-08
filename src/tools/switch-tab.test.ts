@@ -78,6 +78,7 @@ const defaultCdpResponses = {
   "Runtime.enable": {},
   "Page.enable": {},
   "Page.setLifecycleEventsEnabled": {},
+  "DOM.enable": {},
   "Accessibility.enable": {},
   "Emulation.setDeviceMetricsOverride": {},
   "Page.getFrameTree": { frameTree: { frame: { id: "frame-1" } } },
@@ -127,6 +128,23 @@ describe("switchTabHandler — action: open", () => {
     expect(text).toContain("Title:");
     expect(result._meta?.method).toBe("switch_tab");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("activateSession calls DOM.enable on new session", async () => {
+    const { cdpClient, sendFn } = createMockCdp(defaultCdpResponses);
+    const cache = new TabStateCache({ ttlMs: 30_000 });
+    cache.setActiveTarget("T-OLD");
+    const onSessionChange = vi.fn();
+
+    await switchTabHandler(
+      { action: "open" },
+      cdpClient,
+      "session-old",
+      cache,
+      onSessionChange,
+    );
+
+    expect(sendFn).toHaveBeenCalledWith("DOM.enable", {}, "session-new");
   });
 
   it("opens new tab without URL, defaults to about:blank", async () => {

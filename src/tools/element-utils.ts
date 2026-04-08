@@ -79,6 +79,14 @@ export async function resolveElement(
     // Determine the correct session for this node (main or OOPIF)
     const targetSessionId = sessionManager?.getSessionForNode(backendNodeId) ?? sessionId;
 
+    // Safety net: ensure DOM domain is enabled before resolveNode.
+    // DOM.getDocument implicitly enables DOM and is idempotent.
+    try {
+      await cdpClient.send("DOM.getDocument", { depth: 0 }, targetSessionId);
+    } catch {
+      // Best-effort — resolveNode may still work with backendNodeId
+    }
+
     // Get objectId via DOM.resolveNode — may fail for stale refs (node removed from DOM)
     let resolved: { object: { objectId: string } };
     try {
@@ -92,6 +100,11 @@ export async function resolveElement(
       const wrapped = wrapCdpError(err, "resolveElement");
       if (wrapped.startsWith("CDP connection lost")) {
         throw new Error(wrapped);
+      }
+      // Distinguish "DOM not enabled" from actual stale refs
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("DOM agent needs to be enabled")) {
+        throw new Error(`DOM domain not enabled for session — this is a server bug, not a stale ref. Try calling read_page first or report this issue.`);
       }
       throw new RefNotFoundError(
         `Element ${target.ref} not found (stale ref — node no longer in DOM).`,

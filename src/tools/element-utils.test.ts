@@ -197,6 +197,34 @@ describe("resolveElement", () => {
     await expect(resolveElement(cdp, "s1", { ref: "e2" })).rejects.toThrow("stale ref");
   });
 
+  it("throws descriptive error when DOM agent is not enabled", async () => {
+    const nodes: AXNode[] = [
+      makeNode({ nodeId: "1", role: { type: "role", value: "rootWebArea" }, backendDOMNodeId: 100 }),
+      makeNode({
+        nodeId: "2",
+        parentId: "1",
+        role: { type: "role", value: "button" },
+        backendDOMNodeId: 101,
+      }),
+    ];
+    const treeCdp = mockCdpForTree(nodes);
+    await a11yTree.getTree(treeCdp, "s1");
+
+    // DOM.getDocument succeeds but DOM.resolveNode throws "DOM agent needs to be enabled"
+    const cdp = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === "DOM.getDocument") return Promise.resolve({ root: { nodeId: 1 } });
+        if (method === "DOM.resolveNode") return Promise.reject(new Error("CDP error -32000: DOM agent needs to be enabled first."));
+        return Promise.resolve({});
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as CdpClient;
+
+    await expect(resolveElement(cdp, "s1", { ref: "e2" })).rejects.toThrow("DOM domain not enabled");
+  });
+
   it("resolves CSS selector on main session", async () => {
     const cdp = mockCdpClient(
       { object: { objectId: "obj-css" } },
