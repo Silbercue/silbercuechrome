@@ -400,7 +400,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const errContent: ToolContentBlock[] = [
-        { type: "text", text: `Chrome ist nicht erreichbar: ${msg}. Pruefe ob Chrome installiert ist, oder starte Chrome manuell mit --remote-debugging-port=9222 und rufe das Tool erneut auf.` },
+        { type: "text", text: `Chrome is not reachable: ${msg}. Check that Chrome is installed, or start Chrome manually with --remote-debugging-port=9222 and retry the tool call.` },
       ];
       return {
         content: errContent,
@@ -643,7 +643,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // of seeing an opaque exception in the MCP transport layer.
     const buildLaunchFailureResponse = (name: string, err: unknown): ToolResponse => {
       const msg = err instanceof Error ? err.message : String(err);
-      const text = `Chrome ist nicht erreichbar: ${msg}. Pruefe ob Chrome installiert ist, oder starte Chrome manuell mit --remote-debugging-port=9222 und rufe das Tool erneut auf.`;
+      const text = `Chrome is not reachable: ${msg}. Check that Chrome is installed, or start Chrome manually with --remote-debugging-port=9222 and retry the tool call.`;
       const content: ToolContentBlock[] = [{ type: "text", text }];
       return {
         content,
@@ -1244,7 +1244,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       // H3 fix: switch_tab in parallel context would mutate the global session — block it
       if (sessionIdOverride) {
         return {
-          content: [{ type: "text", text: "switch_tab ist in parallelen Plan-Gruppen nicht erlaubt — jede Gruppe operiert auf ihrem eigenen Tab" }],
+          content: [{ type: "text", text: "switch_tab is not allowed in parallel plan groups — each group operates on its own tab" }],
           isError: true,
           _meta: { elapsedMs: 0, method: "switch_tab" },
         };

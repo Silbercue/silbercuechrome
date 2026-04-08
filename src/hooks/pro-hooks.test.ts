@@ -291,7 +291,7 @@ describe("ProHooks", () => {
     // Must name the tool and flag it as Pro
     expect(text).toContain("dom_snapshot (Pro)");
     // Must briefly describe what the Pro tool does
-    expect(text).toMatch(/DOM-Tree-Snapshot/i);
+    expect(text).toMatch(/DOM tree snapshot/i);
     // Must mention the Free alternative so the LLM can continue
     expect(text).toContain("read_page");
     // Must provide a clear upgrade path
@@ -307,7 +307,7 @@ describe("ProHooks", () => {
     expect(result.isError).toBe(true);
     expect(text).toContain("virtual_desk (Pro)");
     // Describes the value proposition
-    expect(text).toMatch(/Fenster-Layout|Multi-Tab/i);
+    expect(text).toMatch(/window layout|multi-tab/i);
     // Points to the Free alternative
     expect(text).toContain("tab_status");
     // Upgrade path
@@ -320,7 +320,7 @@ describe("ProHooks", () => {
 
     expect(result.isError).toBe(true);
     expect(text).toContain("switch_tab (Pro)");
-    expect(text).toMatch(/Multi-Tab-Workflows/i);
+    expect(text).toMatch(/multi-tab workflows/i);
     expect(text).toContain("navigate");
     expect(text).toContain("Upgrade:");
   });
@@ -331,7 +331,7 @@ describe("ProHooks", () => {
     const result = proFeatureError("some_future_tool");
 
     expect(result.isError).toBe(true);
-    expect((result.content[0] as { text: string }).text).toContain("some_future_tool ist ein Pro-Feature");
+    expect((result.content[0] as { text: string }).text).toContain("some_future_tool is a Pro feature");
     expect(result._meta!.method).toBe("some_future_tool");
   });
 
