@@ -798,4 +798,115 @@ describe("readPageHandler", () => {
     expect(result.content[0].text).toContain("button");
     expect(result.content[0].text).not.toContain("hidden");
   });
+
+  // FR-022: Hint that visible text content was filtered out by filter:interactive.
+  // Prevents the LLM from falling back to evaluate/querySelector to read visible text.
+  describe("FR-022: hidden content nodes hint", () => {
+    const contentHeavyNodes: AXNode[] = [
+      makeNode({
+        nodeId: "1",
+        role: { type: "role", value: "WebArea" },
+        name: { type: "computedString", value: "Test Page" },
+        backendDOMNodeId: 200,
+        childIds: ["c1", "c2", "c3", "c4", "c5", "c6", "c7"],
+      }),
+      makeNode({
+        nodeId: "c1", parentId: "1",
+        role: { type: "role", value: "StaticText" },
+        name: { type: "computedString", value: "Secret: ABC-123" },
+        backendDOMNodeId: 201,
+      }),
+      makeNode({
+        nodeId: "c2", parentId: "1",
+        role: { type: "role", value: "StaticText" },
+        name: { type: "computedString", value: "Value: 42" },
+        backendDOMNodeId: 202,
+      }),
+      makeNode({
+        nodeId: "c3", parentId: "1",
+        role: { type: "role", value: "cell" },
+        name: { type: "computedString", value: "Alpha" },
+        backendDOMNodeId: 203,
+      }),
+      makeNode({
+        nodeId: "c4", parentId: "1",
+        role: { type: "role", value: "cell" },
+        name: { type: "computedString", value: "Beta" },
+        backendDOMNodeId: 204,
+      }),
+      makeNode({
+        nodeId: "c5", parentId: "1",
+        role: { type: "role", value: "paragraph" },
+        name: { type: "computedString", value: "Some description" },
+        backendDOMNodeId: 205,
+      }),
+      makeNode({
+        nodeId: "c6", parentId: "1",
+        role: { type: "role", value: "button" },
+        name: { type: "computedString", value: "Submit" },
+        backendDOMNodeId: 206,
+      }),
+      makeNode({
+        nodeId: "c7", parentId: "1",
+        role: { type: "role", value: "StaticText" },
+        name: { type: "computedString", value: "Another label" },
+        backendDOMNodeId: 207,
+      }),
+    ];
+
+    it("appends content-hidden hint when filter=interactive and >= 5 content nodes hidden", async () => {
+      a11yTree.reset();
+      const cdp = mockCdpClient(contentHeavyNodes, "https://example.com/fr-022");
+      const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+      expect(result.isError).toBeUndefined();
+      const text = result.content[0].text as string;
+      expect(text).toMatch(/text\/content nodes/);
+      expect(text).toMatch(/filter:\s*"all"/);
+      expect(text).toMatch(/don't fall back to evaluate/);
+    });
+
+    it("does NOT append content-hidden hint for filter=all", async () => {
+      a11yTree.reset();
+      const cdp = mockCdpClient(contentHeavyNodes, "https://example.com/fr-022-all");
+      const result = await readPageHandler({ depth: 3, filter: "all" }, cdp, "s1");
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).not.toMatch(/text\/content nodes.*hidden/);
+    });
+
+    it("does NOT append hint when < 5 content nodes hidden", async () => {
+      const lightNodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 300,
+          childIds: ["2", "3", "4"],
+        }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "StaticText" },
+          name: { type: "computedString", value: "Hello" },
+          backendDOMNodeId: 301,
+        }),
+        makeNode({
+          nodeId: "3", parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "OK" },
+          backendDOMNodeId: 302,
+        }),
+        makeNode({
+          nodeId: "4", parentId: "1",
+          role: { type: "role", value: "StaticText" },
+          name: { type: "computedString", value: "World" },
+          backendDOMNodeId: 303,
+        }),
+      ];
+      a11yTree.reset();
+      const cdp = mockCdpClient(lightNodes, "https://example.com/fr-022-light");
+      const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+      expect(result.content[0].text).not.toMatch(/text\/content nodes.*hidden/);
+    });
+  });
 });

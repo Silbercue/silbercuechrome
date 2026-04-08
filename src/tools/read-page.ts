@@ -80,6 +80,12 @@ export async function readPageHandler(
       }
     }
 
+    // FR-022: Hint that visible text content (table cells, codes, labels) is filtered out by 'interactive'.
+    // Prevents the LLM from reaching for evaluate/querySelector to read visible text.
+    if (params.filter === "interactive" && (result.hiddenContentCount ?? 0) >= 5) {
+      responseText += `\n\nNote: ${result.hiddenContentCount} text/content nodes (table cells, paragraphs, static text) are not shown by filter:"interactive". If you need to read visible text content, call read_page(ref: "eN", filter: "all") on the subtree — don't fall back to evaluate/querySelector.`;
+    }
+
     const elapsedMs = Math.round(performance.now() - start);
 
     return {

@@ -2688,4 +2688,186 @@ describe("A11yTreeProcessor", () => {
       expect(text).toContain("5 more changes");
     });
   });
+
+  // FR-021: When a clickable generic has its innerText truncated to 80 chars
+  // during FR-H5 enrichment, formatLine must surface the truncation with a
+  // "+N chars" marker so the LLM knows there's more text available via filter:'all'.
+  describe("Name truncation marker (FR-021)", () => {
+    function cdpForTruncatedGeneric(opts: { innerText: string; nodes: AXNode[] }) {
+      return {
+        send: vi.fn().mockImplementation((method: string, params?: Record<string, unknown>) => {
+          if (method === "Runtime.evaluate") {
+            return Promise.resolve({ result: { value: "https://example.com/fr-021" } });
+          }
+          if (method === "Accessibility.getFullAXTree") {
+            return Promise.resolve({ nodes: opts.nodes });
+          }
+          if (method === "DOM.describeNode") {
+            // Make the generic "clickable" by returning an onclick attribute
+            return Promise.resolve({ node: { attributes: ["onclick", "doSomething()"] } });
+          }
+          if (method === "DOM.resolveNode") {
+            return Promise.resolve({ object: { objectId: "fake-obj-1" } });
+          }
+          if (method === "Runtime.callFunctionOn") {
+            const t = opts.innerText;
+            // FR-021 enrichment protocol: first 80 chars + \x00 + full length
+            return Promise.resolve({ result: { value: t.slice(0, 80) + "\x00" + t.length } });
+          }
+          if (method === "Runtime.releaseObject") return Promise.resolve({});
+          return Promise.resolve({});
+        }),
+        on: vi.fn(),
+        once: vi.fn(),
+        off: vi.fn(),
+      } as unknown as CdpClient;
+    }
+
+    it("appends '…[+N chars]' marker when generic name was truncated", async () => {
+      const proc = new A11yTreeProcessor();
+      const longText =
+        "T1.2 Read Text Content — Lies den versteckten Wert aus dem Element und gib ihn in das Eingabefeld ein. Der geheime Code lautet: QMQ1-BPAD";
+      expect(longText.length).toBeGreaterThan(80);
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 500,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          // No name — triggers FR-H5 enrichment path
+          role: { type: "role", value: "generic" },
+          backendDOMNodeId: 501,
+        }),
+      ];
+      const cdp = cdpForTruncatedGeneric({ innerText: longText, nodes });
+      const result = await proc.getTree(cdp, "s1", { filter: "interactive" });
+
+      // Marker should include the extra-char count and direct the LLM to filter:'all'
+      expect(result.text).toMatch(/…\[\+\d+ chars; use filter:"all"/);
+    });
+
+    it("does NOT append marker when innerText fits in 80 chars", async () => {
+      const proc = new A11yTreeProcessor();
+      const shortText = "Short name";
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 600,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2", parentId: "1",
+          role: { type: "role", value: "generic" },
+          backendDOMNodeId: 601,
+        }),
+      ];
+      const cdp = cdpForTruncatedGeneric({ innerText: shortText, nodes });
+      const result = await proc.getTree(cdp, "s1", { filter: "interactive" });
+
+      expect(result.text).not.toMatch(/…\[\+\d+ chars/);
+    });
+  });
+
+  // FR-022: Content nodes hidden by filter:interactive must be counted so
+  // read_page can hint that filter:'all' would reveal them. Prevents the LLM
+  // from falling back to evaluate/querySelector to read visible text.
+  describe("hiddenContentCount (FR-022)", () => {
+    it("counts visible StaticText/paragraph/cell nodes when filter=interactive", async () => {
+      const proc = new A11yTreeProcessor();
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2", "3", "4", "5"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "StaticText" },
+          name: { type: "computedString", value: "Der geheime Code lautet: QMQ1-BPAD" },
+          backendDOMNodeId: 101,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "paragraph" },
+          name: { type: "computedString", value: "Lorem ipsum" },
+          backendDOMNodeId: 102,
+        }),
+        makeNode({
+          nodeId: "4",
+          parentId: "1",
+          role: { type: "role", value: "cell" },
+          name: { type: "computedString", value: "203" },
+          backendDOMNodeId: 103,
+        }),
+        makeNode({
+          nodeId: "5",
+          parentId: "1",
+          role: { type: "role", value: "button" },
+          name: { type: "computedString", value: "Submit" },
+          backendDOMNodeId: 104,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      const result = await proc.getTree(cdp, "s1", { filter: "interactive" });
+      expect(result.hiddenContentCount).toBe(3);
+    });
+
+    it("returns undefined when filter is 'all' (nothing hidden)", async () => {
+      const proc = new A11yTreeProcessor();
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "StaticText" },
+          name: { type: "computedString", value: "hi" },
+          backendDOMNodeId: 101,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      const result = await proc.getTree(cdp, "s1", { filter: "all" });
+      expect(result.hiddenContentCount).toBeUndefined();
+    });
+
+    it("ignores content nodes with empty names", async () => {
+      const proc = new A11yTreeProcessor();
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+          childIds: ["2", "3"],
+        }),
+        makeNode({
+          nodeId: "2",
+          parentId: "1",
+          role: { type: "role", value: "StaticText" },
+          name: { type: "computedString", value: "" },
+          backendDOMNodeId: 101,
+        }),
+        makeNode({
+          nodeId: "3",
+          parentId: "1",
+          role: { type: "role", value: "paragraph" },
+          name: { type: "computedString", value: "   " },
+          backendDOMNodeId: 102,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      const result = await proc.getTree(cdp, "s1", { filter: "interactive" });
+      expect(result.hiddenContentCount).toBe(0);
+    });
+  });
 });

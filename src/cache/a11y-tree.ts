@@ -59,6 +59,8 @@ export interface TreeResult {
   downsampled?: boolean;
   originalTokens?: number;
   downsampleLevel?: number;
+  /** FR-022: Number of content nodes (StaticText, paragraph, cell, etc.) with visible text that were hidden by filter:interactive. */
+  hiddenContentCount?: number;
 }
 
 // --- Visual Enrichment Types ---
@@ -222,6 +224,7 @@ interface NodeInfo {
   isClickable?: boolean; // FR-005: Has onclick handler (for non-interactive roles like columnheader)
   linkTarget?: string;  // FR-002: target attribute for links (e.g. "_blank")
   isScrollable?: boolean; // FR-001: Container has overflow-y auto/scroll and scrollHeight > clientHeight
+  nameFullLength?: number; // FR-021: Full innerText length when name was truncated by FR-H5 enrichment (80-char cap)
 }
 
 export class A11yTreeProcessor {
@@ -619,12 +622,28 @@ export class A11yTreeProcessor {
             );
             const oid = resolved.object?.objectId;
             if (!oid) return;
+            // FR-021: Fetch truncated text AND full length so formatLine can show a truncation marker.
+            // Separator \x00 avoids JSON/object marshalling overhead — one string roundtrip, simple split.
             const textResult = await cdpClient.send<{ result: { value?: string } }>(
               "Runtime.callFunctionOn",
-              { functionDeclaration: "function(){return(this.innerText||this.textContent||'').slice(0,80)}", objectId: oid, returnByValue: true },
+              { functionDeclaration: "function(){const t=(this.innerText||this.textContent||'');return t.slice(0,80)+'\\x00'+t.length}", objectId: oid, returnByValue: true },
               sessionId,
             );
-            if (textResult.result.value) info.name = textResult.result.value;
+            if (textResult.result.value) {
+              const sep = textResult.result.value.indexOf("\x00");
+              if (sep >= 0) {
+                const truncated = textResult.result.value.slice(0, sep);
+                const fullLength = parseInt(textResult.result.value.slice(sep + 1), 10);
+                if (truncated) {
+                  info.name = truncated;
+                  if (Number.isFinite(fullLength) && fullLength > truncated.length) {
+                    info.nameFullLength = fullLength;
+                  }
+                }
+              } else {
+                info.name = textResult.result.value; // Legacy fallback
+              }
+            }
             await cdpClient.send("Runtime.releaseObject", { objectId: oid }, sessionId).catch(() => {});
           } catch { /* non-critical */ }
         }));
@@ -907,6 +926,13 @@ export class A11yTreeProcessor {
 
     // H5: Count only actual element lines, not separator lines (--- iframe: ... ---)
     const refCount = lines.filter((l) => !l.startsWith("--- ")).length;
+
+    // FR-022: Count content nodes (StaticText/paragraph/etc.) hidden by filter:interactive,
+    // so read-page.ts can append a hint pointing the LLM at filter:'all' instead of evaluate.
+    const hiddenContentCount = filter === "interactive"
+      ? this.countHiddenContentNodes(root, nodeMap, oopifSections)
+      : undefined;
+
     const text = this.formatHeader(pageTitle, refCount, filter, depth)
       + (lines.length > 0 ? "\n\n" + lines.join("\n") : "");
 
@@ -942,6 +968,7 @@ export class A11yTreeProcessor {
         originalTokens: currentTokens,
         downsampleLevel: downsampled.level,
         ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
+        ...(hiddenContentCount !== undefined ? { hiddenContentCount } : {}),
       };
     }
 
@@ -952,6 +979,7 @@ export class A11yTreeProcessor {
       tokenCount: currentTokens,
       pageUrl: this.lastUrl,
       ...(filter === "visual" ? { hasVisualData: !visualDataFailed } : {}),
+      ...(hiddenContentCount !== undefined ? { hiddenContentCount } : {}),
     };
   }
 
@@ -1618,6 +1646,43 @@ export class A11yTreeProcessor {
     }
   }
 
+  /** FR-022: Count content nodes with visible text that would be hidden by filter:interactive.
+   *  Used to append a hint in read-page.ts that points the LLM at filter:'all' instead of evaluate. */
+  private countHiddenContentNodes(
+    root: AXNode,
+    nodeMap: Map<string, AXNode>,
+    oopifSections: Array<{ url: string; nodes: AXNode[]; sessionId: string }>,
+  ): number {
+    let count = 0;
+    const walk = (node: AXNode, map: Map<string, AXNode>): void => {
+      if (node.ignored) {
+        // Still walk ignored children — they may wrap visible content
+      } else {
+        const role = (node.role?.value as string) ?? "";
+        if (CONTENT_ROLES.has(role)) {
+          const name = (node.name?.value as string | undefined) ?? "";
+          // Only count nodes with actual visible text content
+          if (name && name.trim().length > 0) {
+            count++;
+          }
+        }
+      }
+      if (node.childIds) {
+        for (const childId of node.childIds) {
+          const child = map.get(childId);
+          if (child) walk(child, map);
+        }
+      }
+    };
+    walk(root, nodeMap);
+    for (const section of oopifSections) {
+      const oopifNodeMap = new Map<string, AXNode>();
+      for (const n of section.nodes) oopifNodeMap.set(n.nodeId, n);
+      if (section.nodes.length > 0) walk(section.nodes[0], oopifNodeMap);
+    }
+    return count;
+  }
+
   private getRole(node: AXNode): string {
     return (node.role?.value as string) ?? "";
   }
@@ -1653,6 +1718,14 @@ export class A11yTreeProcessor {
       || (backendNodeId !== undefined ? this.nodeInfoMap.get(backendNodeId)?.name : undefined);
     if (name) {
       line += ` "${name}"`;
+      // FR-021: Signal truncation so the LLM knows hidden text exists (reached for evaluate otherwise)
+      if (backendNodeId !== undefined) {
+        const fullLen = this.nodeInfoMap.get(backendNodeId)?.nameFullLength;
+        if (fullLen && fullLen > name.length) {
+          const extra = fullLen - name.length;
+          line += ` …[+${extra} chars; use filter:"all" with ref to read subtree]`;
+        }
+      }
     }
 
     const value = node.value?.value as string | undefined;

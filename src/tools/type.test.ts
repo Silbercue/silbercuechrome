@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { typeSchema, typeHandler } from "./type.js";
+import { typeSchema, typeHandler, _resetTypeStreaks } from "./type.js";
 import type { TypeParams } from "./type.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 
@@ -650,6 +650,97 @@ describe("typeHandler", () => {
       const insertCalls = sendFn.mock.calls.filter((c) => c[0] === "Input.insertText");
       expect(insertCalls.length).toBe(1);
       expect(insertCalls[0][1]).toEqual({ text: "hello" });
+    });
+  });
+
+  // FR-023: Consecutive type-call detector that suggests fill_form after
+  // the second type call in a short window. The hint is appended to the
+  // type response so the LLM sees "you could use fill_form instead".
+  describe("fill_form streak hint", () => {
+    beforeEach(() => {
+      _resetTypeStreaks();
+      mockResolveElement.mockResolvedValue(mockTextbox());
+    });
+
+    it("does NOT emit the hint on the first type call", async () => {
+      const { cdpClient } = createMockCdp();
+      const result = await typeHandler(
+        { ref: "e1", text: "foo", clear: false } as TypeParams,
+        cdpClient,
+        "session-A",
+      );
+      expect(result.isError).toBeUndefined();
+      expect(result.content[0].text).not.toMatch(/fill_form/);
+    });
+
+    it("emits the hint on the second consecutive type call in the same session", async () => {
+      const { cdpClient } = createMockCdp();
+      await typeHandler(
+        { ref: "e1", text: "foo", clear: false } as TypeParams,
+        cdpClient,
+        "session-B",
+      );
+      const result2 = await typeHandler(
+        { ref: "e2", text: "bar", clear: false } as TypeParams,
+        cdpClient,
+        "session-B",
+      );
+      expect(result2.content[0].text).toMatch(/fill_form/);
+      expect(result2.content[0].text).toMatch(/Tip:/);
+    });
+
+    it("emits the hint only once per streak (not again on third call)", async () => {
+      const { cdpClient } = createMockCdp();
+      await typeHandler(
+        { ref: "e1", text: "a", clear: false } as TypeParams,
+        cdpClient,
+        "session-C",
+      );
+      const result2 = await typeHandler(
+        { ref: "e2", text: "b", clear: false } as TypeParams,
+        cdpClient,
+        "session-C",
+      );
+      expect(result2.content[0].text).toMatch(/fill_form/);
+      const result3 = await typeHandler(
+        { ref: "e3", text: "c", clear: false } as TypeParams,
+        cdpClient,
+        "session-C",
+      );
+      // No second hint — avoids spamming
+      expect(result3.content[0].text).not.toMatch(/fill_form/);
+    });
+
+    it("tracks streaks separately per sessionId", async () => {
+      const { cdpClient } = createMockCdp();
+      await typeHandler(
+        { ref: "e1", text: "a", clear: false } as TypeParams,
+        cdpClient,
+        "session-D",
+      );
+      // Second call in a DIFFERENT session — no hint, fresh streak
+      const result = await typeHandler(
+        { ref: "e1", text: "a", clear: false } as TypeParams,
+        cdpClient,
+        "session-E",
+      );
+      expect(result.content[0].text).not.toMatch(/fill_form/);
+    });
+
+    it("does NOT emit hint when sessionId is undefined", async () => {
+      const { cdpClient } = createMockCdp();
+      const result1 = await typeHandler(
+        { ref: "e1", text: "a", clear: false } as TypeParams,
+        cdpClient,
+        undefined,
+      );
+      const result2 = await typeHandler(
+        { ref: "e2", text: "b", clear: false } as TypeParams,
+        cdpClient,
+        undefined,
+      );
+      expect(result1.content[0].text).not.toMatch(/fill_form/);
+      expect(result2.content[0].text).not.toMatch(/fill_form/);
     });
   });
 });

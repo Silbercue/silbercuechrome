@@ -89,6 +89,81 @@ export const evaluateSchema = z.object({
     .describe("Whether to await Promise results"),
 });
 
+/**
+ * FR-024: Detect common evaluate anti-patterns where a dedicated tool would be better.
+ * Returns a hint string appended to the evaluate result, or null if no pattern matched.
+ * Intent: "what you did isn't wrong, but there's a more reliable tool for this".
+ *
+ * Design: be specific enough to avoid false positives on legitimate DOM work
+ * (e.g. `document.querySelector('.card').style.width = '200px'` is NOT an
+ * anti-pattern — it's a style edit that no other tool covers).
+ */
+export function detectEvaluateAntiPattern(expression: string): string | null {
+  const hints: string[] = [];
+
+  // Pattern 1A: Bulk element discovery via querySelectorAll / getElementsByXxx.
+  // This is read_page's core job — stable refs survive, selectors don't.
+  const bulkDiscovery =
+    /\bdocument\.(querySelectorAll|getElementsByTagName|getElementsByClassName|getElementsByName)\b/.test(expression);
+
+  // Pattern 1B: querySelector with a bare interactive tag selector (e.g. 'button', 'input').
+  // Someone using tag selectors is almost always discovering interactive elements.
+  const querySelectorForTag =
+    /\bdocument\.querySelector\s*\(\s*['"`](button|input|select|textarea|form|label|a)\b/i.test(expression);
+
+  // Pattern 1C: query-then-interact — get element by ID/selector, then use it as an interactive target
+  // (click/focus/submit/value/checked/selectedIndex). This is click/type/fill_form territory.
+  // Allowed through: .style.*, .classList.*, .dataset.*, .scrollTop — those are handled elsewhere.
+  const queryThenInteract =
+    /\bdocument\.(querySelector|getElementById)\s*\([^)]*\)\s*(?:\?\.)?\s*\.(click\s*\(|focus\s*\(|blur\s*\(|submit\s*\(|value\b|checked\b|selectedIndex\b|disabled\b|selected\b)/.test(expression);
+
+  if (bulkDiscovery || querySelectorForTag || queryThenInteract) {
+    hints.push(
+      "Interactive elements (buttons, links, inputs) are already surfaced as stable refs by read_page. Try click(ref: 'eN') or fill_form(fields: [...]) instead of DOM queries — refs survive layout changes, selectors don't.",
+    );
+  }
+
+  // Pattern 2: Reading innerText/textContent to extract visible text.
+  // filter:'all' on a subtree ref exposes the same text without a second round-trip.
+  // Require a leading dot so that string literals mentioning the word don't trigger.
+  if (/[.?]\s*(innerText|textContent)\b(?!\s*=)/.test(expression)) {
+    hints.push(
+      "Reading .innerText/.textContent? The a11y tree already contains visible text. Try read_page(ref: 'eN', filter: 'all') — table cells, static codes, paragraphs all show up with stable refs.",
+    );
+  }
+
+  // Pattern 3: Inspecting function source via .toString() on a Tests.* / test harness function.
+  // This is usually "the LLM is reverse-engineering the test instead of reading the UI".
+  if (/\b(Tests?|Benchmark|Spec)\b[\w.]*\.toString\s*\(\s*\)/.test(expression) ||
+      /\bfunction[\s\S]{0,80}\.toString\s*\(\s*\)/.test(expression)) {
+    hints.push(
+      "Reading test/function source via .toString()? The visible UI usually has the task description (e.g. .test-desc text). Try read_page(ref, filter:'all') first — don't debug the test harness.",
+    );
+  }
+
+  // Pattern 4: Scrolling via element.scrollIntoView() or container.scrollTop = N.
+  // The scroll tool handles both patterns with ref-based targeting and smooth fallback.
+  if (/\.scrollIntoView\s*\(/.test(expression) ||
+      /\.scrollTop\s*=\s*\d/.test(expression)) {
+    hints.push(
+      "Scrolling via JS? The scroll tool supports ref/selector and container scrolling — scroll(ref: 'eN') or scroll(container_ref: 'eN', direction: 'down').",
+    );
+  }
+
+  // Pattern 5: Dispatching click events via .click() or dispatchEvent(new MouseEvent).
+  // The click tool fires the full CDP pointer event chain which works with widgets
+  // that only listen to pointerdown/mousedown.
+  if (/\.click\s*\(\s*\)/.test(expression) ||
+      /dispatchEvent\s*\(\s*new\s+(Mouse|Pointer)Event/.test(expression)) {
+    hints.push(
+      "Dispatching click via JS? The click tool fires the full CDP pointer chain (pointerdown → mousedown → pointerup → mouseup → click), which works with custom widgets that DOM .click() silently skips.",
+    );
+  }
+
+  if (hints.length === 0) return null;
+  return "\n\nTip: " + hints.join("\n\nTip: ");
+}
+
 export type EvaluateParams = z.infer<typeof evaluateSchema>;
 
 interface RuntimeEvaluateResult {
@@ -163,8 +238,14 @@ export async function evaluateHandler(
       text = JSON.stringify(resultValue.value);
     }
 
+    // FR-024: Detect evaluate anti-patterns and append actionable hints so the
+    // LLM learns better defaults over time. The result stays correct — this is
+    // a "what you did isn't wrong, but there's a better tool" nudge.
+    const antiPatternHint = detectEvaluateAntiPattern(params.expression);
+    const textWithHint = antiPatternHint ? text + antiPatternHint : text;
+
     const baseResult: ToolResponse = {
-      content: [{ type: "text", text }],
+      content: [{ type: "text", text: textWithHint }],
       _meta: {
         elapsedMs: Math.round(performance.now() - start),
         method: "evaluate",

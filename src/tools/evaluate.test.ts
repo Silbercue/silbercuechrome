@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { evaluateHandler, evaluateSchema, wrapInIIFE } from "./evaluate.js";
+import { evaluateHandler, evaluateSchema, wrapInIIFE, detectEvaluateAntiPattern } from "./evaluate.js";
 import type { CdpClient } from "../cdp/cdp-client.js";
 import { registerProHooks } from "../hooks/pro-hooks.js";
 import type { ToolResponse } from "../types.js";
@@ -653,5 +653,132 @@ JSON.stringify({
     expect(result).not.toContain("return });");
     // Verify it's valid JS structure
     expect(result).toMatch(/^\(\(\) => \{[\s\S]*\}\)\(\)$/);
+  });
+});
+
+// FR-024: Anti-pattern detector — surfaces "you could use a dedicated tool"
+// hints when evaluate is used as a Swiss-army-knife for things other tools
+// already cover. The expression still executes normally; the hint is a nudge.
+describe("detectEvaluateAntiPattern", () => {
+  it("returns null for plain value computation", () => {
+    expect(detectEvaluateAntiPattern("1 + 1")).toBeNull();
+    expect(detectEvaluateAntiPattern("window.location.href")).toBeNull();
+    expect(detectEvaluateAntiPattern("JSON.stringify({a: 1})")).toBeNull();
+  });
+
+  it("hints on querySelector for buttons", () => {
+    const hint = detectEvaluateAntiPattern(
+      "Array.from(document.querySelectorAll('button')).map(b => b.outerHTML)",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/read_page/);
+    expect(hint).toMatch(/stable refs/);
+  });
+
+  it("hints on getElementById for interactive elements", () => {
+    const hint = detectEvaluateAntiPattern("document.getElementById('t1-3-name').value");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/read_page|click|fill_form/);
+  });
+
+  it("hints on .innerText read without DOM query", () => {
+    const hint = detectEvaluateAntiPattern("someVar.innerText");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/filter:\s*'all'/);
+  });
+
+  it("hints on .textContent read", () => {
+    const hint = detectEvaluateAntiPattern("el.textContent");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/read_page/);
+  });
+
+  it("hints on Tests.foo.toString() introspection", () => {
+    const hint = detectEvaluateAntiPattern("Tests.t1_1.toString()");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/task description|read_page/);
+  });
+
+  it("hints on .scrollIntoView() calls", () => {
+    const hint = detectEvaluateAntiPattern("document.querySelector('#item-30').scrollIntoView()");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/scroll tool|scroll\(/);
+  });
+
+  it("hints on container.scrollTop = N pattern", () => {
+    const hint = detectEvaluateAntiPattern("container.scrollTop = 3000");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/scroll tool|scroll\(/);
+  });
+
+  it("hints on JS .click() dispatching", () => {
+    const hint = detectEvaluateAntiPattern("btn.click()");
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/click tool|pointer chain/);
+  });
+
+  it("hints on dispatchEvent(new MouseEvent)", () => {
+    const hint = detectEvaluateAntiPattern(
+      "el.dispatchEvent(new MouseEvent('click', {bubbles: true}))",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/click tool|pointer chain/);
+  });
+
+  it("formats hints with 'Tip:' prefix and newlines", () => {
+    const hint = detectEvaluateAntiPattern("document.querySelector('button').click()");
+    expect(hint).not.toBeNull();
+    expect(hint!.startsWith("\n\nTip: ")).toBe(true);
+  });
+
+  it("emits multiple hints for multi-anti-pattern code", () => {
+    const hint = detectEvaluateAntiPattern(
+      "const btn = document.querySelector('button'); btn.click();",
+    );
+    expect(hint).not.toBeNull();
+    // Should contain two Tip: markers
+    expect(hint!.match(/Tip:/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does NOT hint on legitimate JS computation that happens to mention textContent", () => {
+    // No actual .textContent access — just a string literal
+    expect(detectEvaluateAntiPattern('"textContent is a property"')).toBeNull();
+  });
+});
+
+describe("evaluateHandler anti-pattern hint integration", () => {
+  beforeEach(() => {
+    registerProHooks({});
+  });
+
+  it("appends anti-pattern hint to result when DOM-querying interactive elements", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "object", value: ["button1", "button2"] },
+    }));
+    const response = await evaluateHandler(
+      {
+        expression: "Array.from(document.querySelectorAll('button')).map(b => b.id)",
+        await_promise: true,
+      },
+      cdp,
+    );
+    expect(response.isError).toBeUndefined();
+    const text = response.content[0].text as string;
+    expect(text).toMatch(/button1/);
+    expect(text).toMatch(/Tip:/);
+    expect(text).toMatch(/read_page/);
+  });
+
+  it("does NOT append a hint for clean value computation", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 42 },
+    }));
+    const response = await evaluateHandler(
+      { expression: "6 * 7", await_promise: true },
+      cdp,
+    );
+    expect(response.isError).toBeUndefined();
+    expect(response.content[0].text).toBe("42");
+    expect(response.content[0].text).not.toMatch(/Tip:/);
   });
 });

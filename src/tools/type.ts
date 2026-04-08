@@ -45,10 +45,47 @@ export type HumanTypeFn = (
 
 const INPUT_ROLES = new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
 
+/** FR-023: Emit a fill_form hint after this many consecutive type calls within the window. */
+const FILL_FORM_HINT_THRESHOLD = 2;
+/** FR-023: Time window (ms) in which consecutive type calls are considered "in the same form session". */
+const FILL_FORM_HINT_WINDOW_MS = 10_000;
+
 // --- Helpers ---
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
+}
+
+// --- FR-023: Session-scoped detector for consecutive type calls ---
+// Tracks recent type calls per CDP session so we can hint at fill_form
+// when the LLM is filling multiple fields via single type calls.
+interface TypeStreakState {
+  count: number;
+  lastAt: number;
+  hintShown: boolean;
+}
+const typeStreaks = new Map<string, TypeStreakState>();
+
+/** Exported for unit tests — clears the streak state. */
+export function _resetTypeStreaks(): void {
+  typeStreaks.clear();
+}
+
+function recordTypeCallAndMaybeHint(sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const now = Date.now();
+  const existing = typeStreaks.get(sessionId);
+  if (existing && now - existing.lastAt <= FILL_FORM_HINT_WINDOW_MS) {
+    existing.count += 1;
+    existing.lastAt = now;
+    if (existing.count >= FILL_FORM_HINT_THRESHOLD && !existing.hintShown) {
+      existing.hintShown = true;
+      return `\n\nTip: ${existing.count} consecutive type calls in ${Math.round(FILL_FORM_HINT_WINDOW_MS / 1000)}s — next time try fill_form({ fields: [...] }) for one-round-trip form fills. It handles text inputs, <select>, checkbox, and radio natively, so you don't need evaluate or separate click calls.`;
+    }
+    return null;
+  }
+  typeStreaks.set(sessionId, { count: 1, lastAt: now, hintShown: false });
+  return null;
 }
 
 // --- Main handler ---
@@ -189,11 +226,13 @@ export async function typeHandler(
     const displayName = element.name
       ? `${element.role} '${element.name}'`
       : (params.ref ?? params.selector);
+    // FR-023: Emit fill_form hint once per streak when the LLM makes consecutive type calls
+    const fillFormHint = recordTypeCallAndMaybeHint(sessionId) ?? "";
     return {
       content: [
         {
           type: "text",
-          text: `Typed "${truncate(params.text, 50)}" into ${displayName}`,
+          text: `Typed "${truncate(params.text, 50)}" into ${displayName}${fillFormHint}`,
         },
       ],
       _meta: { elapsedMs, method: "type", cleared: params.clear, elementClass: params.ref ? a11yTree.classifyRef(params.ref) : "clickable" },
