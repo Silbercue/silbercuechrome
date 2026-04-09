@@ -18,13 +18,13 @@ Zwei separate GitHub-Repos bilden zusammen das Distribution-Bundle:
 
 Anders als SilbercueSwift wird hier **nicht** ueber GitHub Actions / Tag-Push getriggert, sondern direkt ueber das lokale Pipeline-Script `scripts/publish.ts` (`npm run publish:release`). Das macht in einem Rutsch: Push beider Repos → Build + Tests → Tag → `npm publish` → `gh release create` → Verify.
 
-## Voraussetzung — Live-Verifikation
+## Voraussetzung
 
-**Bevor du diesen Skill startest:** der User muss bestaetigt haben dass der lokale Build live im echten Claude-Code-MCP getestet wurde. Hintergrund: Die `~/.claude.json` zeigt fuer die Test-Phase auf `node /Users/.../build/index.js` statt auf `npx @silbercue/chrome@latest`. Wenn der lokale Build nicht live verifiziert ist, geht ggf. ein Bug an alle User raus.
+Wenn der User "publish" sagt, ist alles getestet und bereit. Frag NICHT nach "hast du alles getestet?" — das nervt nur. Starte direkt in Phase 1.
 
-Wenn unklar: nicht publishen, erst mit dem User klaeren.
+Hintergrund fuer den Endstatus: Waehrend der Entwicklung zeigt `~/.claude.json` oft auf einen lokalen Build (`node /Users/.../build/index.js`). Nach dem erfolgreichen Release setzt dieser Skill die Config **automatisch** zurueck auf das npm-Paket — siehe Phase 7b. Der User soll am Ende immer auf derselben Version sitzen, die auch die Endkunden per `npx @silbercue/chrome@latest` ziehen.
 
-## Ablauf — 6 Phasen
+## Ablauf — 7 Phasen
 
 Fuehre ALLE Phasen der Reihe nach aus. Ueberspringe keine Phase.
 
@@ -182,7 +182,7 @@ Wenn Fehler:
 - **Phase 5 mid-stream (npm publish geklappt, gh release nicht):** Paket ist live, nur GitHub Release fehlt. Manuell nachholen: `gh release create vX.Y.Z --generate-notes`
 - **Phase 6:** Publish ist durch, nur Verify hat ein Problem. Manuell pruefen mit `npm view @silbercue/chrome version` und `gh release view vX.Y.Z`
 
-### Phase 7: Verifizieren und User informieren
+### Phase 7: Verifizieren
 
 ```bash
 npm view @silbercue/chrome version
@@ -190,13 +190,58 @@ gh release view v<NEW_VERSION>
 git log -1 --format="%H %s"
 ```
 
-Alle drei sollten konsistent die neue Version zeigen.
+Alle drei sollten konsistent die neue Version zeigen. Wenn nicht: Fehler analysieren, User informieren, ggf. Phase 7b ueberspringen.
+
+### Phase 7b: Auto-Switch `~/.claude.json` auf npm-Version
+
+**Zweck**: Nach einem erfolgreichen Release soll der User auf seinem Rechner auf **derselben** Version sitzen, die auch die Endkunden per `npx @silbercue/chrome@latest` ziehen. Kein lokaler Build mehr, keine Abfrage — einfach machen.
+
+**Ablauf**:
+
+1. Backup der aktuellen Config:
+   ```bash
+   cp ~/.claude.json ~/.claude.json.backup-$(date +%Y%m%d-%H%M%S)
+   ```
+
+2. Pruefe den aktuellen `silbercuechrome` MCP-Eintrag. Typisch sind zwei Varianten:
+   - **Lokal (node build)**: `"command": "node", "args": ["/Users/.../build/index.js"]`
+   - **npm (npx)**: `"command": "npx", "args": ["-y", "@silbercue/chrome@latest"]`
+
+3. Falls bereits `npx` → nichts zu tun, Phase 7b uebersprungen.
+
+4. Falls `node`-Variante → Eintrag mit Python rewriten (jq wuerde die Reihenfolge kaputt machen, Python bewahrt sie):
+   ```bash
+   python3 <<'PY'
+   import json, pathlib
+   p = pathlib.Path.home() / ".claude.json"
+   data = json.loads(p.read_text())
+   entry = data.get("mcpServers", {}).get("silbercuechrome")
+   if entry is None:
+       print("No silbercuechrome MCP entry found — skipping.")
+       raise SystemExit(0)
+   entry["type"] = "stdio"
+   entry["command"] = "npx"
+   entry["args"] = ["-y", "@silbercue/chrome@latest"]
+   entry.setdefault("env", {})
+   p.write_text(json.dumps(data, indent=2) + "\n")
+   print("Updated ~/.claude.json → npx @silbercue/chrome@latest")
+   PY
+   ```
+
+5. Bestaetige dem User:
+   > "~/.claude.json ist jetzt auf `npx @silbercue/chrome@latest` umgestellt. Beim naechsten Claude-Code-Start oder `/mcp`-Reconnect wird die frische v<NEW_VERSION> von npm gezogen — genau wie bei deinen Kunden."
+
+**Nicht fragen**, einfach machen. Der User hat explizit gesagt: nach Publish IMMER auf die aktuelle npm-Version stellen.
+
+**Wenn der User ausnahmsweise auf dem lokalen Build bleiben will** (z.B. weil er direkt den naechsten Fix angeht): Er muss das aktiv sagen. Default ist Umschalten.
+
+### Phase 7c: User informieren
 
 Sage dem User:
 1. **Version live** auf `https://www.npmjs.com/package/@silbercue/chrome`
 2. **GitHub Release** auf `https://github.com/Silbercue/silbercuechrome/releases/tag/v<NEW_VERSION>`
 3. **Pro-Repo Update** falls relevant
-4. **Hinweis Claude-Code-Config:** Wenn die `~/.claude.json` aktuell auf den lokalen Build zeigt (`node /Users/.../build/index.js`), kann der User sie jetzt zurueck auf `npx @silbercue/chrome@latest` umbiegen. Backup liegt ggf. unter `~/.claude.json.backup-*`. Frag den User ob er das jetzt machen will.
+4. **Claude-Code-Config** ist automatisch auf `npx @silbercue/chrome@latest` umgestellt (Backup unter `~/.claude.json.backup-<timestamp>`). Hinweis: `/mcp` im Prompt eintippen um die neue Version sofort zu laden, oder Claude Code neu starten.
 
 ## Fehlerbehebung
 
@@ -231,15 +276,15 @@ Wenn `../silbercuechrome-pro` nicht existiert, laeuft `publish.ts` im "Free-Only
 
 NIE brechen, auch wenn der User es nahelegt:
 
-1. **Kein Publish ohne explizite User-Konfirmation in Phase 5b.** "Mach mal" reicht nicht — es muss klar auf "Soll ich publishen?" geantwortet werden.
+1. **Kein Publish ohne explizite User-Konfirmation in Phase 5b.** "Mach mal" reicht nicht — es muss klar auf "Soll ich publishen?" geantwortet werden. Aber: frag NICHT vorher nach "hast du alles getestet?" — wenn der User "publish" sagt, ist alles getestet.
 2. **Keine `--skip-npm` / `--skip-github` Flags** in Production-Releases. Die sind nur fuer Debugging.
 3. **Kein `npm unpublish`.** Wenn was schiefgeht — auch wenn der User danach fragt — erst mit ihm reden. `unpublish` ist innerhalb 72h moeglich aber npm hasst es. Lieber Patch-Version drueberlegen.
 4. **Keine `--force`-Flags** auf git oder npm Befehle. Wenn was nicht klappt, Root Cause finden.
 5. **Niemals nur Pro-Repo allein publishen.** Free-Repo muss immer mit. `publish.ts` setzt das schon richtig durch, aber sei vorsichtig wenn jemand "nur Pro" vorschlaegt.
+6. **Phase 7b (Auto-Switch `~/.claude.json`) darf nicht uebersprungen werden.** Der User hat explizit gesagt: nach Publish immer auf npm umstellen. Einzige Ausnahme: User sagt aktiv "ich will am lokalen Build bleiben".
 
 ## Checkliste (Kurzfassung)
 
-- [ ] Live-Verifikation des lokalen Builds vom User bestaetigt
 - [ ] Phase 1: Status beider Repos geprueft, npm + gh authentifiziert
 - [ ] Phase 2: Uncommitted Changes entweder committed oder geklaert
 - [ ] Phase 3: Version mit User abgestimmt
@@ -248,4 +293,5 @@ NIE brechen, auch wenn der User es nahelegt:
 - [ ] Phase 5b: User-Konfirmation eingeholt
 - [ ] Phase 6: `npm run publish:release` durchgelaufen
 - [ ] Phase 7: npm registry, GitHub release und git tag verifiziert
-- [ ] User informiert (Links + ggf. Claude-Config-Reset)
+- [ ] Phase 7b: `~/.claude.json` automatisch auf `npx @silbercue/chrome@latest` umgestellt
+- [ ] Phase 7c: User informiert (Links + Hinweis auf `/mcp` Reconnect)
