@@ -36,7 +36,11 @@ coverage/
 .playwright-mcp/
 .playwright-cli/
 
-# Internal planning / tooling (not for public repo)
+# Internal dev tooling (not for public repo)
+CLAUDE.md
+.prettierrc
+eslint.config.js
+vitest.config.ts
 .claude/
 _bmad/
 _bmad-output/
