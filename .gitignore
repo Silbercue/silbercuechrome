@@ -40,6 +40,10 @@ coverage/
 .claude/
 _bmad/
 _bmad-output/
+docs/
+scripts/
+test-hardest/
+test-stress/
 live-test/
 marketing/
 research/
