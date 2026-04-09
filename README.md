@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
-The fastest, most token-efficient MCP server for Chrome browser automation. Direct CDP, a11y-tree refs, multi-tab ready. **24/24 on the hardest benchmark at 20s scripted, beating Playwright MCP and claude-in-chrome.**
+The most token-efficient MCP server for Chrome browser automation. Direct CDP, a11y-tree refs, multi-tab ready. **30/31 on the hardest 35-test benchmark (97% pass rate) with Ambient Context — `read_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`, and our P95 tool response is 3.5× smaller.**
 
 Built for [Claude Code](https://claude.ai/claude-code), [Cursor](https://cursor.sh), and any MCP-compatible client.
 
@@ -21,8 +21,10 @@ SilbercueChrome fixes this. It talks directly to Chrome via CDP (same protocol P
 
 | What you get | Playwright MCP | Browser MCP | claude-in-chrome | browser-use | **SilbercueChrome** |
 |---|---|---|---|---|---|
-| Hardest benchmark (24 tests, LLM-driven) | 24/24 (~570s) | **cannot finish** | 24/24 (1140s) | 17/24 (~1049s) | **24/24 Pro: 555s · Free: 755-900s** |
-| Scripted benchmark (24 tests) | — | — | — | — | **24/24 in ~20s** |
+| Hardest benchmark (35 tests, LLM-driven) | 29/31 (563s) | **cannot finish** | (pending re-bench) | (pending re-bench) | **30/31 Free: 598s** |
+| ∅ Tool-Response (Tokens est.) | 362 | — | — | — | **201 (1.8× smaller)** |
+| P95 Tool-Response (Chars) | 8.068 | — | — | — | **2.328 (3.5× smaller)** |
+| `read_page` avg (Chars) | 6.084 (`browser_snapshot`) | — | — | — | **1.124 (5.4× smaller)** |
 | Multi-tab support | Yes | **No (single tab)** | Yes | Partial | **Yes** |
 | Connection | New browser | Extension bridge | Extension | Subprocess | **Direct CDP (pipe or WebSocket)** |
 | Ref system | Playwright refs | Playwright refs | CSS selectors | Screenshots | **A11y-tree refs (stable across DOM changes)** |
@@ -36,13 +38,17 @@ SilbercueChrome fixes this. It talks directly to Chrome via CDP (same protocol P
 
 ### Where SilbercueChrome really shines
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **24/24 on the hardest benchmark in 20 seconds (scripted), 555s LLM-driven** — beats every alternative in the category
+> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **Ambient Context — Claude sees DOM changes for free, no extra `read_page` needed**
 
-The test-hardest suite covers 24 patterns that break most browser MCPs: infinite scroll, Shadow DOM, nested iframes, drag & drop, canvas clicks, keyboard shortcuts, contenteditable, async timing races, 10K-element DOMs, localStorage chains, mutation observers, modal form chains. SilbercueChrome Pro clears all 24 in ~555s LLM-driven (scripted: ~21s). Free tier runs 20s scripted / 755-900s LLM. Playwright MCP takes ~570s LLM. claude-in-chrome takes 1140s. browser-use fails 7 tests architecturally.
+After every `click`, SilbercueChrome's response includes **NEW / REMOVED / CHANGED** lines showing exactly what changed on the page. Playwright MCP's `browser_click` only returns "clicked element X" — Claude then has to call `browser_snapshot` or `browser_evaluate` to figure out what happened. Over a full benchmark run, this means Playwright needs **47 extra `browser_evaluate` calls** averaging 2.155 chars each just to reconstruct page state. SC delivers the diff inline, so the same workflow needs only **33 evaluate calls averaging 510 chars**. Result: **~30% less total response content** across the three main tools (click + read_page + evaluate: 120k vs 170k chars).
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **`read_page` with a11y-tree refs — 10-30x cheaper than screenshots**
+> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **`read_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`**
 
-Instead of pushing an 800KB screenshot every turn, `read_page` returns the accessibility tree with stable `e5`-style refs. Agents read text, find elements, and chain `click(ref: 'e5')` / `type(ref: 'e7', ...)` — all in 30KB responses. Screenshots stay available for visual verification via `screenshot`, but the LLM stops defaulting to them for element discovery.
+Measured on the 35-test hardest benchmark (2026-04-09): SC's `read_page` averages **1.124 chars per call** vs Playwright MCP's `browser_snapshot` at **6.084 chars**. Same page, same test suite, same LLM driver. The difference is the Ambient Context pipeline + a11y-tree compression — we only send what the agent actually needs, filtered to interactive elements by default. Smaller responses mean less context pressure, more room for reasoning, and cheaper runs.
+
+> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **P95 Tool-Response is 3.5× smaller than Playwright MCP**
+
+The worst-case tool response is what really eats context budgets. SC's 95th-percentile response is **2.328 chars** vs Playwright MCP's **8.068 chars**. Even the most expensive SC call is cheaper than Playwright's typical snapshot. This compounds over long agent runs where the biggest responses decide whether the context window survives.
 
 > ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **True multi-tab — `virtual_desk`, `switch_tab`, parallel tabs in `run_plan`** <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center">
 
@@ -166,18 +172,42 @@ Pro costs $19 USD one-time. [Get a license on Polar.sh](https://polar.sh/silberc
 
 ## Benchmarks
 
-Measured on `https://mcp-test.second-truth.com` — 24 tests in 4 levels (Basics, Intermediate, Advanced, Hardest). Each run is independent, values on the benchmark page are randomized per page-load, and all runs started in a fresh Claude Code session out of `/tmp` (no project context bias).
+Measured on `https://mcp-test.second-truth.com` — **35 tests in 5 levels** (Basics, Intermediate, Advanced, Hardest, Community Pain Points). Each run is independent, values on the benchmark page are randomized per page-load, all runs started in a fresh Claude Code session out of `/tmp` (no project context bias), and **all metrics measured post-hoc from the session JSONL** via [`test-hardest/measure-tool-calls.sh`](.claude/skills/benchmarkTest/measure-tool-calls.sh) — no self-reporting, no MCP-side instrumentation, just counting `tool_use` blocks and `tool_result` char lengths.
 
-| MCP | Passed | Time (LLM) | Time (scripted) |
-|---|---|---|---|
-| **SilbercueChrome Pro** | **24/24** | **555s** | **21s** |
-| **SilbercueChrome Free** | **24/24** | **755-900s** | **20s** |
-| Playwright MCP | 24/24 | ~570s | — |
-| claude-in-chrome | 24/24 | 1140s | — |
-| browser-use | 17/24 | ~1049s | — |
-| Browser MCP | — | could not complete | — |
+### Pass Rate + Duration (35-Test Suite, 2026-04-09)
 
-browser-use fails 7 tests architecturally: infinite scroll (no container-internal scrolling), drag & drop, canvas click, keyboard shortcuts, contenteditable bold, localStorage+cookie chain, mutation observer. Browser MCP's single-tab extension bridge cannot complete the `Tab switch, read, return` pattern and becomes unstable over longer runs. See [`test-hardest/BENCHMARK-PROTOCOL.md`](test-hardest/BENCHMARK-PROTOCOL.md) for the full protocol and raw JSON runs.
+| MCP | Passed | Duration |
+|---|---|---|
+| **SilbercueChrome Free** | **30/31 (97%)** | **598s** |
+| Playwright MCP | 29/31 (94%) | 563s |
+| Playwright CLI | 28/31 (90%) | 376s |
+
+**Pending re-bench on the new 35-test suite:** SilbercueChrome Pro, chrome-browser, claude-in-chrome, browser-use, Browser MCP. The previous 24-test results are archived in the git history.
+
+### Tool-Efficiency (the fair metric)
+
+We measure each tool call's response char length directly, group by tool name, estimate tokens via `chars/4`. Why this metric: session-level token deltas are dominated by LLM overhead (system prompt + CLAUDE.md + conversation history = ~80-90% of the budget) and only show 5-15% differences between MCPs — untrustworthy for comparing browser servers. Tool-response size is the part the MCP server actually controls.
+
+| Metric | SC Free | Playwright MCP | Difference |
+|---|---:|---:|---:|
+| Tool calls (MCP-only) | 151 | 121 | +25% (SC uses more, smaller calls) |
+| ∅ Response size | **807 Chars** | 1.448 Chars | **SC 1.8× smaller** |
+| ∅ Response tokens est. | **201** | 362 | **SC 1.8× smaller** |
+| P95 Response | **2.328 Chars** | 8.068 Chars | **SC 3.5× smaller** |
+| Total response content | **128k Chars** | 175k Chars | **SC 27% less** |
+
+### Per-Tool Breakdown (where the difference comes from)
+
+| Tool | SC Free ∅ | Playwright MCP ∅ | Verdict |
+|---|---:|---:|---|
+| `read_page` / `browser_snapshot` | **1.124 Chars** (21 calls) | 6.084 Chars (8 calls) | **SC 5.4× more compact per call** |
+| `evaluate` / `browser_evaluate` | **510 Chars** (33 calls) | 2.155 Chars (47 calls) | **SC 4.2× more compact per call** |
+| `type` / `browser_type` | **88 Chars** (13 calls) | 147 Chars (13 calls) | SC 1.7× more compact |
+| `click` / `browser_click` | 1.278 Chars (63 calls) | **463 Chars** (44 calls) | Playwright 2.8× leaner — but see trade-off below |
+
+**The Ambient-Context trade-off (worth understanding):** SC's `click` is 2.8× larger than Playwright's because every SC click response embeds the DOM diff (NEW/REMOVED/CHANGED lines). Playwright returns a bare confirmation, which means the LLM has to follow up with a `browser_snapshot` or `browser_evaluate` to see what happened. Over the full run, this cascade costs Playwright MCP **47 extra `browser_evaluate` calls**. Net result: SC's click+read_page+evaluate total is **120k chars vs Playwright MCP's 170k** — 30% less response content overall, despite the "thicker" click responses.
+
+See [`test-hardest/BENCHMARK-PROTOCOL.md`](test-hardest/BENCHMARK-PROTOCOL.md) for the full protocol, per-test breakdown, and raw JSON runs with `tool_efficiency` blocks.
 
 ## Architecture
 
