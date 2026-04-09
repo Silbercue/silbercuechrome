@@ -1,9 +1,47 @@
+# Dependencies
 node_modules/
+
+# Build output
 build/
+dist/
+*.tsbuildinfo
+
+# OS files
 .DS_Store
-_bmad/
-_bmad-output/
+Thumbs.db
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Test / tooling caches
+coverage/
+.eslintcache
+.nyc_output/
+
+# Browser automation runtime data
 .playwright-mcp/
 .playwright-cli/
+
+# Internal planning / tooling (not for public repo)
+.claude/
+_bmad/
+_bmad-output/
 live-test/
 marketing/
+research/
+prompt.md
+compare-*.png
