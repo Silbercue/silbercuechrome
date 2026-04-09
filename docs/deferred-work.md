@@ -932,3 +932,101 @@ Erfolgreicher `read_page`/`click`/`type`/`fill_form` resettet die Streak implizi
 - **querySelector Regex-Heuristik**: False-Positives bei String-Literalen mit `querySelector(`; False-Negatives bei `document['querySelector'](...)` oder Aliasing. Explizit dokumentiert in `tool-sequence.ts` und `tool-sequence.test.ts`.
 - **Backward-compat Linear-Scan in `refLookup` / `nodeInfoLookup`**: Wenn weder sessionId noch `_renderSessionId` gesetzt ist, faellt der Lookup auf linearen Scan zurueck. Kollisionsrisiko minimal, weil alle kritischen CDP-Callsites jetzt `resolveRefFull` nutzen und `nodeInfoLookup` von owner-iterierenden Callsites mit expliziter sessionId aufgerufen wird. Codex-Review Finding #2 Commit 3 — deferred fuer spaeteres Hardening.
 - **Race: `switch_tab` vs. in-flight `read_page`** (Final Codex Review HIGH #3): Theoretisch kann ein laufender `getTree`-Call nach `a11yTree.reset()` in `switch_tab` noch Refs schreiben, weil beide auf derselben `a11yTree`-Singleton arbeiten. In der Praxis nicht ausnutzbar, weil alle CDP-Calls sequenziell ueber denselben `CdpClient` laufen und der MCP-Server Requests synchron verarbeitet. Ein sauberer Fix waere ein Cache-Generation/epoch-Zaehler, der Writes bei Mismatch verwirft — deferred.
+
+---
+
+## FR-023 bis FR-027: Feature-Gaps aus SC Free Run 5 (2026-04-09, 35-Test-Benchmark)
+
+**Entdeckt:** 2026-04-09 beim frischen 35-Test-Run von SilbercueChrome Free (silbercuechrome-free-run5.json). 30/31 Tests bestanden, alle Fails/Workarounds ehrlich dokumentiert in `marketing/benchmark-numbers.md` und `test-hardest/BENCHMARK-PROTOCOL.md`. Jeder Workaround ist ein konkretes Feature-Gap gegenueber nativen Primitives. Jede Umsetzung wuerde die `evaluate`-Quote und damit die Response-Groessen weiter druecken (heute 33 Calls à ∅ 510 Chars = 16.831 Chars; jede ersetzte Workaround-Gruppe spart 2-5 evaluate-Calls).
+
+### FR-023: Kein natives Drag-and-Drop Primitive
+
+**Schwere:** P2 — Mittel (betrifft HTML5-drag-events, ist Nischen-Use-Case in LLM-gefuehrten Workflows, aber wird im Benchmark T3.3 explizit gemessen)
+**Betrifft:** neuer Tool `drag_drop` oder Erweiterung von `click`, vermutlich `src/tools/drag.ts`
+**Workaround im Run 5:** DOM-Reorder via `appendChild` in einer Sort-Schleife aus `evaluate` heraus — keine echten Drag-Events. Funktioniert fuer sortable-Listen mit state-unabhaengiger Positionsaenderung, bricht bei Libraries die Drag-Events zum Animieren brauchen (react-beautiful-dnd, @dnd-kit).
+
+### Problem
+HTML5-Drag-and-Drop braucht eine Event-Sequenz `dragstart` → `dragenter` → `dragover` → `drop` → `dragend` auf verschiedenen Elementen mit synthetischem `DataTransfer`-Objekt. CDP hat `Input.dispatchDragEvent`, aber es ist experimentell und erfordert drei separate Invocations plus aktives Drag-Tracking. Playwright MCPs `drag` Primitive schlaegt auf denselben Testseiten genauso fehl — Microsoft hat das Problem auch nicht geloest. Keine einfache Fix-Vorlage aus der Konkurrenz verfuegbar.
+
+### Empfohlener Fix
+1. Neues Tool `drag_drop(from: Ref, to: Ref, options?: { steps?: number })` mit CDP `Input.dispatchMouseEvent` Sequenz (mousedown → 5-10 mousemoves → mouseup) plus `Input.dispatchDragEvent` fuer native HTML5-Drag. Beide Pfade, automatischer Fallback.
+2. Alternative: Erweiterung `click(drag_to: Ref)` — einfacher API-mental, aber semantisch verwirrend.
+
+---
+
+### FR-024: Kein Canvas-Pixel-Helper
+
+**Schwere:** P3 — Niedrig (Nischenfall, T3.4 Benchmark-Test aber selten in realen Workflows)
+**Betrifft:** moeglicherweise neuer Tool `canvas_find(ref, color|pattern)` oder `read_page` Canvas-Annotation
+**Workaround im Run 5:** `evaluate` mit Canvas `getImageData()`-Pixel-Scan fuer Rot-Zentrum, dann Center-Berechnung und `click(x,y)` mit Koordinaten. Funktioniert zuverlaessig fuer einfarbige Targets, bricht bei Gradients oder mehrfarbigen Shapes.
+
+### Problem
+Canvas-Elemente sind aus Sicht von `read_page` / a11y-tree komplett opak. FR-008 hat einen Canvas-Annotation-Hint fuer `screenshot(som: true)` eingebaut, aber das findet nur Canvas-Existenz, nicht Canvas-Inhalte. Fuer Ziele wie "klick den roten Kreis" muss der LLM heute eine Pixel-Scan-Logik schreiben — was `evaluate`-Quote hochtreibt und Tool-Hints zum Anti-Pattern fallen laesst.
+
+### Empfohlener Fix
+Entweder:
+1. Neues Pro-Tool `canvas_find(ref, { color?: string, text?: string })` das `getImageData` serverseitig macht und {x, y, confidence} zurueckgibt.
+2. Oder Integration in `read_page` als optionale Canvas-Inhalte-Annotation bei `filter: 'all'` (OCR fuer Text, Pixel-Cluster fuer einfarbige Shapes).
+
+Niedrige Prio weil Nischenfall — deferred bis ein realer Nutzer es anfragt.
+
+---
+
+### FR-025: `type` kann kein `contenteditable` + Inline-Formatting
+
+**Schwere:** P2 — Mittel (betrifft alle Rich-Text-Editoren: Notion, Quill, TipTap, ProseMirror, contenteditable-divs)
+**Betrifft:** `src/tools/type.ts` Text-Dispatch-Logik, moeglicherweise neuer `rich_text`-Parameter
+**Workaround im Run 5:** HTML-String direkt ins contenteditable-Element via `evaluate`-DOM-Manipulation setzen, dann `input`-Event dispatchen — statt `type` + `press_key('Control+B')`. Funktioniert direkt, umgeht aber alle Editor-Plugins die auf echte Keyboard-Events hoeren.
+
+### Problem
+`type` dispatcht CDP-Keyboard-Events via `Input.insertText` oder `Input.dispatchKeyEvent`. Fuer `<input>` und `<textarea>` funktioniert das perfekt. Fuer `contenteditable` werden die Events zwar ausgeloest, aber inline-Formatierung (bold/italic) muss per `document.execCommand('bold')` oder via expliziten Cursor-Selection + Format-Range gesetzt werden — beides ist aus CDP heraus nicht direkt erreichbar.
+
+Playwright MCP hat dasselbe Problem: Run 2 hat T3.6 auch via `browser_evaluate` mit DOM-Manipulation geloest. Konkurrenz ist hier kein Vorbild.
+
+### Empfohlener Fix
+Option A: Neuer Tool `rich_text(ref, html)` der das HTML ins contenteditable-Element setzt und den `input`-Event dispatcht. Einfach, funktioniert fuer die meisten contenteditable-Divs.
+Option B: Erweiterung `type(ref, text, { format?: 'bold' | 'italic' | 'underline' })` die vor dem Type `execCommand('bold')` aufruft. Eleganter, aber `execCommand` ist deprecated und wird von modernen Browsers vielleicht bald entfernt.
+
+Empfehlung: **Option A** — expliziter, ehrlicher, keine Deprecation-Falle.
+
+---
+
+### FR-026: `observe` Tool verpasst Mutation-Observer-Changes bei `characterData`
+
+**Schwere:** P1 — Hoch (zentrales Async-Observation-Tool schlaegt bei realem Use-Case fehl)
+**Betrifft:** `src/tools/observe.ts` MutationObserver-Konfiguration
+**Workaround im Run 5:** Eigene `evaluate`-basierte MutationObserver-Implementierung mit `characterData: true` und manuellen Event-Handler, weil das Produkt-`observe` die Changes nicht erfasst hat. **Das ist ein echter Bug** — der Workaround war nicht geplant.
+
+### Problem
+Im Benchmark-Test T4.5 aendert die Seite `<strong>` Text-Inhalte 3x in 3 Sekunden via `characterData`-Mutationen. Der `observe`-Tool mit `collect` hat die Changes nicht angezeigt — der manuelle MutationObserver via `evaluate` hat sie in derselben Session korrekt erfasst. Vermutung: `observe` setzt `characterData: false` oder hat einen Root-Selector der den `<strong>`-Child nicht covered.
+
+### Empfohlener Fix
+1. **Reproduktion:** Benchmark-Seite `https://mcp-test.second-truth.com` → Level 4 → T4.5 "Mutation Observer Challenge" starten. `observe(collect, ms: 4000)` vs manueller `evaluate`-Observer vergleichen.
+2. **Root Cause:** `src/tools/observe.ts` MutationObserver-Options pruefen. Vermutlich `characterData: false` default. Oder `subtree: false`.
+3. **Fix:** `characterData: true, subtree: true` als default setzen. Bei Changes auch `characterData`-Mutations in der Response listen.
+4. **Test:** Unit-Test mit synthetischen `characterData`-Mutationen in jsdom oder Playwright Headless.
+
+---
+
+### FR-027: `switch_tab` ist Pro-gated, kein Free-Tier-Tab-Switching
+
+**Schwere:** P2 — Mittel (Free-Tier-Nutzer muessen auf `navigate` + `navigate(back)`-Workaround ausweichen fuer Tab-Workflows)
+**Betrifft:** Produkt-Tier-Gate in `src/tools/switch-tab.ts`, ggf. `src/license.ts`
+**Workaround im Run 5:** T2.5 "Multi-Tab Management" via `navigate(target-tab-url)` + `navigate(main-url)` + manual URL-tracking statt Tab-Switch. Funktioniert, aber verliert Tab-State (Formulare, Scroll-Position, History).
+
+### Problem
+`switch_tab` ist aktuell ein Pro-Feature. Der Free-Tier hat `navigate`, `tab_status`, aber kein `switch_tab`. Das zwingt Free-Nutzer zu Workarounds fuer alle Multi-Tab-Patterns (Link oeffnet neuen Tab → lese dort → komm zurueck → trage Wert ein). Der `navigate(back)`-Workaround funktioniert fuer einfache Read-Back-Flows, aber nicht wenn der neue Tab Formular-Interaktion braucht (Login in Popup-Tab) oder wenn der Ursprungs-Tab State halten muss.
+
+### Empfohlene Entscheidung
+Drei Optionen:
+1. **`switch_tab` in Free-Tier migrieren** (einfachste, freundlichste Loesung). `virtual_desk` bleibt Pro. Das macht T2.5 im Free-Tier sauber loesbar und vermeidet die `evaluate`-Workaround-Spirale die wir mit BUG-018 bekaempft haben.
+2. **Weiter Pro-gated lassen** und die Fuss-Note in T2.5-Feedback schreiben "Pro-Feature". Dann aber explizit im `run_plan` / `observe` / `tool-description`-Layer dokumentieren dass Free-Nutzer `navigate(back)` nutzen sollen statt eigenen `evaluate` zu schreiben.
+3. **`switch_tab_readonly`** als Free-Tier-Variante anbieten — kann wechseln, aber nicht neue Tabs erstellen. `virtual_desk` bleibt Pro fuer die Listing-Funktion.
+
+Empfehlung: **Option 1** — einfachste und fairste Loesung, vor allem weil wir gerade mit BUG-018 gegen die evaluate-Fallback-Spirale kaempfen. Pro-Tier differenziert sich trotzdem durch `virtual_desk`, `dom_snapshot`, `run_plan`-parallel-tabs, Ambient-Context-Hooks, Operator-Hooks. `switch_tab` alleine ist kein ausreichendes Pro-Differentiator.
+
+---
+
+### Zusammenhang mit Tool-Efficiency Marketing
+
+Jeder dieser 5 Gaps erzwingt heute einen `evaluate`-Workaround. Im SC Free Run 5 waren **33 evaluate-Calls** — wenn FR-023 + FR-025 + FR-026 gefixt sind, fallen davon geschaetzt 10-15 weg (Drag, RichText, MutationObserver). Das wuerde die "SC evaluate avg 510 Chars"-Zahl noch weiter druecken und damit den Tool-Efficiency-Vorsprung gegenueber Playwright MCP vergroessern. Jeder gefixte Gap ist also auch Marketing-Munition.
