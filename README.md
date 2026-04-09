@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/Silbercue/silbercuechrome)](https://github.com/Silbercue/silbercuechrome/releases)
 [![npm version](https://img.shields.io/npm/v/@silbercue%2Fchrome)](https://www.npmjs.com/package/@silbercue/chrome)
 [![Free — 18 tools](https://img.shields.io/badge/Free-18_tools-brightgreen)](https://github.com/Silbercue/silbercuechrome#free-vs-pro)
-[![Pro — 21+ tools](https://img.shields.io/badge/Pro-21%2B_tools-blueviolet)](https://polar.sh/silbercuechrome)
+[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercuechrome)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
@@ -76,7 +76,7 @@ One command — installs globally for all projects:
 claude mcp add --scope user silbercuechrome npx -y @silbercue/chrome@latest
 ```
 
-Restart Claude Code. First tool call auto-launches Chrome **visible** (no headless, no port setup). Done.
+**Important:** after `claude mcp add` you must **fully quit and reopen Claude Code**. `/mcp reconnect` is not enough — Claude Code reads the `mcpServers` config only at session start and caches it. After the restart, the first tool call auto-launches Chrome **visible** (no headless, no port setup). Done.
 
 ### Install in Cursor
 
@@ -113,6 +113,14 @@ After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`.
 
 Google Chrome must be installed on the machine — SilbercueChrome auto-launches Chrome via CDP at runtime, but it does not install Chrome for you.
 
+**Upgrading an existing install:**
+
+```bash
+brew update && brew upgrade silbercue/silbercue/silbercuechrome
+```
+
+Your license key stays in `~/.silbercuechrome/license-cache.json` and survives the upgrade — no re-activation needed.
+
 ### Uninstall
 
 ```bash
@@ -127,20 +135,19 @@ brew uninstall silbercue/silbercue/silbercuechrome
 
 ## Free vs Pro
 
-The Free tier gives you 18 tools covering 24/24 benchmark tests in the scripted runner. Pro adds `virtual_desk`, `switch_tab`, `dom_snapshot`, and advanced `run_plan` features (parallel tabs, operator hooks, ambient context) plus faster internals.
+The Free tier gives you 18 tools that cover the entire benchmark suite. Pro adds `virtual_desk`, `switch_tab`, `dom_snapshot`, parallel tabs in `run_plan`, ambient-context hooks, and an operator hook pipeline on top — 23 tools in total.
 
 | | Free | Pro |
 |---|---|---|
-| Tools | 18 | 21+ |
+| Tools | 18 | **23** |
 | Page understanding | `read_page` | `read_page` + `dom_snapshot` (spatial queries) |
 | Tab management | `navigate`, `tab_status` | + `virtual_desk`, `switch_tab`, parallel tabs in `run_plan` |
 | Interaction | `click`, `type`, `fill_form`, `press_key`, `scroll`, `file_upload`, `handle_dialog` | Same |
-| Observation | `screenshot`, `wait_for`, `observe`, `console_logs`, `network_monitor` | Same + ambient page context hooks |
+| Observation | `screenshot`, `wait_for`, `observe`, `console_logs`, `network_monitor` | Same + ambient page-context hooks |
 | Scripting | `run_plan` (sequential) | `run_plan` (sequential + parallel + operator hooks) |
 | Last resort | `evaluate` | `evaluate` + anti-pattern scanner hints |
-| Benchmark score | 24/24 | 24/24 |
-| Benchmark time (scripted) | ~20s | ~21s |
-| Benchmark time (LLM-driven) | 755-900s | ~555s |
+
+See the **[Benchmarks](#benchmarks)** section below for per-tool-call response-size numbers and head-to-head comparisons with Playwright MCP, Browser MCP, claude-in-chrome, and browser-use.
 
 Pro costs $19 USD one-time. [Get a license on Polar.sh](https://polar.sh/silbercuechrome), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
 
