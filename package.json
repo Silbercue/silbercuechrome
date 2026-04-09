@@ -1,7 +1,7 @@
 {
   "name": "@silbercue/chrome",
-  "version": "0.3.0",
-  "description": "SilbercueChrome MCP Server — Chrome browser automation via CDP",
+  "version": "0.3.1",
+  "description": "SilbercueChrome MCP Server \u2014 Chrome browser automation via CDP",
   "type": "module",
   "files": [
     "build/",
