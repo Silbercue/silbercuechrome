@@ -534,17 +534,19 @@ export function phase5_publishAndRelease(
   }
 
   // 5.2 GitHub Release
-  // TODO Phase 5: Pro-Tarball als private GitHub Release im Pro-Repo hochladen,
-  // nicht als public Asset des Free-Repos. Aktuell wird `buildArtifact` (Pro-Tarball)
-  // an den FREE-Release angehaengt — das wuerde Pro-Code public machen, sobald die
-  // Free-Repo-Releases sichtbar sind. Bis dahin: Pro-Tarball nicht uploaden, oder
-  // separates `gh release create --repo CONFIG.GITHUB_REPO_PRO` mit private visibility.
+  //
+  // Story 17.3: Dieser Schritt legt nur das leere Release an. Das ad-hoc
+  // signierte Pro-Binary wird NICHT hier hochgeladen — das macht die
+  // separate Skill-Phase "Homebrew Pro-Release" (SKILL.md Phase 6b),
+  // die `scripts/build-binary.sh` im Pro-Repo aufruft und das fertige
+  // SEA-Binary als tar.gz + sha256-Sidecar an diesen Release anhaengt.
+  //
+  // `buildArtifact` aus Phase 3 (npm pack Validierung) wird bewusst NICHT
+  // an den Free-Release angehaengt, weil dieser Tarball den Pro-Source
+  // enthalten wuerde (AC-3: Pro-Source bleibt privat).
   if (!opts.skipGithub) {
     if (opts.dryRun) {
       log(`  [DRY-RUN] Would create GitHub release ${ctx.tag}`);
-      if (buildArtifact) {
-        log(`  [DRY-RUN] Would upload asset: ${buildArtifact}`);
-      }
     } else {
       log("  Creating GitHub release...");
 
@@ -590,42 +592,22 @@ export function phase5_publishAndRelease(
           ],
           ctx.freeRepo,
         );
-        log(`  GitHub release ${ctx.tag} created`);
+        log(`  GitHub release ${ctx.tag} created (empty — Pro-Binary is attached by SKILL.md Phase 6b)`);
       } catch (err) {
         return {
           success: false,
           message: `GitHub release creation failed: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-
-      // Upload build artifact if available
-      if (buildArtifact) {
-        try {
-          run(
-            "gh",
-            [
-              "release",
-              "upload",
-              ctx.tag,
-              buildArtifact,
-              "--clobber",
-              "--repo",
-              CONFIG.GITHUB_REPO_FREE,
-            ],
-            ctx.freeRepo,
-          );
-          log(`  Asset uploaded: ${buildArtifact}`);
-        } catch (err) {
-          return {
-            success: false,
-            message: `Asset upload failed: ${err instanceof Error ? err.message : String(err)}`,
-          };
-        }
-      }
     }
   } else {
     log("  Skipping GitHub release (--skip-github)");
   }
+
+  // `buildArtifact` aus Phase 3 wird aktuell nicht verwendet — siehe Kommentar
+  // oben. Parameter bleibt im Interface, damit die Signatur rueckwaerts-
+  // kompatibel ist und publish.ts-Tests nicht brechen.
+  void buildArtifact;
 
   return { success: true, message: "Publish & release complete" };
 }

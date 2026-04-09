@@ -693,18 +693,23 @@ describe("phase5_publishAndRelease", () => {
     expect(deleteCalls).toHaveLength(1);
   });
 
-  it("uploads build artifact with --clobber", () => {
+  // Story 17.3 AC-3 regression guard:
+  // Even when a buildArtifact is passed from Phase 3 (legacy npm-pack output),
+  // Phase 5 must NOT upload it to the public Free-Repo release. The Pro binary
+  // is uploaded separately by the silbercuechrome-publish SKILL.md Phase 6b,
+  // which builds a fresh SEA binary and attaches it + a sha256 sidecar.
+  // Uploading the npm-pack tarball would leak Pro source into the public release.
+  it("never uploads buildArtifact to the public Free release (AC-3 privacy guard)", () => {
     setupMockWithErrors([
       { match: ["npm", "publish"], result: "" },
       { match: ["gh", "release", "view"], error: "not found" },
       { match: ["gh", "release", "create"], result: "" },
-      { match: ["gh", "release", "upload"], result: "" },
     ]);
 
     const result = phase5_publishAndRelease(
       makeContext(),
       realOpts(),
-      "/path/to/binary.tgz",
+      "/path/to/pro-npm-pack.tgz",
     );
     expect(result.success).toBe(true);
 
@@ -713,8 +718,7 @@ describe("phase5_publishAndRelease", () => {
         (c[0] as string) === "gh" &&
         (c[1] as string[]).includes("upload"),
     );
-    expect(uploadCalls).toHaveLength(1);
-    expect((uploadCalls[0][1] as string[]).join(" ")).toContain("--clobber");
+    expect(uploadCalls).toHaveLength(0);
   });
 });
 

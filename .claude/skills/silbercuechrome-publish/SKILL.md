@@ -182,6 +182,121 @@ Wenn Fehler:
 - **Phase 5 mid-stream (npm publish geklappt, gh release nicht):** Paket ist live, nur GitHub Release fehlt. Manuell nachholen: `gh release create vX.Y.Z --generate-notes`
 - **Phase 6:** Publish ist durch, nur Verify hat ein Problem. Manuell pruefen mit `npm view @silbercue/chrome version` und `gh release view vX.Y.Z`
 
+### Phase 6b: Public Pro-Release + Homebrew Formula Patch
+
+Nach Phase 6 (npm publish + leeres gh release) wird jetzt das Pro-SEA-Binary gebaut, als Asset an den public Free-Repo-Release gehaengt, und die Homebrew-Formula im Tap-Repo `Silbercue/homebrew-silbercue` auf die neue Version + sha256 gepatcht. Das ist der Weg, auf dem Pro-Kunden das Binary via `brew install silbercue/silbercue/silbercuechrome` bekommen.
+
+**Voraussetzungen (alle automatisch durch vorherige Phasen erfuellt):**
+- Phase 6 war erfolgreich — das public Release `vX.Y.Z` existiert im Free-Repo, ist aber noch leer.
+- Pro-Repo ist auf derselben Version wie Free (Phase 1 haert das hart gegen).
+- `gh` CLI ist authentifiziert mit Schreibrechten auf `Silbercue/silbercuechrome` UND `Silbercue/homebrew-silbercue`.
+- `scripts/build-binary.sh` im Pro-Repo ist **unangetastet** — der Skill ruft es unveraendert auf.
+
+**Ablauf — sequentiell, bei jedem Fehler STOPP:**
+
+```bash
+VERSION="<NEW_VERSION>"  # z.B. 0.1.2 — ohne v-prefix
+TAP_WORK=/tmp/hb-silbercue
+
+# 1) Pro-Binary bauen (build-binary.sh bleibt unberuehrt)
+cd /Users/silbercue/Documents/Cursor/Skills/silbercuechrome-pro
+bash scripts/build-binary.sh
+
+# Sanity: Binary existiert, ist ausfuehrbar, zeigt die erwartete Version
+test -x ./dist/silbercuechrome-pro || { echo "FAIL: binary not built"; exit 1; }
+./dist/silbercuechrome-pro version | grep -q "@silbercuechrome/mcp-pro ${VERSION}" \
+  || { echo "FAIL: binary version mismatch"; exit 1; }
+
+# 2) Binary als tar.gz packen
+BIN_TGZ="/tmp/silbercuechrome-pro-v${VERSION}-macos-arm64.tar.gz"
+rm -f "${BIN_TGZ}" "${BIN_TGZ}.sha256"
+tar -czf "${BIN_TGZ}" -C dist silbercuechrome-pro
+
+# 3) SHA256 berechnen und als Sidecar
+SHA256=$(shasum -a 256 "${BIN_TGZ}" | awk '{print $1}')
+echo "${SHA256}  silbercuechrome-pro-v${VERSION}-macos-arm64.tar.gz" > "${BIN_TGZ}.sha256"
+
+# 4) Assets an das Free-Repo-Release haengen (existiert bereits aus Phase 6)
+gh release upload "v${VERSION}" "${BIN_TGZ}" "${BIN_TGZ}.sha256" \
+  --repo Silbercue/silbercuechrome
+
+# 5) Tap-Repo clonen/pullen + Formula create-or-patch
+# Achtung: Tap-Repo `Silbercue/homebrew-silbercue` nutzt den Branch `main`
+# (nicht `master` wie die Free/Pro-Repos).
+if [ -d "${TAP_WORK}/.git" ]; then
+  git -C "${TAP_WORK}" fetch origin
+  git -C "${TAP_WORK}" checkout main
+  git -C "${TAP_WORK}" reset --hard origin/main
+else
+  gh repo clone Silbercue/homebrew-silbercue "${TAP_WORK}"
+fi
+
+# Erster Lauf: Formula existiert noch nicht im Tap → aus dem Skill-Template
+# kopieren. Folgelauf: existierende Formula wird nur patched.
+TEMPLATE_SRC="/Users/silbercue/Documents/Cursor/Skills/SilbercueChrome/.claude/skills/silbercuechrome-publish/templates/silbercuechrome.rb"
+FORMULA_DST="${TAP_WORK}/Formula/silbercuechrome.rb"
+if [ ! -f "${FORMULA_DST}" ]; then
+  echo "Tap has no silbercuechrome formula yet — bootstrapping from skill template"
+  mkdir -p "${TAP_WORK}/Formula"
+  cp "${TEMPLATE_SRC}" "${FORMULA_DST}"
+fi
+
+SHA256="${SHA256}" VERSION="${VERSION}" FORMULA_DST="${FORMULA_DST}" python3 <<'PY'
+import os, pathlib, re
+version = os.environ["VERSION"]
+sha256 = os.environ["SHA256"]
+f = pathlib.Path(os.environ["FORMULA_DST"])
+t = f.read_text()
+t = re.sub(
+    r'url "https://github\.com/Silbercue/silbercuechrome/releases/download/v[^/]+/silbercuechrome-pro-v[^"]+\.tar\.gz"',
+    f'url "https://github.com/Silbercue/silbercuechrome/releases/download/v{version}/silbercuechrome-pro-v{version}-macos-arm64.tar.gz"',
+    t,
+)
+t = re.sub(r'version "[^"]+"', f'version "{version}"', t)
+t = re.sub(r'sha256 "[0-9a-f]{64}"', f'sha256 "{sha256}"', t)
+f.write_text(t)
+print(f"Formula patched: version={version}, sha256={sha256[:12]}...")
+PY
+
+# 6) Commit + push Tap main (kein PR, kein Branch — direkter Push)
+cd "${TAP_WORK}"
+git add Formula/silbercuechrome.rb
+git commit -m "silbercuechrome ${VERSION}"
+git push origin main
+
+# 7) Smoke-Test: Formula aus Tap ziehen und installieren
+brew update
+brew uninstall silbercue/silbercue/silbercuechrome 2>/dev/null || true
+brew install silbercue/silbercue/silbercuechrome
+
+# 8) Version-Smoke-Test am installierten Binary
+/opt/homebrew/bin/silbercuechrome version | tee /tmp/sc-brew-version.log
+grep -q "@silbercuechrome/mcp-pro ${VERSION}" /tmp/sc-brew-version.log \
+  || { echo "FAIL: installed binary version mismatch"; exit 1; }
+
+# 9) Finaler brew audit (jetzt mit echtem Release erreichbar)
+brew audit --strict --online silbercue/silbercue/silbercuechrome \
+  || echo "WARN: brew audit hat Findings — manuell pruefen"
+
+echo "Phase 6b OK — silbercuechrome ${VERSION} ist via 'brew install silbercue/silbercue/silbercuechrome' verfuegbar"
+```
+
+**Fehlerbehebung Phase 6b:**
+
+- **`bash scripts/build-binary.sh` failed:** Pro-Build-Problem. STOPP, mit User klaeren. `scripts/build-binary.sh` NICHT modifizieren (AC-6).
+- **`gh release upload` exit 1 mit "asset already exists":** Re-Release-Szenario — `--clobber` zum upload-Call hinzufuegen und retry.
+- **`git push origin master` im Tap failed mit Auth-Error:** `gh auth status` pruefen, ggf. `gh auth login`, retry.
+- **`brew install` failed mit "SHA256 mismatch":** Formula wurde mit dem falschen sha256 gepatcht. Asset manuell pruefen (`gh release view v${VERSION} --repo Silbercue/silbercuechrome --json assets`), sha256 aus dem echten Asset neu berechnen, Formula neu patchen, commit+push retry.
+- **`/opt/homebrew/bin/silbercuechrome version` zeigt alte Version:** Homebrew-Cache. `brew uninstall` + `brew cleanup -s silbercuechrome` + `brew install ...` retry.
+- **`brew audit --strict --online` hat Findings:** Kein Hard-Fail — nur warnen. Haeufige Findings: Desc-Format, Homepage-HTTPS-Check, Fehlende Trailing-Newline in der Formula. Fix ueber separaten Tap-Commit nachreichen.
+
+**Sicherheits-Regeln fuer Phase 6b:**
+
+- **Kein Pro-Source im Free-Release.** Nur das ad-hoc-signierte SEA-Binary (`silbercuechrome-pro-vX.Y.Z-macos-arm64.tar.gz`) + sha256-Sidecar. Kein `npm pack`, kein Git-Bundle, kein Source-Tarball.
+- **`scripts/build-binary.sh` im Pro-Repo nicht modifizieren** — der Skill ruft es unveraendert auf.
+- **Tap-Repo `main` direkt pushen** — kein PR-Workflow noetig. Maintainer = User. Achtung: Tap nutzt Branch `main`, Free/Pro-Repos nutzen `master` — nicht verwechseln.
+- **Bei SHA256-Mismatch zwischen Asset und Formula:** NICHT retry-loopen. Root Cause finden (meist: Tarball wurde neu generiert zwischen Upload und Formula-Patch).
+
 ### Phase 7: Verifizieren
 
 ```bash
@@ -238,10 +353,17 @@ Alle drei sollten konsistent die neue Version zeigen. Wenn nicht: Fehler analysi
 ### Phase 7c: User informieren
 
 Sage dem User:
-1. **Version live** auf `https://www.npmjs.com/package/@silbercue/chrome`
-2. **GitHub Release** auf `https://github.com/Silbercue/silbercuechrome/releases/tag/v<NEW_VERSION>`
-3. **Pro-Repo Update** falls relevant
-4. **Claude-Code-Config** ist automatisch auf `npx @silbercue/chrome@latest` umgestellt (Backup unter `~/.claude.json.backup-<timestamp>`). Hinweis: `/mcp` im Prompt eintippen um die neue Version sofort zu laden, oder Claude Code neu starten.
+1. **Free-Version live auf npm:** `https://www.npmjs.com/package/@silbercue/chrome`
+2. **GitHub Release (public):** `https://github.com/Silbercue/silbercuechrome/releases/tag/v<NEW_VERSION>` — enthaelt das Pro-Binary als Asset (`silbercuechrome-pro-v<NEW_VERSION>-macos-arm64.tar.gz` + `.sha256`)
+3. **Pro via Homebrew verfuegbar:** Kunden installieren jetzt mit drei Befehlen:
+   ```bash
+   brew install silbercue/silbercue/silbercuechrome
+   claude mcp add --scope user silbercuechrome /opt/homebrew/bin/silbercuechrome
+   silbercuechrome activate <LICENSE-KEY>
+   ```
+   Der Kunde muss Claude Code **komplett neu starten** nach `claude mcp add` (`/mcp reconnect` reicht nicht — Session-Cache-Gotcha).
+4. **Tap-Repo gepusht:** `https://github.com/Silbercue/homebrew-silbercue/commits/main` — `Formula/silbercuechrome.rb` wurde auf `version "<NEW_VERSION>"` + neuen `sha256` gepatcht.
+5. **Claude-Code-Config** ist automatisch auf `npx @silbercue/chrome@latest` umgestellt (Backup unter `~/.claude.json.backup-<timestamp>`). Hinweis: `/mcp` im Prompt eintippen um die neue Version sofort zu laden, oder Claude Code neu starten.
 
 ## Fehlerbehebung
 
@@ -292,6 +414,7 @@ NIE brechen, auch wenn der User es nahelegt:
 - [ ] Phase 5: Dry-Run gruen
 - [ ] Phase 5b: User-Konfirmation eingeholt
 - [ ] Phase 6: `npm run publish:release` durchgelaufen
+- [ ] **Phase 6b: Pro-Binary gebaut, an Free-Release angehaengt, Formula im Tap gepatcht + gepusht, `brew install` Smoke-Test gruen**
 - [ ] Phase 7: npm registry, GitHub release und git tag verifiziert
 - [ ] Phase 7b: `~/.claude.json` automatisch auf `npx @silbercue/chrome@latest` umgestellt
-- [ ] Phase 7c: User informiert (Links + Hinweis auf `/mcp` Reconnect)
+- [ ] Phase 7c: User informiert (Free-Links + Pro-Homebrew-Link + Hinweis auf Claude-Code-Restart)

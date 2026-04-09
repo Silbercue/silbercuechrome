@@ -97,10 +97,32 @@ Add to `~/.cursor/mcp.json`:
 
 Any client that supports stdio MCP servers: `npx -y @silbercue/chrome@latest` with no arguments.
 
+### Install Pro via Homebrew
+
+Pro adds `virtual_desk`, `switch_tab`, `dom_snapshot`, parallel tabs in `run_plan`, ambient context hooks, and an operator hook pipeline on top of the 18 Free tools. Three commands, no JSON edits:
+
+```bash
+brew install silbercue/silbercue/silbercuechrome
+claude mcp add --scope user silbercuechrome /opt/homebrew/bin/silbercuechrome
+silbercuechrome activate SCC-XXXX-XXXX-XXXX-XXXX
+```
+
+**Important — restart Claude Code completely after `claude mcp add`.** `/mcp reconnect` is *not* enough. Claude Code reads the `mcpServers` config only at session start and caches it; the old command is re-used even after `reconnect`. Fully quit Claude Code and reopen it so the new `silbercuechrome` server is picked up.
+
+After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license (one-time $19) at [polar.sh/silbercuechrome](https://polar.sh/silbercuechrome) — the key arrives by email and can be activated as shown above.
+
+Google Chrome must be installed on the machine — SilbercueChrome auto-launches Chrome via CDP at runtime, but it does not install Chrome for you.
+
 ### Uninstall
 
 ```bash
+# Free (npx install)
 claude mcp remove --scope user silbercuechrome
+
+# Pro (Homebrew install)
+silbercuechrome deactivate   # wipes license cache
+claude mcp remove --scope user silbercuechrome
+brew uninstall silbercue/silbercue/silbercuechrome
 ```
 
 ## Free vs Pro
@@ -120,7 +142,7 @@ The Free tier gives you 18 tools covering 24/24 benchmark tests in the scripted 
 | Benchmark time (scripted) | ~20s | ~21s |
 | Benchmark time (LLM-driven) | 755-900s | ~555s |
 
-Pro costs $19 USD one-time. [Get a license on Polar.sh](https://polar.sh/silbercuechrome), then activate via the built-in license command or `SILBERCUECHROME_LICENSE_KEY=SC-PRO-...` env var.
+Pro costs $19 USD one-time. [Get a license on Polar.sh](https://polar.sh/silbercuechrome), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
 
 ## Tools
 
