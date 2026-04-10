@@ -352,7 +352,7 @@ Niedrige Priorität. Canvas ist inherent opak (Pixel, keine DOM-Nodes). Ein obse
 | 12 | FR-022 run_plan press_key | Mittel | registry.ts (_handlers), run-plan.ts (Schema) | gefixt |
 | 13 | FR-023 run_plan iFrame | Mittel | a11y-tree.ts (same-origin iframe inlining) | gefixt |
 | 14 | FR-025 navigator.webdriver exposed | Niedrig | chrome-launcher.ts, browser-session.ts, navigate.ts, switch-tab.ts | gefixt |
-| 15 | FR-026 T4.7 Token-Budget borderline | Mittel | a11y-tree.ts (formatLine / interactive mode) | offen |
+| 15 | FR-026 T4.7 Token-Budget borderline | Mittel | a11y-tree.ts (DEFAULT_INTERACTIVE_MAX_TOKENS + editable skip) | gefixt |
 
 ---
 
@@ -582,10 +582,13 @@ Die Interactive-Mode-Ausgabe koennte kompakter sein:
 - Redundante Annotationen (z.B. `(scrollable)`, `(opens new tab)`) koennten im interactive-only Modus wegfallen
 - Hierarchie-Einrueckung mit 2 Spaces pro Level summiert sich bei tiefen DOMs
 
-### Fix
-Mehrere Optionen, kombinierbar:
-1. **Label-Truncation:** Namen in `formatLine()` auf z.B. 60 Chars kuerzen wenn interactive-only
-2. **Flache Ausgabe:** Im interactive-only Modus keine Hierarchie-Einrueckung (spart 2-6 Chars pro Zeile bei tiefen DOMs)
-3. **Token-Budget-Parameter:** `read_page` koennte ein optionales `max_tokens` akzeptieren und den Output truncaten
+### Fix (implementiert)
+1. **DEFAULT_INTERACTIVE_MAX_TOKENS = 2000:** Neuer Default fuer `filter: "interactive"` in `getTree()`. Wenn kein explizites `max_tokens` gesetzt wird, greift bei interactive-only das 2000-Token-Budget. Der bestehende Downsampling-Mechanismus (`downsampleTree`, `truncateToFit`) komprimiert automatisch: grosse Subtrees werden zu `... (N elements omitted)` zusammengefasst. Normale Pages (<100 interaktive Elemente) bleiben unberuehrt.
 
-**Aufwand:** Mittel — erfordert Verstaendnis der Ausgabe-Pipeline und sorgfaeltige Auswahl der Komprimierungsstrategie.
+2. **Bonus: `(editable)` bei textbox entfernt:** Textboxen sind per Definition editierbar — die Annotation war redundant und verschwendete ~10 Chars pro Textbox.
+
+### Verifiziert
+T4.7 empirisch getestet: 267 interaktive Elemente, roher Output ~2737 Tokens → nach Downsampling ~1884 Tokens (unter Budget). Kein Informationsverlust — das LLM kann per `read_page(ref)` in kollabierte Sections expandieren.
+
+### Betroffene Dateien
+- `src/cache/a11y-tree.ts` — `DEFAULT_INTERACTIVE_MAX_TOKENS`, effectiveMaxTokens-Berechnung, `(editable)` skip fuer textbox

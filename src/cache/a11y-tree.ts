@@ -94,6 +94,11 @@ interface CaptureSnapshotResponse {
  *  ~200KB chars ≈ 50K tokens. Large enough for normal pages, prevents 855KB+ responses. */
 const DEFAULT_MAX_TOKENS = 50_000;
 
+/** FR-026: Interactive-only default token cap.
+ *  Large DOMs (100+ interactive elements) produce overwhelming flat lists.
+ *  Cap at 2000 tokens and let the LLM drill into collapsed sections. */
+const DEFAULT_INTERACTIVE_MAX_TOKENS = 2_000;
+
 const INTERACTIVE_ROLES = new Set([
   "button",
   "link",
@@ -1355,8 +1360,9 @@ export class A11yTreeProcessor {
     const text = this.formatHeader(pageTitle, refCount, filter, depth)
       + (lines.length > 0 ? "\n\n" + lines.join("\n") : "");
 
-    // Token-Budget Downsampling — explicit max_tokens or BUG-009 safety cap
-    const effectiveMaxTokens = options.max_tokens ?? DEFAULT_MAX_TOKENS;
+    // Token-Budget Downsampling — explicit max_tokens, filter-specific default, or BUG-009 safety cap
+    const effectiveMaxTokens = options.max_tokens
+      ?? (filter === "interactive" ? DEFAULT_INTERACTIVE_MAX_TOKENS : DEFAULT_MAX_TOKENS);
     const currentTokens = estimateTokens(text);
     if (currentTokens > effectiveMaxTokens) {
       // BUG-016: re-establish render session for downsample's main-frame
@@ -2800,7 +2806,8 @@ export class A11yTreeProcessor {
     }
 
     // FR-006: contenteditable annotation
-    if (node.properties) {
+    // FR-026: skip for textbox — textboxes are editable by definition, saves ~10 chars each
+    if (role !== "textbox" && node.properties) {
       for (const prop of node.properties) {
         if (prop.name === "editable" && prop.value.value && prop.value.value !== "inherit") {
           line += " (editable)";
