@@ -44,7 +44,7 @@ describe("ToolRegistry", () => {
     expect(toolFn).toHaveBeenCalledTimes(18);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
-      expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad use: automatic recovery after a click\/type\/fill_form failure/s),
+      expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
       expect.objectContaining({
         expression: expect.anything(),
         await_promise: expect.anything(),
