@@ -6,6 +6,10 @@ import { resolveElement } from "./element-utils.js";
 import { RefNotFoundError } from "../cache/a11y-tree.js";
 import { wrapCdpError } from "./error-utils.js";
 
+// --- Ref detection ---
+
+const REF_RE = /^e\d+$/;
+
 // --- Schema ---
 
 export const observeSchema = z.object({
@@ -28,13 +32,13 @@ export const observeSchema = z.object({
     .string()
     .optional()
     .describe(
-      "CSS selector to click immediately when 'until' condition is met (for timing-critical actions). Only used with 'until'.",
+      "CSS selector or element ref (e.g. 'e5') to click immediately when 'until' condition is met (for timing-critical actions). Only used with 'until'.",
     ),
   click_first: z
     .string()
     .optional()
     .describe(
-      "CSS selector to click AFTER the observer is set up but BEFORE collection starts. Use to trigger the changes you want to observe (e.g. 'Start Mutations' button).",
+      "CSS selector or element ref (e.g. 'e5') to click AFTER the observer is set up but BEFORE collection starts. Use to trigger the changes you want to observe (e.g. 'Start Mutations' button).",
     ),
   collect: z
     .enum(["text", "attributes", "all"])
@@ -65,18 +69,38 @@ const MAX_TIMEOUT_MS = 25000;
 /**
  * Build the observer function for "collect" mode.
  * Runs for `duration` ms, collects all text/attribute changes.
+ *
+ * When clickFirstIsArg is true, click_first was resolved server-side to an
+ * objectId and will be passed as the first function argument (a real DOM node).
+ * Otherwise clickFirstSelector is used as a CSS selector via querySelector.
  */
 export function buildCollectFunction(
   duration: number,
   interval: number,
   collect: "text" | "attributes" | "all",
   clickFirstSelector?: string,
+  clickFirstIsArg?: boolean,
 ): string {
   const observerConfig = buildMutationObserverConfig(collect);
-  const clickFirstCode = clickFirstSelector
-    ? `var cf = document.querySelector(${JSON.stringify(clickFirstSelector)}); if (cf) cf.click();`
-    : "";
-  return `function() {
+
+  // click_first code: either use the function argument or querySelector
+  let clickFirstCode: string;
+  if (clickFirstIsArg) {
+    // Element comes as first function argument — always valid (resolved server-side)
+    clickFirstCode = "if (clickFirstEl) clickFirstEl.click();";
+  } else if (clickFirstSelector) {
+    // CSS selector path — throw on miss instead of silent fail
+    clickFirstCode = `var cf = document.querySelector(${JSON.stringify(clickFirstSelector)});
+    if (!cf) throw new Error('click_first: element not found for selector ' + ${JSON.stringify(JSON.stringify(clickFirstSelector))});
+    cf.click();`;
+  } else {
+    clickFirstCode = "";
+  }
+
+  // Function signature: add clickFirstEl param when needed
+  const params = clickFirstIsArg ? "clickFirstEl" : "";
+
+  return `function(${params}) {
   var el = this;
   var changes = [];
   var lastText = el.textContent;
@@ -122,6 +146,10 @@ export function buildCollectFunction(
 /**
  * Build the observer function for "until" mode.
  * Waits until a JS condition is met, optionally clicks a target element.
+ *
+ * clickFirstIsArg / thenClickIsArg: when true, the corresponding element was
+ * resolved server-side and is passed as a function argument instead of using
+ * querySelector.  Argument order: (clickFirstEl?, thenClickEl?)
  */
 export function buildUntilFunction(
   untilExpression: string,
@@ -130,17 +158,51 @@ export function buildUntilFunction(
   collect: "text" | "attributes" | "all",
   thenClickSelector?: string,
   clickFirstSelector?: string,
+  clickFirstIsArg?: boolean,
+  thenClickIsArg?: boolean,
 ): string {
   const observerConfig = buildMutationObserverConfig(collect);
-  const clickCode = thenClickSelector
-    ? `var clickTarget = document.querySelector(${JSON.stringify(thenClickSelector)});
-    if (clickTarget) clickTarget.click();`
-    : "";
-  const clickFirstCode = clickFirstSelector
-    ? `var cf = document.querySelector(${JSON.stringify(clickFirstSelector)}); if (cf) cf.click();`
-    : "";
 
-  return `function() {
+  // then_click code
+  let clickCode: string;
+  if (thenClickIsArg) {
+    clickCode = "if (thenClickEl) thenClickEl.click();";
+  } else if (thenClickSelector) {
+    clickCode = `var clickTarget = document.querySelector(${JSON.stringify(thenClickSelector)});
+    if (!clickTarget) throw new Error('then_click: element not found for selector ' + ${JSON.stringify(JSON.stringify(thenClickSelector))});
+    clickTarget.click();`;
+  } else {
+    clickCode = "";
+  }
+
+  // click_first code
+  let clickFirstCode: string;
+  if (clickFirstIsArg) {
+    clickFirstCode = "if (clickFirstEl) clickFirstEl.click();";
+  } else if (clickFirstSelector) {
+    clickFirstCode = `var cf = document.querySelector(${JSON.stringify(clickFirstSelector)});
+    if (!cf) throw new Error('click_first: element not found for selector ' + ${JSON.stringify(JSON.stringify(clickFirstSelector))});
+    cf.click();`;
+  } else {
+    clickFirstCode = "";
+  }
+
+  // Build function parameter list — order: clickFirstEl, thenClickEl
+  const paramList: string[] = [];
+  if (clickFirstIsArg) paramList.push("clickFirstEl");
+  if (thenClickIsArg) paramList.push("thenClickEl");
+  const params = paramList.join(", ");
+
+  // "clicked" result: for arg-resolved then_click, always true (server validated);
+  // for CSS selector, check if querySelector succeeded (but we now throw on miss,
+  // so it's always true if we reach that line)
+  const clickedExpr = thenClickIsArg
+    ? "true"
+    : thenClickSelector
+      ? "!!clickTarget"
+      : "false";
+
+  return `function(${params}) {
   var el = this;
   var changes = [];
   var lastText = el.textContent;
@@ -179,7 +241,7 @@ export function buildUntilFunction(
         clearInterval(poll);
         clearTimeout(timer);
         ${clickCode}
-        resolve({ met: true, value: el.textContent, changes: changes, clicked: ${thenClickSelector ? "!!clickTarget" : "false"} });
+        resolve({ met: true, value: el.textContent, changes: changes, clicked: ${clickedExpr} });
       }
     }
 
@@ -354,8 +416,8 @@ export async function observeHandler(
   let resolvedSessionId: string;
   try {
     const resolved = await resolveElement(cdpClient, sessionId, {
-      ref: /^e\d+$/.test(params.selector) ? params.selector : undefined,
-      selector: /^e\d+$/.test(params.selector) ? undefined : params.selector,
+      ref: REF_RE.test(params.selector) ? params.selector : undefined,
+      selector: REF_RE.test(params.selector) ? undefined : params.selector,
     }, sessionManager);
     objectId = resolved.objectId;
     resolvedSessionId = resolved.resolvedSessionId;
@@ -375,6 +437,52 @@ export async function observeHandler(
     };
   }
 
+  // --- Resolve click_first / then_click refs (FR-021) ---
+  let clickFirstIsArg = false;
+  let clickFirstObjectId: string | undefined;
+  let thenClickIsArg = false;
+  let thenClickObjectId: string | undefined;
+
+  if (params.click_first && REF_RE.test(params.click_first)) {
+    try {
+      const resolved = await resolveElement(cdpClient, sessionId, {
+        ref: params.click_first,
+      }, sessionManager);
+      clickFirstObjectId = resolved.objectId;
+      clickFirstIsArg = true;
+    } catch (err) {
+      const elapsedMs = Math.round(performance.now() - start);
+      const msg = err instanceof RefNotFoundError
+        ? `observe: click_first ${err.message}`
+        : `observe: click_first ref resolution failed — ${err instanceof Error ? err.message : String(err)}`;
+      return {
+        content: [{ type: "text", text: msg }],
+        isError: true,
+        _meta: { elapsedMs, method: "observe" },
+      };
+    }
+  }
+
+  if (params.then_click && REF_RE.test(params.then_click)) {
+    try {
+      const resolved = await resolveElement(cdpClient, sessionId, {
+        ref: params.then_click,
+      }, sessionManager);
+      thenClickObjectId = resolved.objectId;
+      thenClickIsArg = true;
+    } catch (err) {
+      const elapsedMs = Math.round(performance.now() - start);
+      const msg = err instanceof RefNotFoundError
+        ? `observe: then_click ${err.message}`
+        : `observe: then_click ref resolution failed — ${err instanceof Error ? err.message : String(err)}`;
+      return {
+        content: [{ type: "text", text: msg }],
+        isError: true,
+        _meta: { elapsedMs, method: "observe" },
+      };
+    }
+  }
+
   // Build and execute the observer function
   try {
     let functionDeclaration: string;
@@ -387,6 +495,8 @@ export async function observeHandler(
         params.collect,
         params.then_click,
         params.click_first,
+        clickFirstIsArg,
+        thenClickIsArg,
       );
     } else {
       functionDeclaration = buildCollectFunction(
@@ -394,7 +504,17 @@ export async function observeHandler(
         params.interval,
         params.collect,
         params.click_first,
+        clickFirstIsArg,
       );
+    }
+
+    // Build arguments array for callFunctionOn — objectIds for ref-resolved elements
+    const callArgs: Array<{ objectId: string }> = [];
+    if (clickFirstIsArg && clickFirstObjectId) {
+      callArgs.push({ objectId: clickFirstObjectId });
+    }
+    if (thenClickIsArg && thenClickObjectId) {
+      callArgs.push({ objectId: thenClickObjectId });
     }
 
     const cdpResult = await cdpClient.send<{
@@ -405,6 +525,7 @@ export async function observeHandler(
       {
         objectId,
         functionDeclaration,
+        arguments: callArgs.length > 0 ? callArgs : undefined,
         returnByValue: true,
         awaitPromise: true,
       },
