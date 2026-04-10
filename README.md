@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/Silbercue/silbercuechrome)](https://github.com/Silbercue/silbercuechrome/releases)
 [![npm version](https://img.shields.io/npm/v/@silbercue%2Fchrome)](https://www.npmjs.com/package/@silbercue/chrome)
 [![Free — 18 tools](https://img.shields.io/badge/Free-18_tools-brightgreen)](https://github.com/Silbercue/silbercuechrome#free-vs-pro)
-[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercuechrome)
+[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercueswift/silbercuechrome-pro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
@@ -109,7 +109,7 @@ silbercuechrome activate SCC-XXXX-XXXX-XXXX-XXXX
 
 **Important — restart Claude Code completely after `claude mcp add`.** `/mcp reconnect` is *not* enough. Claude Code reads the `mcpServers` config only at session start and caches it; the old command is re-used even after `reconnect`. Fully quit Claude Code and reopen it so the new `silbercuechrome` server is picked up.
 
-After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license (one-time $19) at [polar.sh/silbercuechrome](https://polar.sh/silbercuechrome) — the key arrives by email and can be activated as shown above.
+After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license at [polar.sh/silbercueswift](https://polar.sh/silbercueswift/silbercuechrome-pro) — the key arrives by email and can be activated as shown above.
 
 Google Chrome must be installed on the machine — SilbercueChrome auto-launches Chrome via CDP at runtime, but it does not install Chrome for you.
 
@@ -149,7 +149,7 @@ The Free tier gives you 18 tools that cover the entire benchmark suite. Pro adds
 
 See the **[Benchmarks](#benchmarks)** section below for per-tool-call response-size numbers and head-to-head comparisons with Playwright MCP, Browser MCP, claude-in-chrome, and browser-use.
 
-Pro costs $19 USD one-time. [Get a license on Polar.sh](https://polar.sh/silbercuechrome), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
+Pro costs €12/month. [Get a license on Polar.sh](https://polar.sh/silbercueswift/silbercuechrome-pro), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
 
 ## Tools
 
@@ -277,7 +277,7 @@ Connection priority:
 
 The core server and all 18 Free-tier tools are **MIT licensed** — see [LICENSE](LICENSE). Use them however you want, commercially or otherwise.
 
-Pro tools (3+ gated tools, parallel tab execution, ambient context, operator hooks, faster internals) require a [paid license](https://polar.sh/silbercuechrome). The license validation code is in the separate private Pro repository.
+Pro tools (3+ gated tools, parallel tab execution, ambient context, operator hooks, faster internals) require a [paid license](https://polar.sh/silbercueswift/silbercuechrome-pro). The license validation code is in the separate private Pro repository.
 
 ## Contributing
 

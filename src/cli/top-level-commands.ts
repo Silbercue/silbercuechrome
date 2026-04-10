@@ -42,7 +42,7 @@ export const FREE_TIER_TOOL_COUNT = 21;
  * URL fuer Pro-Upgrade. Wird in `status`-Output und Aktivierungs-Hinweisen
  * gezeigt.
  */
-export const UPGRADE_URL = "https://polar.sh/silbercuechrome/silbercuechrome-pro";
+export const UPGRADE_URL = "https://polar.sh/silbercueswift/silbercuechrome-pro";
 
 /** Liste der bekannten Free-Subcommands fuer Dispatch + Help. */
 const KNOWN_SUBCOMMANDS = [
