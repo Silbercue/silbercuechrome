@@ -19,7 +19,7 @@ const suspendSchema = z.object({
 });
 
 const stepSchema = z.object({
-  tool: z.string().describe("Tool name to execute (e.g. 'navigate', 'click', 'type')"),
+  tool: z.string().describe("Tool name to execute (e.g. 'click', 'type', 'press_key', 'navigate', 'scroll')"),
   params: z.record(z.unknown()).optional().describe("Parameters for the tool. Use $varName for variable substitution."),
   saveAs: z.string().optional().describe("Save step result as variable (accessible via $name in later steps)"),
   if: z.string().optional().describe("Condition expression — step runs only if true. Use $varName for variables. Example: \"$pageTitle === 'Login'\""),

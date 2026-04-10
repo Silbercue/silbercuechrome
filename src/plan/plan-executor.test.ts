@@ -63,6 +63,30 @@ describe("executePlan", () => {
     expect(textBlocks[2]).toHaveProperty("text", expect.stringContaining("screenshot"));
   });
 
+  // FR-022: press_key and scroll work as plan steps
+  it("executes press_key and scroll steps without Unknown tool error", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "Clicked element"));
+    responses.set("press_key", okResponse("press_key", "Pressed Escape"));
+    responses.set("scroll", okResponse("scroll", "Scrolled down 500px"));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e5" } },
+      { tool: "press_key", params: { key: "Escape" } },
+      { tool: "scroll", params: { direction: "down", amount: 500 } },
+    ];
+
+    const result = await executePlan(steps, registry);
+
+    expect(result.isError).toBeFalsy();
+    const textBlocks = result.content.filter((c) => c.type === "text");
+    expect(textBlocks).toHaveLength(3);
+    expect(textBlocks[0]).toHaveProperty("text", expect.stringContaining("OK click"));
+    expect(textBlocks[1]).toHaveProperty("text", expect.stringContaining("OK press_key"));
+    expect(textBlocks[2]).toHaveProperty("text", expect.stringContaining("OK scroll"));
+  });
+
   it("returns step-by-step results with tool name and timing", async () => {
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "Navigated", 42));

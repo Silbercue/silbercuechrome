@@ -203,6 +203,92 @@ describe("ToolRegistry", () => {
     expect(result.content[0]).toHaveProperty("text", "42");
   });
 
+  // --- FR-022: press_key and scroll are dispatched via executeTool (run_plan path) ---
+
+  it("executeTool dispatches press_key (not Unknown tool)", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({}),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("press_key", { key: "Enter" });
+
+    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("Pressed"));
+    expect(result._meta?.method).toBe("press_key");
+  });
+
+  it("executeTool dispatches scroll (not Unknown tool)", async () => {
+    const mockCdpClient = {
+      send: vi.fn().mockResolvedValue({
+        result: { value: { scrollY: 300, scrollHeight: 2000, clientHeight: 800 } },
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("scroll", { direction: "down", amount: 300 });
+
+    expect(result).toBeDefined();
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]).toHaveProperty("text", expect.stringContaining("Scroll"));
+    expect(result._meta?.method).toBe("scroll");
+  });
+
+  it("executeTool press_key with sessionIdOverride passes override to CDP", async () => {
+    const sendCalls: Array<{ method: string; sessionId?: string }> = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        sendCalls.push({ method, sessionId });
+        return {};
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("press_key", { key: "Escape" }, "tab-override");
+
+    expect(result.isError).toBeFalsy();
+    const keyCall = sendCalls.find((c) => c.method === "Input.dispatchKeyEvent");
+    expect(keyCall).toBeDefined();
+    expect(keyCall!.sessionId).toBe("tab-override");
+  });
+
+  it("executeTool scroll with sessionIdOverride passes override to CDP", async () => {
+    const sendCalls: Array<{ method: string; sessionId?: string }> = [];
+    const mockCdpClient = {
+      send: vi.fn(async (method: string, _params?: unknown, sessionId?: string) => {
+        sendCalls.push({ method, sessionId });
+        return {
+          result: { value: { scrollY: 200, scrollHeight: 2000, clientHeight: 800 } },
+        };
+      }),
+    } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
+    registry.registerAll();
+
+    const result = await registry.executeTool("scroll", { direction: "up", amount: 200 }, "tab-override");
+
+    expect(result.isError).toBeFalsy();
+    const scrollCall = sendCalls.find((c) => c.method === "Runtime.evaluate");
+    expect(scrollCall).toBeDefined();
+    expect(scrollCall!.sessionId).toBe("tab-override");
+  });
+
   it("executeTool returns error for unknown tool", async () => {
     const toolFn = vi.fn();
     const mockServer = { tool: toolFn } as never;

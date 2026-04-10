@@ -1325,6 +1325,12 @@ export class ToolRegistry implements ToolRegistryPublic {
         this._browserSession.sessionManager,
       );
     });
+    this._handlers.set("press_key", async (params, sessionIdOverride?) => {
+      return pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
+    });
+    this._handlers.set("scroll", async (params, sessionIdOverride?) => {
+      return scrollHandler(params as unknown as ScrollParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
+    });
     if (this._browserSession.consoleCollector) {
       this._handlers.set("console_logs", async (params) => {
         return consoleLogsHandler(params as unknown as ConsoleLogsParams, this._browserSession.consoleCollector!);
