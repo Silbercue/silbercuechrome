@@ -25,6 +25,7 @@ import type { RunPlanParams } from "./tools/run-plan.js";
 import type { ToolResponse } from "./types.js";
 import { evaluateHandler } from "./tools/evaluate.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
+import { FreeTierLicenseStatus } from "./license/license-status.js";
 
 function textOf(result: ToolResponse): string {
   const block = result.content?.[0];
@@ -104,6 +105,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
   // AC #4 — run_plan parallel → proFeatureError
   // -------------------------------------------------------------
   describe("run_plan parallel (AC #4)", () => {
+    const freeLicense = new FreeTierLicenseStatus(false);
+
     it("returns Pro-Feature error for parallel parameter", async () => {
       const registry = {
         executeTool: vi.fn(),
@@ -118,7 +121,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
         ],
       } as unknown as RunPlanParams;
 
-      const result = (await runPlanHandler(params, registry)) as ToolResponse;
+      const result = (await runPlanHandler(params, registry, undefined, undefined, freeLicense)) as ToolResponse;
 
       expect(result.isError).toBe(true);
       expect(textOf(result)).toContain("parallel is a Pro feature");
@@ -140,7 +143,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
         ],
       } as unknown as RunPlanParams;
 
-      await expect(runPlanHandler(params, registry)).resolves.toBeDefined();
+      await expect(runPlanHandler(params, registry, undefined, undefined, freeLicense)).resolves.toBeDefined();
     });
   });
 
@@ -199,6 +202,10 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
         mockCdpClient,
         "session-1",
         {} as never,
+        undefined, // getConnectionStatus
+        undefined, // sessionManager
+        undefined, // dialogHandler
+        new FreeTierLicenseStatus(false), // force Free tier
       );
       registry.registerAll();
       return registry;

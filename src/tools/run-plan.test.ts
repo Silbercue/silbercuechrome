@@ -6,6 +6,7 @@ import type { ToolResponse } from "../types.js";
 import { PlanStateStore } from "../plan/plan-state-store.js";
 import type { SuspendedPlanResponse } from "../plan/plan-executor.js";
 import { registerProHooks } from "../hooks/pro-hooks.js";
+import { FreeTierLicenseStatus } from "../license/license-status.js";
 
 function createMockRegistry(
   toolResponses: Map<string, ToolResponse>,
@@ -502,8 +503,8 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
       ],
     };
 
-    // No license, no config → defaults: FreeTierLicenseStatus (isPro=false), runPlanLimit=3
-    const result = await runPlanHandler(params, registry);
+    // Explicit Free license — cache file on dev machines would default to Pro
+    const result = await runPlanHandler(params, registry, undefined, undefined, new FreeTierLicenseStatus(false));
 
     expect(callLog).toHaveLength(3);
     expect(result._meta!.truncated).toBe(true);
