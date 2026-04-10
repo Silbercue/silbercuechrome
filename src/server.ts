@@ -71,7 +71,8 @@ export async function startServer(): Promise<void> {
         "- read_page (accessibility tree with refs like 'e5') is 10-30x cheaper than screenshot.",
         "- Screenshots CANNOT drive click/type — only read_page returns usable element refs.",
         "- fill_form beats multiple type calls for any form with 2+ fields.",
-        "- evaluate is a last resort — prefer read_page, click, type, fill_form, observe.",
+        "- CSS debugging: use inspect_element(selector) — returns computed styles, CSS rules with source:line, cascade, AND a visual clip screenshot. Do NOT use evaluate(getComputedStyle) for CSS inspection.",
+        "- evaluate is for JS computation and style mutations (.style.X = ...) — not for CSS reading or element discovery.",
       ].join("\n"),
     },
   );

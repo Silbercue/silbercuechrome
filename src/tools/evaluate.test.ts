@@ -744,6 +744,29 @@ describe("detectEvaluateAntiPattern", () => {
     // No actual .textContent access — just a string literal
     expect(detectEvaluateAntiPattern('"textContent is a property"')).toBeNull();
   });
+
+  it("hints on getComputedStyle CSS inspection (read-only)", () => {
+    const hint = detectEvaluateAntiPattern(
+      "const s = getComputedStyle(el); s.width",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/inspect_element/);
+  });
+
+  it("hints on getBoundingClientRect layout inspection", () => {
+    const hint = detectEvaluateAntiPattern(
+      "el.getBoundingClientRect().width",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toMatch(/inspect_element/);
+  });
+
+  it("does NOT hint on getComputedStyle when combined with style mutation", () => {
+    const hint = detectEvaluateAntiPattern(
+      "const w = getComputedStyle(el).width; el.style.width = parseInt(w) * 2 + 'px'",
+    );
+    expect(hint ?? "").not.toMatch(/inspect_element/);
+  });
 });
 
 describe("evaluateHandler anti-pattern hint integration", () => {
