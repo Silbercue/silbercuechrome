@@ -353,6 +353,12 @@ Niedrige Priorität. Canvas ist inherent opak (Pixel, keine DOM-Nodes). Ein obse
 | 13 | FR-023 run_plan iFrame | Mittel | a11y-tree.ts (same-origin iframe inlining) | gefixt |
 | 14 | FR-025 navigator.webdriver exposed | Niedrig | chrome-launcher.ts, browser-session.ts, navigate.ts, switch-tab.ts | gefixt |
 | 15 | FR-026 T4.7 Token-Budget borderline | Mittel | a11y-tree.ts (DEFAULT_INTERACTIVE_MAX_TOKENS + editable skip) | gefixt |
+| 16 | FR-027 scroll IntersectionObserver | Mittel | scroll.ts (async settle-wait) | gefixt |
+| 17 | FR-028 natives Drag&Drop | Hoch | drag.ts (neues Tool), registry.ts | offen |
+| 18 | FR-029 click Ambient Context AJAX-Race | Mittel | registry.ts, a11y-tree.ts | offen |
+| 19 | FR-030 Benchmark aus /tmp | Niedrig | Prozess (kein Code) | offen |
+| 20 | FR-031 Cross-Platform Binaries | Mittel | build-binary.sh, publish.ts | offen |
+| 21 | FR-032 Memory aufraemen | Minimal | Memory-Dateien | offen |
 
 ---
 
@@ -592,3 +598,117 @@ T4.7 empirisch getestet: 267 interaktive Elemente, roher Output ~2737 Tokens →
 
 ### Betroffene Dateien
 - `src/cache/a11y-tree.ts` — `DEFAULT_INTERACTIVE_MAX_TOKENS`, effectiveMaxTokens-Berechnung, `(editable)` skip fuer textbox
+
+---
+
+## FR-027: scroll-Tool triggert IntersectionObserver nicht zuverlaessig (P1) — GEFIXT
+
+### Problem
+T2.2 Infinite Scroll braucht in fast jedem Run einen evaluate-Workaround (`scrollTop`-Reset + inkrementelles JS-Scroll), weil das native `scroll`-Tool den IntersectionObserver auf dem Sentinel-Element nicht triggert. Das `scroll`-Tool setzt `scrollTop` direkt oder dispatcht CDP `Input.dispatchMouseEvent` Wheel-Events — beides reicht nicht, um die Observer-Callback auszuloesen.
+
+IntersectionObserver ist auf echten Webseiten ueberall: Lazy Loading, Infinite Scroll, Analytics, Sticky Headers. Das ist der groesste Real-World-Friction — nicht nur ein Benchmark-Problem.
+
+### Root Cause
+`scrollBy()` ist synchron, aber IntersectionObserver-Callbacks feuern erst im naechsten Rendering-Frame (nach dem JS-Callstack). Lazy-Load-Logik in der Observer-Callback (fetch + DOM-Insert) braucht weitere Millisekunden. Sowohl Container-Scroll (`Runtime.callFunctionOn`) als auch Page-Scroll (`Runtime.evaluate` mit `awaitPromise: false`) kehrten sofort zurueck bevor DOM-Updates stattfanden.
+
+### Fix (2026-04-10)
+**`src/tools/scroll.ts`:**
+1. Container-Scroll: `functionDeclaration` zu `async function` geaendert, `awaitPromise: true` gesetzt
+2. Page-Scroll: Expression zu async IIFE geaendert, `awaitPromise: true` gesetzt (war `false`)
+3. Beide Pfade: Post-Scroll-Settle eingebaut — doppeltes `requestAnimationFrame` (garantiert nach Paint, IO-Callbacks gefeuert) + `MutationObserver` mit 150ms Timeout-Fallback (wartet auf DOM-Insert durch Lazy Load)
+4. `prevScrollHeight` vor dem Scroll erfasst, nach Settle verglichen — wenn scrollHeight gewachsen ist, wird das in der Response kommuniziert: `"(content loaded: scrollHeight grew by Npx)"`
+
+**Tests:** 7 neue Tests in `src/tools/scroll.test.ts` — awaitPromise:true, async function/IIFE, rAF+MO im Snippet, scrollHeight-Growth-Reporting fuer Page und Container.
+
+---
+
+## FR-028: Kein natives Drag&Drop — evaluate DOM-Reorder bricht auf React/Vue (P2)
+
+### Problem
+T3.3 Drag&Drop wird per `evaluate` mit `appendChild`-Reorder geloest. Das funktioniert auf der Benchmark-Seite (Vanilla JS), bricht aber auf React/Vue/Angular-Seiten weil die Framework-State nicht aktualisiert wird — das DOM stimmt, aber der Component-State ist out of sync.
+
+Playwright hat ein natives `drag`-Primitive (das im MCP-Run allerdings auch fehlschlug). Ein echtes CDP-basiertes Drag braucht: `Input.dispatchMouseEvent` Sequenz (mousedown auf Source → mousemove in Schritten → mouseup auf Target) mit korrekten Drag-Events (dragstart, dragover, drop).
+
+### Betroffene Dateien
+- Neues Tool `src/tools/drag.ts` (oder Parameter-Erweiterung von `click`)
+- `src/registry.ts` — Tool-Registration
+
+### Fix-Vorschlag
+Neues Tool `drag` mit Parametern `from_ref`/`to_ref` (oder `from_x,from_y` / `to_x,to_y`). Implementierung:
+1. Source-Element resolven → Koordinaten via getContentQuads
+2. Target-Element resolven → Koordinaten
+3. CDP Event-Sequenz: mousedown(source) → N × mousemove(interpoliert) → mouseup(target)
+4. Optional: HTML5 Drag-Events (dragstart, dragenter, dragover, drop) parallel dispatchen fuer Framework-Kompatibilitaet
+
+**Aufwand:** Hoch — CDP Drag-Events sind notorisch fragil, braucht gute Test-Coverage.
+
+---
+
+## FR-029: Ambient Context nach click zu frueh bei AJAX-Updates (P2)
+
+### Problem
+`settle()` wurde aus click entfernt (Performance-Gewinn). Das Ambient-Context-Diff wird jetzt sofort nach dem CDP mouseup/click-Event berechnet. Bei Seiten die nach Click einen AJAX-Request machen (Daten laden, Modal oeffnen mit Delay, SPA-Route-Change), kommt das Diff zu frueh — es zeigt den alten Zustand statt des neuen.
+
+Im Benchmark faellt das nicht auf, weil die Testseite synchron reagiert. Auf echten SPAs mit langsamen APIs (200-500ms) ist das ein Problem: das LLM denkt der Click hat nichts bewirkt und klickt nochmal oder wechselt zu evaluate.
+
+### Betroffene Dateien
+- `src/registry.ts` — `_injectAmbientContext()`, Timing nach Action-Tools
+- `src/cache/a11y-tree.ts` — AX-Tree-Diff Berechnung
+
+### Fix-Vorschlag
+1. **Smart-Settle:** Nach click pruefen ob `Network.requestWillBeSent` oder `Page.frameNavigated` Events im 200ms-Fenster feuern — wenn ja, auf `Network.loadingFinished` oder AX-Tree-Stabilisierung warten (max 2s)
+2. **Oder einfacher:** Optionaler `settle_ms`-Parameter fuer click (Default 0, User/LLM kann 500 setzen wenn noetig)
+3. **Ambient-Context-Hint:** Wenn das Diff leer ist nach einem Click auf ein interaktives Element, einen Hint anhaengen: "No visible changes yet — the page may still be loading. Use wait_for(condition: 'network_idle') or read_page to check."
+
+**Aufwand:** Mittel — Variante 3 ist Niedrig und sofort umsetzbar.
+
+---
+
+## FR-030: Benchmark-Runs aus Projekt-Session statt /tmp (P3 — Prozess)
+
+### Problem
+Runs 3–6 liefen alle aus der Projekt-Session mit CLAUDE.md-Kontext. Der Agent kennt die Friction-Fixes, Tool-Descriptions und Benchmark-Patterns — er ist nicht blind. Der faire Vergleich mit Playwright MCP (der aus /tmp lief) erfordert /tmp-Sessions.
+
+Fuer "funktioniert alles?" sind Projekt-Session-Runs valide. Fuer "wie gut findet sich ein blindes LLM zurecht?" nicht.
+
+### Fix-Vorschlag
+Naechster offizieller Comparison-Run: benchmarkTest-Skill aus einer frischen `/tmp`-Session starten. Dafuer muss der Benchmark-Skill die Session-Erstellung automatisieren oder das im Skill-Prompt dokumentiert werden.
+
+**Aufwand:** Niedrig — Prozess-Aenderung, kein Code.
+
+---
+
+## FR-031: Nur macOS arm64 Binary — kein x86_64, kein Linux (P3 — Distribution)
+
+### Problem
+Das Pro-Binary (`scripts/build-binary.sh`) baut nur fuer macOS arm64 (Apple Silicon). Kein x86_64 Mac, kein Linux. Fuer CI/CD-Pipelines, Docker-Container oder Remote-Server auf Linux ist das Pro-Binary nicht nutzbar — Kunden muessen auf die npm-Variante ausweichen.
+
+Die SEA-Pipeline (Node Single Executable Application) ist da und funktioniert. Cross-Compilation erfordert:
+- Node-Binary fuer die Zielplattform herunterladen
+- postject auf dem richtigen Binary ausfuehren
+- Testen auf der Zielplattform (oder in Docker)
+
+### Fix-Vorschlag
+1. `scripts/build-binary.sh` um `--target` Parameter erweitern (darwin-arm64, darwin-x64, linux-x64)
+2. In Phase 6b des Publish-Skills: Matrix-Build fuer alle Targets
+3. Alle Binaries als separate Assets an den GitHub Release haengen
+4. Homebrew-Formula bleibt macOS-only — Linux-User installieren via npm oder direkter Binary-Download
+
+**Aufwand:** Mittel — SEA cross-compile ist dokumentiert, aber Testing auf Linux braucht Docker/CI.
+
+---
+
+## FR-032: Memory aufraemen — veraltete Eintraege (Info)
+
+### Problem
+Mindestens 5-6 Memory-Eintraege in `MEMORY.md` sind historisch abgeschlossen und verwirren bei zukuenftigen Sessions mehr als sie helfen:
+- Click-Scroll-Bug (gefixt am 2026-04-04)
+- Friction Reports c987ac11, 9254a969 (alle Frictions daraus gefixt)
+- Ambient Context Optimierung (ABGESCHLOSSEN)
+- BUG-015 Screenshot Occlusion (GEFIXT)
+- Phase 6 Bug-Fix Playbook (ABGESCHLOSSEN)
+
+### Fix-Vorschlag
+Veraltete Memory-Eintraege entfernen oder als "historisch" markieren. Nicht durch den Frictioneer — manuell oder per session-recall Cleanup.
+
+**Aufwand:** Minimal — Memory-Dateien loeschen/archivieren.

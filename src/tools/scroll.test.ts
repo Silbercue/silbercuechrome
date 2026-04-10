@@ -24,8 +24,9 @@ const mockResolveElement = vi.mocked(resolveElement);
 function createMockCdp(overrides: Record<string, unknown> = {}) {
   const defaultResponses: Record<string, unknown> = {
     "Runtime.evaluate": {
-      result: { value: { scrollY: 500, scrollHeight: 2000, clientHeight: 800 } },
+      result: { value: { scrollY: 500, scrollHeight: 2000, clientHeight: 800, prevScrollHeight: 2000 } },
     },
+    "Runtime.callFunctionOn": {},
     "DOM.scrollIntoViewIfNeeded": {},
     ...overrides,
   };
@@ -104,7 +105,10 @@ describe("scrollHandler", () => {
     );
     expect(sendFn).toHaveBeenCalledWith(
       "Runtime.evaluate",
-      expect.objectContaining({ expression: expect.stringContaining("scrollBy(0, 500)") }),
+      expect.objectContaining({
+        expression: expect.stringContaining("scrollBy(0, 500)"),
+        awaitPromise: true,
+      }),
       "s1",
     );
   });
@@ -120,7 +124,10 @@ describe("scrollHandler", () => {
     );
     expect(sendFn).toHaveBeenCalledWith(
       "Runtime.evaluate",
-      expect.objectContaining({ expression: expect.stringContaining("scrollBy(0, -300)") }),
+      expect.objectContaining({
+        expression: expect.stringContaining("scrollBy(0, -300)"),
+        awaitPromise: true,
+      }),
       "s1",
     );
   });
@@ -144,5 +151,79 @@ describe("scrollHandler", () => {
     expect(result.content[0]).toEqual(
       expect.objectContaining({ text: expect.stringContaining("position: 500/1200px") }),
     );
+  });
+
+  // --- FR-027: Browser-side settle tests ---
+
+  it("should use async IIFE with awaitPromise and setTimeout settle for page scroll", async () => {
+    const { cdpClient, sendFn } = createMockCdp();
+
+    await scrollHandler({ direction: "down" }, cdpClient, "s1");
+
+    const call = sendFn.mock.calls.find(c => c[0] === "Runtime.evaluate")!;
+    const params = call[1] as { expression: string; awaitPromise: boolean };
+    expect(params.awaitPromise).toBe(true);
+    expect(params.expression).toContain("async");
+    expect(params.expression).toContain("setTimeout");
+    expect(params.expression).toContain("prevScrollHeight");
+  });
+
+  it("should use pure evaluate with querySelector for container_selector scroll", async () => {
+    const { cdpClient, sendFn } = createMockCdp({
+      "Runtime.evaluate": {
+        result: { value: { scrollTop: 500, scrollHeight: 2000, clientHeight: 800, prevScrollHeight: 2000 } },
+      },
+    });
+
+    await scrollHandler({ container_selector: ".my-list", direction: "down" }, cdpClient, "s1");
+
+    // No callFunctionOn — pure evaluate with querySelector
+    const cfoCalls = sendFn.mock.calls.filter(c => c[0] === "Runtime.callFunctionOn");
+    expect(cfoCalls).toHaveLength(0);
+
+    // Single async evaluate with scrollBy + setTimeout settle
+    const evalCalls = sendFn.mock.calls.filter(c => c[0] === "Runtime.evaluate");
+    expect(evalCalls).toHaveLength(1);
+    const evalParams = evalCalls[0][1] as { expression: string; awaitPromise: boolean };
+    expect(evalParams.awaitPromise).toBe(true);
+    expect(evalParams.expression).toContain("async");
+    expect(evalParams.expression).toContain("setTimeout");
+    expect(evalParams.expression).toContain("scrollBy");
+    expect(evalParams.expression).toContain(".my-list");
+  });
+
+  it("should report scrollHeight growth when content was lazy-loaded (page scroll)", async () => {
+    const { cdpClient } = createMockCdp({
+      "Runtime.evaluate": {
+        result: { value: { scrollY: 500, scrollHeight: 3000, clientHeight: 800, prevScrollHeight: 2000 } },
+      },
+    });
+
+    const result = await scrollHandler({ direction: "down" }, cdpClient, "s1");
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("content loaded: scrollHeight grew by 1000px");
+  });
+
+  it("should NOT report scrollHeight growth when no lazy loading occurred", async () => {
+    const { cdpClient } = createMockCdp();
+
+    const result = await scrollHandler({ direction: "down" }, cdpClient, "s1");
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain("content loaded");
+  });
+
+  it("should report scrollHeight growth for container scroll", async () => {
+    const { cdpClient } = createMockCdp({
+      "Runtime.evaluate": {
+        result: { value: { scrollTop: 500, scrollHeight: 3000, clientHeight: 800, prevScrollHeight: 2000 } },
+      },
+    });
+
+    const result = await scrollHandler({ container_selector: ".my-list", direction: "down" }, cdpClient, "s1");
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain("content loaded: scrollHeight grew by 1000px");
   });
 });
