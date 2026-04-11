@@ -69,6 +69,16 @@ interface VisualInfo {
   bounds: { x: number; y: number; w: number; h: number };
   isClickable: boolean;
   isVisible: boolean;
+  /** Story 18.4: marked true by the paint-order occlusion pass if another
+   *  clickable element with a higher paintOrder covers this element's centre
+   *  point. Occluded nodes are filtered out of read_page output for all
+   *  filter modes. */
+  occluded: boolean;
+  /** Story 18.4: raw paintOrder value from DOMSnapshot.captureSnapshot
+   *  (higher = painted later = visually on top). Kept on VisualInfo so tests
+   *  and debug tooling can inspect the resolved stacking order without
+   *  re-reading the snapshot. */
+  paintOrder: number;
 }
 
 interface SnapshotDocument {
@@ -80,12 +90,34 @@ interface SnapshotDocument {
     nodeIndex: number[];
     bounds: number[][];
     styles: number[][];
+    /** Story 18.4: optional because older snapshots and test mocks may omit
+     *  the field; captureSnapshot emits it when `includePaintOrder: true`
+     *  which `fetchVisualData` sets unconditionally. */
+    paintOrders?: number[];
   };
 }
 
 interface CaptureSnapshotResponse {
   documents: SnapshotDocument[];
   strings: string[];
+}
+
+// --- Errors ---
+
+/**
+ * Story 18.4 review H1: tagged error thrown by `fetchVisualData` when
+ * `DOMSnapshot.captureSnapshot` succeeds but omits the `paintOrders` array.
+ * This is a documented Chrome CDP regression mode (see deferred-work.md).
+ * The caller (getTree) catches this specifically so the one-time warning
+ * (review H2) can differentiate "Chrome doesn't support it" vs "CDP
+ * returned a malformed response".
+ */
+class PaintOrderUnavailableError extends Error {
+  readonly reason = "missing-paint-orders" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "PaintOrderUnavailableError";
+  }
 }
 
 // --- Constants ---
@@ -98,6 +130,14 @@ const DEFAULT_MAX_TOKENS = 50_000;
  *  Large DOMs (100+ interactive elements) produce overwhelming flat lists.
  *  Cap at 2000 tokens and let the LLM drill into collapsed sections. */
 const DEFAULT_INTERACTIVE_MAX_TOKENS = 2_000;
+
+// Story 18.4: named indices into the `styles[]` tuple emitted by
+// DOMSnapshot.captureSnapshot. Order is locked by visual-constants.ts
+// COMPUTED_STYLES. Invariant 5 (no magic numbers) — do NOT inline these
+// indices inside fetchVisualData or the occlusion pass.
+const STYLE_IDX_DISPLAY = 0;
+const STYLE_IDX_VISIBILITY = 1;
+const STYLE_IDX_POINTER_EVENTS = 7;
 
 const INTERACTIVE_ROLES = new Set([
   "button",
@@ -275,6 +315,26 @@ export class A11yTreeProcessor {
   // Registry compares this against _lastSentVersion to decide whether to attach page context.
   private _cacheVersion = 0;
 
+  // Story 18.4 review H2: emit the paint-order-unavailable warning at most
+  // once per processor instance. Without this guard every read_page call
+  // would spam the log with the same line on Chrome builds that silently
+  // drop `paintOrders` from DOMSnapshot.
+  private _paintOrderWarningEmitted = false;
+
+  // Story 18.4 review M3: cache the most recent visual/occlusion result so
+  // rapid-fire read_page calls against the same AX-tree version don't
+  // re-run DOMSnapshot.captureSnapshot. Keyed by { cacheVersion, sessionId,
+  // filter } — filter is part of the key because the occlusion pass
+  // pre-filters its target set per filter mode (review M4). Invalidated
+  // whenever the A11y cache version increments (reset, navigate, refresh).
+  private _lastVisualCache: {
+    cacheVersion: number;
+    sessionId: string;
+    filter: string;
+    visualMap: Map<number, VisualInfo> | undefined;
+    visualDataFailed: boolean;
+  } | null = null;
+
   // FR-022 (P3 fix): Refs that were observed in the most recent
   // refreshPrecomputed() pass — i.e. the refs that still point at a node
   // present in the live AX tree right after the refresh. Used by the
@@ -299,6 +359,8 @@ export class A11yTreeProcessor {
     this.nextRef = 1;
     this.lastUrl = "";
     this._renderSessionId = "";
+    this._lastVisualCache = null; // Story 18.4 M3
+    this._paintOrderWarningEmitted = false; // Story 18.4 H2 — fresh session, re-arm warning
     this._cacheVersion++;
     this.invalidatePrecomputed();
   }
@@ -402,6 +464,10 @@ export class A11yTreeProcessor {
     // most-recent active-refs snapshot — without a fresh refresh there is
     // no authoritative "live tree" left to compare against.
     this._activeRefsAfterRefresh = new Set();
+    // Story 18.4 M3: the occlusion cache piggybacks on _cacheVersion, so
+    // bumping the version below is sufficient — but drop the reference
+    // eagerly so the old map can be GC'd.
+    this._lastVisualCache = null;
     this._cacheVersion++;
   }
 
@@ -642,9 +708,17 @@ export class A11yTreeProcessor {
     return refNum !== undefined ? `e${refNum}` : undefined;
   }
 
+  /**
+   * Story 18.4 review H1: `PaintOrderUnavailableError` signals the specific
+   * Chrome-bug mode where `DOMSnapshot.captureSnapshot` returns successfully
+   * but omits (or empties) `documents[0].layout.paintOrders`. `getTree`
+   * routes this into the same visualDataFailed fallback as a thrown CDP
+   * error, plus emits a one-time structured warning via `reason`.
+   */
   private async fetchVisualData(
     cdpClient: CdpClient,
     sessionId: string,
+    filter: string,
   ): Promise<Map<number, VisualInfo>> {
     const snapshot = await cdpClient.send<CaptureSnapshotResponse>(
       "DOMSnapshot.captureSnapshot",
@@ -666,6 +740,21 @@ export class A11yTreeProcessor {
     const doc = snapshot.documents[0];
     const strings = snapshot.strings;
 
+    // Story 18.4 review H1: explicit Chrome-bug guard. When captureSnapshot
+    // succeeds but `layout.paintOrders` is missing/empty, the occlusion
+    // pass would silently degrade to a no-op (every element gets paintOrder
+    // 0 and no candidate ever exceeds any other — read_page ships the full
+    // unfiltered tree while claiming to be filtered). Throwing a tagged
+    // error here routes the call into the same visualDataFailed fallback
+    // that the thrown-CDP-error path already uses, and `getTree`'s catch
+    // block reads the `reason` tag to emit the one-time H2 warning.
+    const paintOrders = doc?.layout?.paintOrders;
+    if (!Array.isArray(paintOrders) || paintOrders.length === 0) {
+      throw new PaintOrderUnavailableError(
+        "DOMSnapshot returned no paintOrders array — Chrome CDP regression",
+      );
+    }
+
     // Build layout index map: nodeIndex → layoutIndex
     const layoutMap = new Map<number, number>();
     for (let li = 0; li < doc.layout.nodeIndex.length; li++) {
@@ -680,6 +769,22 @@ export class A11yTreeProcessor {
     this._renderSessionId = sessionId;
 
     const totalNodes = doc.nodes.backendNodeId.length;
+
+    // Story 18.4: collect paint-order candidates in parallel with the
+    // visual enrichment walk so the occlusion pass can run over a single
+    // compact array instead of re-iterating doc.layout.
+    type OcclusionCandidate = {
+      backendNodeId: number;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      cx: number;
+      cy: number;
+      paintOrder: number;
+      pointerEventsAuto: boolean;
+    };
+    const candidates: OcclusionCandidate[] = [];
 
     for (let ni = 0; ni < totalNodes; ni++) {
       const backendNodeId = doc.nodes.backendNodeId[ni];
@@ -698,6 +803,8 @@ export class A11yTreeProcessor {
           bounds: { x: 0, y: 0, w: 0, h: 0 },
           isClickable: this.computeIsClickable(ni, backendNodeId, doc, strings),
           isVisible: false,
+          occluded: false,
+          paintOrder: 0,
         });
         continue;
       }
@@ -708,10 +815,12 @@ export class A11yTreeProcessor {
 
       const [x, y, w, h] = boundsArr;
 
-      // Read computed styles: display, visibility are at indices 0, 1
+      // Read computed styles: named indices from STYLE_IDX_* constants
+      // (Invariant 5 — no magic numbers). Order is locked by COMPUTED_STYLES.
       const styleProps = doc.layout.styles[li] ?? [];
-      const displayVal = this.getSnapshotString(strings, styleProps[0]);
-      const visibilityVal = this.getSnapshotString(strings, styleProps[1]);
+      const displayVal = this.getSnapshotString(strings, styleProps[STYLE_IDX_DISPLAY]);
+      const visibilityVal = this.getSnapshotString(strings, styleProps[STYLE_IDX_VISIBILITY]);
+      const pointerEventsVal = this.getSnapshotString(strings, styleProps[STYLE_IDX_POINTER_EVENTS]);
 
       // isVisible calculation
       const isVisible =
@@ -723,16 +832,126 @@ export class A11yTreeProcessor {
 
       const isClickable = this.computeIsClickable(ni, backendNodeId, doc, strings);
 
+      // Story 18.4: paintOrder is optional in the response type; default 0
+      // keeps parity with the pre-18.4 behaviour when DOMSnapshot does not
+      // emit paint orders (e.g. older Chrome builds, unit-test mocks).
+      const paintOrder = doc.layout.paintOrders?.[li] ?? 0;
+
+      // `pointer-events: none` is the only computed value that makes an
+      // element invisible to hit-testing. Everything else (auto, visible,
+      // visiblePainted, all, ...) blocks clicks. Missing value = default =
+      // auto, so we treat `undefined`/empty as "blocks clicks".
+      const pointerEventsAuto = pointerEventsVal !== "none";
+
+      const roundedX = Math.round(x);
+      const roundedY = Math.round(y);
+      const roundedW = Math.round(w);
+      const roundedH = Math.round(h);
+
       visualMap.set(backendNodeId, {
         bounds: {
-          x: Math.round(x),
-          y: Math.round(y),
-          w: Math.round(w),
-          h: Math.round(h),
+          x: roundedX,
+          y: roundedY,
+          w: roundedW,
+          h: roundedH,
         },
         isClickable,
         isVisible,
+        occluded: false,
+        paintOrder,
       });
+
+      // Story 18.4: only visible candidates participate in the occlusion
+      // check. Hidden elements (display: none, 0 size) are already
+      // filtered, adding them would waste cycles.
+      if (isVisible) {
+        candidates.push({
+          backendNodeId,
+          x: roundedX,
+          y: roundedY,
+          w: roundedW,
+          h: roundedH,
+          cx: roundedX + roundedW / 2,
+          cy: roundedY + roundedH / 2,
+          paintOrder,
+          pointerEventsAuto,
+        });
+      }
+    }
+
+    // Story 18.4: paint-order occlusion pass.
+    //
+    // Algorithm: for every visible candidate whose centre is not blocked
+    // by pointer-events: none, check if any OTHER candidate with a higher
+    // paintOrder AND pointer-events != none covers that centre point.
+    // This mirrors what `document.elementFromPoint(cx, cy)` returns at
+    // click dispatch time — the semantically same test Chrome runs for
+    // Input.dispatchMouseEvent.
+    //
+    // Review M4: the target loop iterates only over candidates that could
+    // survive the active filter. For `filter: "interactive"` that collapses
+    // a 500-node page down to ~20-30 likely-interactive nodes before the
+    // O(N^2) occlusion check, because a filtered-out element wouldn't make
+    // it into renderNode's output anyway. The OCCLUDER list is unchanged —
+    // every visible pointerEventsAuto candidate still counts, so modal
+    // overlays that don't themselves pass the filter (e.g. a div behind a
+    // close button) still hide the elements under them.
+    //
+    // Design decisions (Story 18.4 Dev Notes):
+    // - Centre-point probe, not full-box overlap — matches click dispatch
+    //   semantics and keeps partially-covered elements clickable.
+    // - Only clickable occluders count — `pointer-events: none` overlays
+    //   do NOT occlude, because Chrome's hit-test walks through them.
+    // - We do NOT mark as occluded a candidate that itself has
+    //   `pointer-events: none`; such an element cannot be clicked anyway,
+    //   and the A11y node above it (modal close button etc.) stays in the
+    //   tree because it is addressable through its own ref.
+    const occludersByPaintOrder = [...candidates]
+      .filter((c) => c.pointerEventsAuto)
+      .sort((a, b) => b.paintOrder - a.paintOrder); // highest paint order first
+
+    // Review M4: pre-filter targets to the set of candidates that could
+    // survive the active read_page filter. For "all" / "visual" we keep
+    // the full candidate set (filter-neutral). For "interactive" we keep
+    // candidates whose a11y role is interactive, or whose nodeInfo flags
+    // them as clickable (onclick / event listener). For "landmark" we
+    // keep landmark-role candidates. This is a LOWER BOUND on what the
+    // renderer will actually emit — some filtered-out elements may still
+    // participate, but the savings are already dramatic (500→30 targets
+    // is the typical shape for interactive on big SPA pages).
+    let targets: OcclusionCandidate[];
+    if (filter === "interactive") {
+      targets = candidates.filter((c) => {
+        const info = this.nodeInfoLookup(c.backendNodeId, sessionId);
+        if (!info) return false;
+        return INTERACTIVE_ROLES.has(info.role) || info.isClickable === true;
+      });
+    } else if (filter === "landmark") {
+      targets = candidates.filter((c) => {
+        const info = this.nodeInfoLookup(c.backendNodeId, sessionId);
+        return info ? LANDMARK_ROLES.has(info.role) : false;
+      });
+    } else {
+      // "all" and "visual" keep every candidate.
+      targets = candidates;
+    }
+
+    for (const target of targets) {
+      for (const occluder of occludersByPaintOrder) {
+        if (occluder.paintOrder <= target.paintOrder) break; // sorted descending — no more higher occluders
+        if (occluder.backendNodeId === target.backendNodeId) continue;
+        // Is target's centre inside occluder's bounds?
+        if (
+          target.cx >= occluder.x &&
+          target.cx <= occluder.x + occluder.w &&
+          target.cy >= occluder.y &&
+          target.cy <= occluder.y + occluder.h
+        ) {
+          const vi = visualMap.get(target.backendNodeId);
+          if (vi) vi.occluded = true;
+          break;
+        }
+      }
     }
 
     this._renderSessionId = previousRenderSession;
@@ -1245,17 +1464,75 @@ export class A11yTreeProcessor {
     // Runs in getTree() so read_page(filter: "interactive") sees clickable divs/listItems.
     await this._enrichNodeMetadata(cdpClient, sessionId);
 
-    // Fetch visual data only for "visual" filter — zero overhead for other filters
+    // Story 18.4: visual data is now fetched for ALL filter modes, not just
+    // "visual". We need the paint-order metadata to filter occluded elements
+    // out of the rendered output, regardless of filter. Rendering of
+    // visual annotations (bounds, click, vis) still only happens for
+    // filter === "visual" — see renderNode / renderNodeDownsampled.
+    //
+    // The visualDataFailed fallback remains unchanged: if
+    // DOMSnapshot.captureSnapshot throws (older Chrome, restricted pages),
+    // getTree gracefully degrades to an unfiltered tree.
+    //
+    // Review M3: results are cached per (cacheVersion, sessionId, filter)
+    // tuple. Rapid-fire read_page calls against the same AX-tree state
+    // hit the cache and skip the CDP round-trip entirely. Any change that
+    // bumps `_cacheVersion` (reset, navigate, refresh) drops the cache.
+    //
+    // Review H1+H2: the H1 guard inside fetchVisualData throws
+    // PaintOrderUnavailableError when captureSnapshot returns a payload
+    // without `paintOrders`. We route that into the same visualDataFailed
+    // fallback as a real CDP error, but differentiate the log reason so
+    // the one-time warning below tells operators whether Chrome rejected
+    // the call or regressed silently.
     let visualMap: Map<number, VisualInfo> | undefined;
     let visualDataFailed = false;
-    if (filter === "visual") {
+    const cached = this._lastVisualCache;
+    if (
+      !options.fresh
+      && cached
+      && cached.cacheVersion === this._cacheVersion
+      && cached.sessionId === sessionId
+      && cached.filter === filter
+    ) {
+      visualMap = cached.visualMap;
+      visualDataFailed = cached.visualDataFailed;
+      debug("A11yTreeProcessor: visual cache hit (v%d, %s)", this._cacheVersion, filter);
+    } else {
       try {
-        visualMap = await this.fetchVisualData(cdpClient, sessionId);
-      } catch {
-        // M1: DOMSnapshot may fail on certain pages — fall back to tree without visual data
+        visualMap = await this.fetchVisualData(cdpClient, sessionId, filter);
+      } catch (err) {
+        // M1: DOMSnapshot may fail on certain pages — fall back to tree without visual data.
+        // Review H2: emit a one-time structured warning so silent Chrome
+        // regressions don't hide in production logs. We keep the warning
+        // to `console.warn` instead of the project debug() channel
+        // because debug() is behind an opt-in env var.
         visualMap = undefined;
         visualDataFailed = true;
+        if (!this._paintOrderWarningEmitted) {
+          const reason = err instanceof PaintOrderUnavailableError
+            ? err.reason
+            : "capture-snapshot-failed";
+          console.warn(
+            `[silbercuechrome] Paint-order filtering unavailable (${reason}). ` +
+            `read_page will fall back to the unfiltered A11y tree for this session. ` +
+            `This indicates a Chrome CDP DOMSnapshot regression — please report ` +
+            `at https://github.com/silbercue/silbercuechrome/issues with Chrome version.`,
+          );
+          this._paintOrderWarningEmitted = true;
+        }
       }
+      // Store in cache regardless of success/failure so a subsequent
+      // read_page in the same tree state doesn't repeat the work (and
+      // doesn't re-emit the warning even if _paintOrderWarningEmitted
+      // were ever reset).
+      this._lastVisualCache = {
+        cacheVersion: this._cacheVersion,
+        sessionId,
+        filter,
+        visualMap,
+        visualDataFailed,
+      };
     }
 
     // Handle subtree query
@@ -1950,6 +2227,27 @@ export class A11yTreeProcessor {
     return result;
   }
 
+  /** Story 18.4: centralised visual annotation appender. Only emits the
+   *  `[x,y WxH] click vis` (or `[hidden]`) suffix when filter === "visual".
+   *  For other filters the visualMap is used solely for occlusion checks —
+   *  its bounds/click/visible flags must NOT leak into the rendered output. */
+  private appendVisualAnnotation(
+    line: string,
+    filter: string,
+    visualMap: Map<number, VisualInfo> | undefined,
+    backendNodeId: number,
+  ): string {
+    if (!visualMap || filter !== "visual") return line;
+    const vi = visualMap.get(backendNodeId);
+    if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
+      let annotated = `${line} [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
+      if (vi.isClickable) annotated += " click";
+      if (vi.isVisible) annotated += " vis";
+      return annotated;
+    }
+    return `${line} [hidden]`;
+  }
+
   private renderNodeDownsampled(
     node: AXNode,
     nodeMap: Map<string, AXNode>,
@@ -1979,6 +2277,17 @@ export class A11yTreeProcessor {
       return;
     }
 
+    // Story 18.4: paint-order occlusion filter — same semantics as
+    // renderNode. Skip the line but keep walking children so that
+    // higher-z-index descendants remain visible.
+    if (visualMap) {
+      const vi = visualMap.get(node.backendDOMNodeId);
+      if (vi?.occluded) {
+        this.renderChildrenDownsampled(node, nodeMap, indentLevel, filter, lines, level, visualMap);
+        return;
+      }
+    }
+
     // BUG-016: composite-key lookup via `_renderSessionId` set by getTree().
     const refNum = this.refLookup(node.backendDOMNodeId);
     if (refNum === undefined) {
@@ -1991,32 +2300,14 @@ export class A11yTreeProcessor {
     if (elementClass === "interactive") {
       // Interactive: ALWAYS fully preserved
       let line = this.formatLine(indent, refNum, role, node, nodeMap);
-      if (visualMap) {
-        const vi = visualMap.get(node.backendDOMNodeId);
-        if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-          line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-          if (vi.isClickable) line += " click";
-          if (vi.isVisible) line += " vis";
-        } else {
-          line += " [hidden]";
-        }
-      }
+      line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
       lines.push(line);
       this.renderChildrenDownsampled(node, nodeMap, indentLevel + 1, filter, lines, level, visualMap);
     } else if (elementClass === "content") {
       if (level < 4) {
         // Content at levels 0-3: unchanged
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
-        if (visualMap) {
-          const vi = visualMap.get(node.backendDOMNodeId);
-          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-            if (vi.isClickable) line += " click";
-            if (vi.isVisible) line += " vis";
-          } else {
-            line += " [hidden]";
-          }
-        }
+        line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
         lines.push(line);
         this.renderChildrenDownsampled(node, nodeMap, indentLevel + 1, filter, lines, level, visualMap);
       } else {
@@ -2042,16 +2333,7 @@ export class A11yTreeProcessor {
       if (level === 0) {
         // Level 0: no merging, render normally
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
-        if (visualMap) {
-          const vi = visualMap.get(node.backendDOMNodeId);
-          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-            if (vi.isClickable) line += " click";
-            if (vi.isVisible) line += " vis";
-          } else {
-            line += " [hidden]";
-          }
-        }
+        line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
         lines.push(line);
         this.renderChildrenDownsampled(node, nodeMap, indentLevel + 1, filter, lines, level, visualMap);
       } else if (level === 1) {
@@ -2065,16 +2347,7 @@ export class A11yTreeProcessor {
           return;
         }
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
-        if (visualMap) {
-          const vi = visualMap.get(node.backendDOMNodeId);
-          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-            if (vi.isClickable) line += " click";
-            if (vi.isVisible) line += " vis";
-          } else {
-            line += " [hidden]";
-          }
-        }
+        line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
         lines.push(line);
         this.renderChildrenDownsampled(node, nodeMap, indentLevel + 1, filter, lines, level, visualMap);
       } else if (level === 2) {
@@ -2094,16 +2367,7 @@ export class A11yTreeProcessor {
         }
         // Multiple children: keep container but render children
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
-        if (visualMap) {
-          const vi = visualMap.get(node.backendDOMNodeId);
-          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-            if (vi.isClickable) line += " click";
-            if (vi.isVisible) line += " vis";
-          } else {
-            line += " [hidden]";
-          }
-        }
+        line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
         lines.push(line);
         this.renderChildrenDownsampled(node, nodeMap, indentLevel + 1, filter, lines, level, visualMap);
       } else {
@@ -2408,31 +2672,36 @@ export class A11yTreeProcessor {
       }
     }
 
-    if (passesFilter && node.backendDOMNodeId !== undefined) {
+    // Story 18.4: paint-order occlusion filter. If this node is covered by
+    // a higher-paintOrder clickable element, skip the line — but still
+    // render children, because a child may itself have a higher paintOrder
+    // (position: absolute + z-index: 999 on a button inside a covered
+    // container is still clickable). See Dev Notes section "Warum Children
+    // nicht automatisch ueberspringen".
+    let isOccluded = false;
+    if (visualMap && node.backendDOMNodeId !== undefined) {
+      const vi = visualMap.get(node.backendDOMNodeId);
+      if (vi?.occluded) isOccluded = true;
+    }
+
+    if (!isOccluded && passesFilter && node.backendDOMNodeId !== undefined) {
       // BUG-016: composite-key lookup via `_renderSessionId`.
       const refNum = this.refLookup(node.backendDOMNodeId);
       if (refNum !== undefined) {
         const indent = "  ".repeat(indentLevel);
         let line = this.formatLine(indent, refNum, role, node, nodeMap);
-
-        // Append visual info if visualMap is provided
-        if (visualMap) {
-          const vi = visualMap.get(node.backendDOMNodeId);
-          if (vi && vi.bounds.w > 0 && vi.bounds.h > 0) {
-            line += ` [${vi.bounds.x},${vi.bounds.y} ${vi.bounds.w}x${vi.bounds.h}]`;
-            if (vi.isClickable) line += " click";
-            if (vi.isVisible) line += " vis";
-          } else {
-            line += " [hidden]";
-          }
-        }
-
+        // Story 18.4: appendVisualAnnotation is a no-op unless filter ===
+        // "visual". Other filters use visualMap solely for occlusion info.
+        line = this.appendVisualAnnotation(line, filter, visualMap, node.backendDOMNodeId);
         lines.push(line);
       }
     }
 
-    // Always render children (even if this node didn't pass filter)
-    const nextIndent = passesFilter ? indentLevel + 1 : indentLevel;
+    // Always render children (even if this node didn't pass filter OR was
+    // occluded). Story 18.4: when an occluded node is skipped we do NOT
+    // advance the indent level — it mirrors the existing `node.ignored`
+    // path above, so children inherit the position of the skipped parent.
+    const nextIndent = (!isOccluded && passesFilter) ? indentLevel + 1 : indentLevel;
     this.renderChildren(node, nodeMap, nextIndent, filter, lines, visualMap);
   }
 

@@ -443,7 +443,14 @@ describe("screenshotHandler — SoM Pipeline", () => {
     await a11yTree.getTree(mockCdp, "s1", {});
   }
 
-  // Test S4: som: true calls DOMSnapshot.captureSnapshot
+  // Test S4: som: true calls DOMSnapshot.captureSnapshot.
+  // Story 18.4 history: screenshot briefly triggered TWO captureSnapshot
+  // calls — one from a11yTree.getTree() (paint-order occlusion filter)
+  // and one from the SoM pipeline (label collection).
+  // Story 18.4 review M3: the new visual cache coalesces the getTree
+  // snapshot call with the previous read_page result, so only the SoM
+  // pipeline's own captureSnapshot hits `cdp` now. This is the coalescing
+  // optimisation the previous comment flagged as "follow-up".
   it("should call DOMSnapshot.captureSnapshot when som is true", async () => {
     await seedA11yRefs([100, 200]);
     const snapshot = buildMockSnapshot([

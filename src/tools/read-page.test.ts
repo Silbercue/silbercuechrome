@@ -10,7 +10,14 @@ function makeDomSnapshot(elements: Array<{
   bounds?: [number, number, number, number];
   display?: string;
   visibility?: string;
-}>) {
+  // Story 18.4 review M2: optional paint-order + pointer-events so
+  // read-page-level tests can exercise the occlusion filter end-to-end.
+  pointerEvents?: string;
+  paintOrder?: number;
+  // Story 18.4 review M2: opt-in switch to omit the `paintOrders` array
+  // entirely. Mirrors the Chrome-CDP regression mode.
+  omitPaintOrders?: boolean;
+}>, options: { omitAllPaintOrders?: boolean } = {}) {
   const strings: string[] = [];
   const strIndex = (s: string) => {
     let idx = strings.indexOf(s);
@@ -23,6 +30,8 @@ function makeDomSnapshot(elements: Array<{
   const layoutNodeIndex: number[] = [];
   const layoutBounds: number[][] = [];
   const layoutStyleProps: number[][] = [];
+  const layoutPaintOrders: number[] = [];
+  const anyExplicitOmit = options.omitAllPaintOrders || elements.some((e) => e.omitPaintOrders);
 
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
@@ -40,18 +49,30 @@ function makeDomSnapshot(elements: Array<{
         strIndex("16px"),
         strIndex("static"),
         strIndex("auto"),
+        strIndex(el.pointerEvents ?? "auto"),
       ]);
+      layoutPaintOrders.push(el.paintOrder ?? i + 1);
     }
+  }
+
+  const layout: {
+    nodeIndex: number[];
+    bounds: number[][];
+    styles: number[][];
+    paintOrders?: number[];
+  } = {
+    nodeIndex: layoutNodeIndex,
+    bounds: layoutBounds,
+    styles: layoutStyleProps,
+  };
+  if (!anyExplicitOmit) {
+    layout.paintOrders = layoutPaintOrders;
   }
 
   return {
     documents: [{
       nodes: { backendNodeId: backendNodeIds, nodeName: nodeNames },
-      layout: {
-        nodeIndex: layoutNodeIndex,
-        bounds: layoutBounds,
-        styles: layoutStyleProps,
-      },
+      layout,
     }],
     strings,
   };
@@ -298,8 +319,11 @@ describe("readPageHandler", () => {
     );
   });
 
-  // Test: filter interactive does NOT call DOMSnapshot.captureSnapshot
-  it("should NOT call DOMSnapshot.captureSnapshot for filter interactive", async () => {
+  // Story 18.4: filter interactive NOW calls DOMSnapshot.captureSnapshot
+  // so the paint-order occlusion filter can run. Bounds/click/vis
+  // annotations are still suppressed for non-visual filters — see
+  // appendVisualAnnotation in a11y-tree.ts.
+  it("should call DOMSnapshot.captureSnapshot for filter interactive (Story 18.4 paint-order filter)", async () => {
     const cdp = mockCdpClient(sampleNodes);
     await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
 
@@ -307,7 +331,65 @@ describe("readPageHandler", () => {
     const snapshotCalls = calls.filter(
       (c: string[]) => c[0] === "DOMSnapshot.captureSnapshot",
     );
-    expect(snapshotCalls.length).toBe(0);
+    expect(snapshotCalls.length).toBe(1);
+  });
+
+  // Story 18.4 review M2: explicit occlusion assertion WITH paint-order
+  // data. Verifies end-to-end (read_page → a11yTree → fetchVisualData)
+  // that a higher-paintOrder clickable overlay drops the underlying
+  // elements from the interactive filter output.
+  //
+  // Layout: button 101 ("OK") sits at paintOrder 1, link 102 ("Home")
+  // sits at paintOrder 10 covering the same bounds. The link wins the
+  // hit test, so the button disappears from the filtered output.
+  it("M2: read_page filters occluded elements when paintOrders present", async () => {
+    a11yTree.reset();
+    const occludedSnapshot = makeDomSnapshot([
+      { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800], paintOrder: 0 },
+      { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32], paintOrder: 1 },
+      { backendNodeId: 102, nodeName: "A", bounds: [120, 340, 80, 32], paintOrder: 10 },
+    ]);
+    const cdp = mockCdpClient(sampleNodes, "https://example.com/m2-occluded", occludedSnapshot);
+    const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+    // The covered button must be absent; the top link stays.
+    // refCount counts rendered lines (not ignored/non-interactive roots),
+    // so the interactive filter yields 1 line: the surviving link.
+    expect(result.content[0].text).not.toContain('"OK"');
+    expect(result.content[0].text).toContain('"Home"');
+    expect(result._meta!.refCount).toBe(1);
+  });
+
+  // Story 18.4 review M2: same mock setup but WITHOUT paintOrders in
+  // the snapshot. This is the silent-degradation case the reviewer
+  // flagged: without H1+M2 coverage the test would be "green without
+  // wirkung". Here we assert explicitly that the fallback path kicks in
+  // (both elements stay in the tree) AND that the warning fires.
+  it("M2: read_page falls back to unfiltered tree when paintOrders missing", async () => {
+    a11yTree.reset();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const snapshotNoPaintOrders = makeDomSnapshot(
+        [
+          { backendNodeId: 100, nodeName: "HTML", bounds: [0, 0, 1280, 800] },
+          { backendNodeId: 101, nodeName: "BUTTON", bounds: [120, 340, 80, 32] },
+          { backendNodeId: 102, nodeName: "A", bounds: [120, 340, 80, 32] },
+        ],
+        { omitAllPaintOrders: true },
+      );
+      const cdp = mockCdpClient(sampleNodes, "https://example.com/m2-missing", snapshotNoPaintOrders);
+      const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
+
+      // Both interactive elements present — the filter degraded to unfiltered.
+      expect(result.content[0].text).toContain('"OK"');
+      expect(result.content[0].text).toContain('"Home"');
+      expect(result._meta!.refCount).toBe(2);
+      // Warning emitted once with the correct reason tag.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain("missing-paint-orders");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // Test: visual output contains bounds format [x,y wxh] click vis

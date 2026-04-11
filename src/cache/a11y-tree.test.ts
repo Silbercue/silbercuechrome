@@ -1690,6 +1690,10 @@ describe("A11yTreeProcessor", () => {
     bounds?: [number, number, number, number];
     display?: string;
     visibility?: string;
+    // Story 18.4: optional pointer-events + paintOrder for occlusion tests.
+    // Defaults preserve the pre-18.4 behaviour so existing tests stay green.
+    pointerEvents?: string;
+    paintOrder?: number;
   }>) {
     const strings: string[] = [];
     const strIndex = (s: string) => {
@@ -1703,6 +1707,7 @@ describe("A11yTreeProcessor", () => {
     const layoutNodeIndex: number[] = [];
     const layoutBounds: number[][] = [];
     const layoutStyleProps: number[][] = [];
+    const layoutPaintOrders: number[] = [];
 
     for (let i = 0; i < elements.length; i++) {
       const el = elements[i];
@@ -1712,6 +1717,9 @@ describe("A11yTreeProcessor", () => {
       if (el.bounds) {
         layoutNodeIndex.push(i);
         layoutBounds.push(el.bounds);
+        // Order MUST match COMPUTED_STYLES tuple in visual-constants.ts:
+        // display, visibility, color, bg-color, font-size, position,
+        // z-index, pointer-events (Story 18.4).
         layoutStyleProps.push([
           strIndex(el.display ?? "block"),
           strIndex(el.visibility ?? "visible"),
@@ -1720,7 +1728,13 @@ describe("A11yTreeProcessor", () => {
           strIndex("16px"),
           strIndex("static"),
           strIndex("auto"),
+          strIndex(el.pointerEvents ?? "auto"),
         ]);
+        // Story 18.4: default paintOrder to DOM order (i + 1) so tests that
+        // don't care about stacking get deterministic, monotonically
+        // increasing values — the last element drawn wins, which matches
+        // Chrome's default for non-positioned flow layout.
+        layoutPaintOrders.push(el.paintOrder ?? i + 1);
       }
     }
 
@@ -1731,6 +1745,7 @@ describe("A11yTreeProcessor", () => {
           nodeIndex: layoutNodeIndex,
           bounds: layoutBounds,
           styles: layoutStyleProps,
+          paintOrders: layoutPaintOrders,
         },
       }],
       strings,
@@ -1967,6 +1982,415 @@ describe("A11yTreeProcessor", () => {
     expect(result.text).toContain("button");
     expect(result.text).not.toContain("[hidden]");
     expect(result.text).not.toContain("click");
+  });
+
+  // --- Paint-order filtering (Story 18.4) ---
+  //
+  // Verifies that elements covered by a higher-paintOrder clickable overlay
+  // are dropped from read_page output, even in the default "interactive"
+  // filter. The three primary tests cover the AC-4 matrix:
+  //   1. Overlay-over-cluster → underlying links disappear
+  //   2. Same overlay with pointer-events: none → links stay
+  //   3. Pure z-index stacking (same bounds, different paintOrder)
+  // Plus a fallback regression: DOMSnapshot failure must NOT drop elements.
+  describe("Paint-order filtering (Story 18.4)", () => {
+    /** Helper: build an AX tree with a WebArea root plus a flat list of
+     *  link/button leaves. Keeps test bodies focused on paint-order
+     *  assertions rather than AX wiring. */
+    function buildFlatTree(
+      leaves: Array<{ nodeId: string; backendNodeId: number; role: string; name: string }>,
+    ): AXNode[] {
+      const rootChildIds = leaves.map((l) => l.nodeId);
+      const root = makeNode({
+        nodeId: "root",
+        role: { type: "role", value: "WebArea" },
+        backendDOMNodeId: 1,
+        childIds: rootChildIds,
+      });
+      const children = leaves.map((l) =>
+        makeNode({
+          nodeId: l.nodeId,
+          parentId: "root",
+          role: { type: "role", value: l.role },
+          name: { type: "computedString", value: l.name },
+          backendDOMNodeId: l.backendNodeId,
+        }),
+      );
+      return [root, ...children];
+    }
+
+    it("should filter occluded links when overlay covers a link cluster", async () => {
+      // 5 links in a column + 1 modal div that covers them all.
+      // Link paintOrders are 1..5, modal paintOrder is 10 → modal wins
+      // the centre-point hit test for every link.
+      const nodes = buildFlatTree([
+        { nodeId: "n2", backendNodeId: 102, role: "link", name: "Link 1" },
+        { nodeId: "n3", backendNodeId: 103, role: "link", name: "Link 2" },
+        { nodeId: "n4", backendNodeId: 104, role: "link", name: "Link 3" },
+        { nodeId: "n5", backendNodeId: 105, role: "link", name: "Link 4" },
+        { nodeId: "n6", backendNodeId: 106, role: "link", name: "Link 5" },
+        { nodeId: "n7", backendNodeId: 107, role: "button", name: "Close Modal" },
+      ]);
+
+      const snapshot = makeDomSnapshot([
+        { backendNodeId: 1, nodeName: "HTML", bounds: [0, 0, 1280, 800], paintOrder: 0 },
+        // Five links stacked vertically, all inside the modal's bounds.
+        { backendNodeId: 102, nodeName: "A", bounds: [100, 200, 80, 30], paintOrder: 1 },
+        { backendNodeId: 103, nodeName: "A", bounds: [200, 200, 80, 30], paintOrder: 2 },
+        { backendNodeId: 104, nodeName: "A", bounds: [300, 200, 80, 30], paintOrder: 3 },
+        { backendNodeId: 105, nodeName: "A", bounds: [400, 200, 80, 30], paintOrder: 4 },
+        { backendNodeId: 106, nodeName: "A", bounds: [500, 200, 80, 30], paintOrder: 5 },
+        // Modal div covering the entire link strip. pointer-events: auto
+        // (default) → occludes the underlying links.
+        { backendNodeId: 107, nodeName: "BUTTON", bounds: [80, 180, 600, 70], paintOrder: 10, pointerEvents: "auto" },
+      ]);
+
+      const cdp = mockCdpClientVisual(nodes, snapshot, "https://example.com/occluded");
+      const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      // None of the occluded links should appear in the output.
+      expect(result.text).not.toContain("Link 1");
+      expect(result.text).not.toContain("Link 2");
+      expect(result.text).not.toContain("Link 3");
+      expect(result.text).not.toContain("Link 4");
+      expect(result.text).not.toContain("Link 5");
+      // The modal's close button must stay — it is the top-most clickable.
+      expect(result.text).toContain("Close Modal");
+      expect(result.refCount).toBe(1);
+    });
+
+    it("should keep underlying elements when overlay has pointer-events: none", async () => {
+      // Identical setup to the first test, but the modal has
+      // pointer-events: none. Chrome's hit test walks THROUGH it, so the
+      // underlying links remain clickable and must remain in the output.
+      const nodes = buildFlatTree([
+        { nodeId: "n2", backendNodeId: 102, role: "link", name: "Link 1" },
+        { nodeId: "n3", backendNodeId: 103, role: "link", name: "Link 2" },
+        { nodeId: "n4", backendNodeId: 104, role: "link", name: "Link 3" },
+        { nodeId: "n5", backendNodeId: 105, role: "link", name: "Link 4" },
+        { nodeId: "n6", backendNodeId: 106, role: "link", name: "Link 5" },
+        { nodeId: "n7", backendNodeId: 107, role: "button", name: "Close Modal" },
+      ]);
+
+      const snapshot = makeDomSnapshot([
+        { backendNodeId: 1, nodeName: "HTML", bounds: [0, 0, 1280, 800], paintOrder: 0 },
+        { backendNodeId: 102, nodeName: "A", bounds: [100, 200, 80, 30], paintOrder: 1 },
+        { backendNodeId: 103, nodeName: "A", bounds: [200, 200, 80, 30], paintOrder: 2 },
+        { backendNodeId: 104, nodeName: "A", bounds: [300, 200, 80, 30], paintOrder: 3 },
+        { backendNodeId: 105, nodeName: "A", bounds: [400, 200, 80, 30], paintOrder: 4 },
+        { backendNodeId: 106, nodeName: "A", bounds: [500, 200, 80, 30], paintOrder: 5 },
+        // Modal with pointer-events: none → NOT an occluder.
+        { backendNodeId: 107, nodeName: "BUTTON", bounds: [80, 180, 600, 70], paintOrder: 10, pointerEvents: "none" },
+      ]);
+
+      const cdp = mockCdpClientVisual(nodes, snapshot, "https://example.com/pe-none");
+      const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      // All five links must still appear.
+      expect(result.text).toContain("Link 1");
+      expect(result.text).toContain("Link 2");
+      expect(result.text).toContain("Link 3");
+      expect(result.text).toContain("Link 4");
+      expect(result.text).toContain("Link 5");
+      // The modal's button is present too (it is in the A11y tree —
+      // pointer-events: none doesn't hide it from accessibility, only
+      // from hit testing).
+      expect(result.text).toContain("Close Modal");
+      expect(result.refCount).toBe(6);
+    });
+
+    it("should respect z-index stacking in paintOrder data", async () => {
+      // Two overlapping buttons with IDENTICAL bounds but different
+      // paintOrders. The higher-paintOrder button wins the hit test →
+      // "Visible" stays, "Hidden" is dropped.
+      const nodes = buildFlatTree([
+        { nodeId: "n2", backendNodeId: 102, role: "button", name: "Hidden" },
+        { nodeId: "n3", backendNodeId: 103, role: "button", name: "Visible" },
+      ]);
+
+      const snapshot = makeDomSnapshot([
+        { backendNodeId: 1, nodeName: "HTML", bounds: [0, 0, 1280, 800], paintOrder: 0 },
+        { backendNodeId: 102, nodeName: "BUTTON", bounds: [100, 100, 200, 40], paintOrder: 1 },
+        { backendNodeId: 103, nodeName: "BUTTON", bounds: [100, 100, 200, 40], paintOrder: 10 },
+      ]);
+
+      const cdp = mockCdpClientVisual(nodes, snapshot, "https://example.com/zindex");
+      const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      expect(result.text).toContain("Visible");
+      expect(result.text).not.toContain("Hidden");
+      expect(result.refCount).toBe(1);
+    });
+
+    // Task 9 — fallback: if captureSnapshot rejects, getTree must return
+    // the UNFILTERED tree so the LLM still sees every element. Parity with
+    // the existing M1 visual-filter path, but for the default interactive
+    // filter that Story 18.4 now also routes through fetchVisualData.
+    it("Paint-order filter: DOMSnapshot failure falls back to unfiltered interactive tree", async () => {
+      const nodes = buildFlatTree([
+        { nodeId: "n2", backendNodeId: 102, role: "link", name: "Link 1" },
+        { nodeId: "n3", backendNodeId: 103, role: "link", name: "Link 2" },
+        { nodeId: "n4", backendNodeId: 104, role: "link", name: "Link 3" },
+        { nodeId: "n5", backendNodeId: 105, role: "link", name: "Link 4" },
+        { nodeId: "n6", backendNodeId: 106, role: "link", name: "Link 5" },
+      ]);
+
+      const cdp = {
+        send: vi.fn().mockImplementation((method: string) => {
+          if (method === "Runtime.evaluate") {
+            return Promise.resolve({ result: { value: "https://example.com/snapshot-fail" } });
+          }
+          if (method === "Accessibility.getFullAXTree") {
+            return Promise.resolve({ nodes });
+          }
+          if (method === "DOMSnapshot.captureSnapshot") {
+            return Promise.reject(new Error("DOMSnapshot not supported"));
+          }
+          return Promise.resolve({});
+        }),
+        on: vi.fn(),
+        once: vi.fn(),
+        off: vi.fn(),
+      } as unknown as CdpClient;
+
+      const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      // All five links must appear — the filter falls back to the
+      // unfiltered tree.
+      expect(result.text).toContain("Link 1");
+      expect(result.text).toContain("Link 5");
+      expect(result.refCount).toBe(5);
+      // Interactive filter never sets hasVisualData — only visual does.
+      expect(result.hasVisualData).toBeUndefined();
+    });
+
+    // Review H1 + M1: captureSnapshot SUCCEEDS but `paintOrders` is
+    // undefined. This is the Chrome CDP regression mode — on affected
+    // builds DOMSnapshot silently drops the field instead of throwing.
+    // Before the H1 fix, getTree would silently default every paintOrder
+    // to 0 and render the full unfiltered tree while claiming to be
+    // filtered. After the fix, fetchVisualData throws
+    // PaintOrderUnavailableError and getTree takes the unfiltered
+    // fallback AND emits a one-time console.warn.
+    it("Review H1: captureSnapshot success without paintOrders falls back unfiltered", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const nodes = buildFlatTree([
+          { nodeId: "n2", backendNodeId: 202, role: "link", name: "Link A" },
+          { nodeId: "n3", backendNodeId: 203, role: "link", name: "Link B" },
+          { nodeId: "n4", backendNodeId: 204, role: "link", name: "Link C" },
+        ]);
+
+        // Mock captureSnapshot returning a valid document shape but WITHOUT
+        // `paintOrders`. This mimics the exact failure mode from the
+        // reviewer's H1 note.
+        const snapshotMissingPaintOrders = {
+          documents: [{
+            nodes: { backendNodeId: [1, 202, 203, 204], nodeName: [0, 1, 1, 1] },
+            layout: {
+              nodeIndex: [0, 1, 2, 3],
+              bounds: [
+                [0, 0, 1280, 800],
+                [100, 200, 80, 30],
+                [200, 200, 80, 30],
+                [300, 200, 80, 30],
+              ],
+              styles: [
+                [2, 3, 4, 5, 6, 7, 8, 9], // default visible block
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+              ],
+              // paintOrders intentionally omitted
+            },
+          }],
+          strings: ["HTML", "A", "block", "visible", "rgb(0,0,0)", "rgb(255,255,255)", "16px", "static", "auto", "auto"],
+        };
+
+        const cdp = {
+          send: vi.fn().mockImplementation((method: string) => {
+            if (method === "Runtime.evaluate") {
+              return Promise.resolve({ result: { value: "https://example.com/missing-paint-orders" } });
+            }
+            if (method === "Accessibility.getFullAXTree") {
+              return Promise.resolve({ nodes });
+            }
+            if (method === "DOMSnapshot.captureSnapshot") {
+              return Promise.resolve(snapshotMissingPaintOrders);
+            }
+            return Promise.resolve({});
+          }),
+          on: vi.fn(),
+          once: vi.fn(),
+          off: vi.fn(),
+        } as unknown as CdpClient;
+
+        const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+        // All three links must appear unfiltered — the missing-paintOrders
+        // case falls back to the same path as a thrown CDP error.
+        expect(result.text).toContain("Link A");
+        expect(result.text).toContain("Link B");
+        expect(result.text).toContain("Link C");
+        expect(result.refCount).toBe(3);
+        expect(result.hasVisualData).toBeUndefined();
+
+        // Review H2: warning emitted exactly once, with the
+        // missing-paint-orders reason tag.
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain("missing-paint-orders");
+        expect(warnSpy.mock.calls[0][0]).toContain("Paint-order filtering unavailable");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    // Review M1: paintOrders present but empty array — treated the same
+    // as missing.
+    it("Review M1: captureSnapshot with empty paintOrders array falls back unfiltered", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const nodes = buildFlatTree([
+          { nodeId: "n2", backendNodeId: 302, role: "button", name: "Btn X" },
+          { nodeId: "n3", backendNodeId: 303, role: "button", name: "Btn Y" },
+        ]);
+
+        const snapshotEmptyPaintOrders = {
+          documents: [{
+            nodes: { backendNodeId: [1, 302, 303], nodeName: [0, 1, 1] },
+            layout: {
+              nodeIndex: [0, 1, 2],
+              bounds: [
+                [0, 0, 1280, 800],
+                [100, 100, 80, 30],
+                [200, 100, 80, 30],
+              ],
+              styles: [
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+              ],
+              paintOrders: [], // empty — signals the same Chrome-bug mode
+            },
+          }],
+          strings: ["HTML", "BUTTON", "block", "visible", "rgb(0,0,0)", "rgb(255,255,255)", "16px", "static", "auto", "auto"],
+        };
+
+        const cdp = {
+          send: vi.fn().mockImplementation((method: string) => {
+            if (method === "Runtime.evaluate") {
+              return Promise.resolve({ result: { value: "https://example.com/empty-paint-orders" } });
+            }
+            if (method === "Accessibility.getFullAXTree") {
+              return Promise.resolve({ nodes });
+            }
+            if (method === "DOMSnapshot.captureSnapshot") {
+              return Promise.resolve(snapshotEmptyPaintOrders);
+            }
+            return Promise.resolve({});
+          }),
+          on: vi.fn(),
+          once: vi.fn(),
+          off: vi.fn(),
+        } as unknown as CdpClient;
+
+        const result = await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+        // Both buttons survive the fallback.
+        expect(result.text).toContain("Btn X");
+        expect(result.text).toContain("Btn Y");
+        expect(result.refCount).toBe(2);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain("missing-paint-orders");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    // Review H2 + M1 (optional third case): two consecutive read_page
+    // calls with the missing-paintOrders mock must emit the warning
+    // exactly once, not twice.
+    it("Review H2: paint-order warning is emitted at most once per session", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const nodes = buildFlatTree([
+          { nodeId: "n2", backendNodeId: 402, role: "link", name: "Only Link" },
+        ]);
+
+        const snapshotMissingPaintOrders = {
+          documents: [{
+            nodes: { backendNodeId: [1, 402], nodeName: [0, 1] },
+            layout: {
+              nodeIndex: [0, 1],
+              bounds: [
+                [0, 0, 1280, 800],
+                [100, 100, 80, 30],
+              ],
+              styles: [
+                [2, 3, 4, 5, 6, 7, 8, 9],
+                [2, 3, 4, 5, 6, 7, 8, 9],
+              ],
+              // paintOrders missing
+            },
+          }],
+          strings: ["HTML", "A", "block", "visible", "rgb(0,0,0)", "rgb(255,255,255)", "16px", "static", "auto", "auto"],
+        };
+
+        const cdp = {
+          send: vi.fn().mockImplementation((method: string) => {
+            if (method === "Runtime.evaluate") {
+              return Promise.resolve({ result: { value: "https://example.com/repeat-warn" } });
+            }
+            if (method === "Accessibility.getFullAXTree") {
+              return Promise.resolve({ nodes });
+            }
+            if (method === "DOMSnapshot.captureSnapshot") {
+              return Promise.resolve(snapshotMissingPaintOrders);
+            }
+            return Promise.resolve({});
+          }),
+          on: vi.fn(),
+          once: vi.fn(),
+          off: vi.fn(),
+        } as unknown as CdpClient;
+
+        // Two consecutive read_page calls — the second hits the M3 cache
+        // so captureSnapshot isn't even re-run. Either way: warning
+        // count must stay at 1.
+        await processor.getTree(cdp, "s1", { filter: "interactive" });
+        await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    // Review M3: visual/occlusion data is cached across read_page calls
+    // that don't invalidate the A11y cache. Verifies the M3 fix directly:
+    // captureSnapshot is called once, even though read_page runs twice.
+    it("Review M3: visual data is cached between consecutive read_page calls", async () => {
+      const nodes = buildFlatTree([
+        { nodeId: "n2", backendNodeId: 502, role: "link", name: "Cached Link 1" },
+        { nodeId: "n3", backendNodeId: 503, role: "link", name: "Cached Link 2" },
+      ]);
+
+      const snapshot = makeDomSnapshot([
+        { backendNodeId: 1, nodeName: "HTML", bounds: [0, 0, 1280, 800], paintOrder: 0 },
+        { backendNodeId: 502, nodeName: "A", bounds: [100, 100, 80, 30], paintOrder: 1 },
+        { backendNodeId: 503, nodeName: "A", bounds: [200, 100, 80, 30], paintOrder: 2 },
+      ]);
+
+      const cdp = mockCdpClientVisual(nodes, snapshot, "https://example.com/m3-cache");
+
+      await processor.getTree(cdp, "s1", { filter: "interactive" });
+      await processor.getTree(cdp, "s1", { filter: "interactive" });
+
+      // Only ONE captureSnapshot call despite two read_page invocations.
+      const calls = (cdp.send as ReturnType<typeof vi.fn>).mock.calls;
+      const snapshotCalls = calls.filter((c: unknown[]) => c[0] === "DOMSnapshot.captureSnapshot");
+      expect(snapshotCalls.length).toBe(1);
+    });
   });
 
   // --- Downsampling tests (Story 5b.5) ---

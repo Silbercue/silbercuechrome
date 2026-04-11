@@ -977,3 +977,110 @@ Trennung.
 Test-Anpassungen + Mess-Skript + Doku.
 
 **Source:** Story 18.3 (`_bmad-output/implementation-artifacts/18-3-tool-verschlankung-auf-ein-transition-set.md`).
+
+## FR-036: Geister-Refs hinter Modal-Overlays — gefixt (Story 18.4)
+
+**Problem:** `read_page` listete interaktive Elemente auf, die visuell von
+einem Modal-Overlay verdeckt waren. Der LLM sah im A11y-Tree einen Button,
+rief `click(ref: "e42")` auf, und bekam entweder ein "click intercepted"
+zurueck oder klickte auf das Overlay statt den gewuenschten Button.
+Klassischer Geisterklick.
+
+**Symptom:**
+- Auf Seiten mit offenem Dialog/Modal erscheinen Refs fuer darunterliegende
+  Buttons/Links im `read_page`-Output.
+- LLM-Klick trifft entweder das Overlay oder wird von Chrome als
+  "intercepted" abgelehnt.
+- Token-Budget wird verschwendet mit Elementen, die gar nicht erreichbar
+  sind.
+- Semantischer A11y-Tree (ignored-Flag) hilft nicht, weil `ignored: true`
+  nur fuer semantische Gruende gesetzt wird (aria-hidden, display:none,
+  role=none), nicht fuer visuelle Verdeckung durch z-index/Overlays.
+
+**Fix — Paint-Order-Filter (dreistufig):**
+
+1. **`COMPUTED_STYLES` um `pointer-events` erweitert** (`src/tools/visual-constants.ts`) —
+   der captureSnapshot-Call liefert jetzt den computed `pointer-events`-Wert
+   pro Element, damit der Filter weiss, wer Klicks blockiert und wer
+   durchlaesst. Append-only; bestehende Index-Zugriffe (display=0,
+   visibility=1, z-index=6) bleiben unveraendert.
+2. **`VisualInfo` um `occluded`- und `paintOrder`-Felder erweitert**
+   (`src/cache/a11y-tree.ts`). `occluded` wird im zweiten Pass von
+   `fetchVisualData` gesetzt, wenn ein anderer klickbarer Occluder mit
+   hoeherem paintOrder das Element-Zentrum ueberdeckt.
+3. **`fetchVisualData` wird jetzt fuer ALLE Filter-Modi aufgerufen** — nicht
+   mehr nur `filter: "visual"`. Die Occlusion-Info wird fuer jeden
+   `read_page`-Aufruf berechnet. Bounds/click/vis-Annotationen bleiben
+   weiterhin auf `filter: "visual"` beschraenkt (zentral im neuen Helper
+   `appendVisualAnnotation`).
+4. **`renderNode` und `renderNodeDownsampled`** ueberspringen occluded Nodes,
+   rendern aber ihre Kinder weiter — damit `position: absolute;
+   z-index: 999`-Kinder, die aus einem verdeckten Parent
+   "herausbrechen", sichtbar bleiben.
+
+**Algorithmus (`fetchVisualData` zweiter Pass):**
+
+```
+sort occluders by paintOrder DESC (only pointer-events != "none")
+for every visible candidate:
+  for every occluder with higher paintOrder:
+    if candidate.centre (cx, cy) lies inside occluder.bounds:
+      mark candidate as occluded
+      break
+```
+
+- **Zentrum-Probe, nicht volle Box** — matcht die Semantik von
+  `document.elementFromPoint(cx, cy)`, die Chrome beim `click`-Dispatch
+  ueber `Input.dispatchMouseEvent` nutzt. Partielle Ueberdeckung (z.B. nur
+  der linke Rand eines Buttons) macht den Button nicht unerreichbar.
+- **Nur klickbare Occluder zaehlen** — Overlays mit `pointer-events: none`
+  lassen Klicks durch, sind also keine Occluder. Deshalb die
+  `pointer-events`-Erweiterung in `COMPUTED_STYLES`.
+- **Ein CDP-Call extra pro `read_page`** — der bestehende
+  `DOMSnapshot.captureSnapshot`-Call wird wiederverwendet, mit `includePaintOrder: true`
+  (was `fetchVisualData` ohnehin schon setzte). Kein zusaetzliches
+  Runtime.evaluate, kein LayerTree, kein DOM.getContentQuads.
+
+**Test:**
+- Vier neue Tests in `src/cache/a11y-tree.test.ts` unter
+  `describe("Paint-order filtering (Story 18.4)")`:
+  1. Overlay-vor-Link-Cluster → 5 Links gefiltert
+  2. Overlay mit `pointer-events: none` → 5 Links bleiben
+  3. Zwei Buttons selbe Bounds, hoehere paintOrder gewinnt
+  4. DOMSnapshot-Fail → Fallback auf ungefilterte Tree (wie M1)
+- `makeDomSnapshot`-Helper um `pointerEvents` und `paintOrder`-Felder
+  erweitert; Defaults (`"auto"`, DOM-Reihenfolge `i + 1`) halten alle
+  132 bestehenden a11y-tree-Tests gruen.
+- Gesamt: 1454/1454 Unit-Tests gruen (vorher 1450, +4 neu).
+- Smoke-Test-Fails (3) sind pre-existing aus Story 18.3 (Tool-Verschlankung)
+  — kein Paint-Order-Regress.
+
+**Fallback-Robustheit:**
+- Wenn `DOMSnapshot.captureSnapshot` fehlschlaegt (aeltere Chrome-Builds,
+  restricted pages), setzt `getTree()` `visualDataFailed = true` und
+  faellt auf den bisherigen ungefilterten Pfad zurueck. Genau derselbe
+  Mechanismus wie die bestehende M1-Absicherung fuer `filter: "visual"`,
+  jetzt auch wirksam fuer `interactive`/`all`/`landmark`.
+- `paintOrders[]` ist im `SnapshotDocument`-Typ optional — aeltere
+  Snapshot-Responses ohne paintOrder liefern `undefined`, der Default
+  ist `paintOrder: 0`, und die Occlusion-Schleife macht dann
+  effektiv nichts (alle Kandidaten haben paintOrder 0, die innere
+  `<=`-Bedingung filtert alles raus).
+
+**Token-Effekt:**
+- Auf Seiten **ohne** Overlay: 0% Aenderung (keine Nodes werden
+  gefiltert). Der zusaetzliche CDP-Call kostet ~5-30 ms je nach Seite.
+- Auf Seiten **mit** aktivem Modal: 10-20% Token-Reduktion erwartet,
+  weil alle verdeckten Buttons/Links aus dem Output fliegen.
+
+**Status:** GEFIXT in Story 18.4. File: `src/cache/a11y-tree.ts`
+(fetchVisualData zweiter Pass, renderNode/renderNodeDownsampled
+Occlusion-Skip, appendVisualAnnotation Helper), `src/tools/visual-constants.ts`
+(COMPUTED_STYLES).
+
+**Aufwand:** Mittel — Types-Erweiterung + zweiter Pass in fetchVisualData
++ render-Pipe-Filter + Helper-Extraktion + 4 neue Tests +
+Mock-Erweiterung + 2 Regression-Test-Anpassungen (read-page.test.ts,
+screenshot.test.ts).
+
+**Source:** Story 18.4 (`_bmad-output/implementation-artifacts/18-4-paint-order-filtering-fuer-verdeckte-elemente.md`).
