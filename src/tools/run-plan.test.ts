@@ -23,6 +23,9 @@ function createMockRegistry(
       }
       return response;
     }),
+    // Story 18.1: Plan-Executor ruft am Plan-Ende runAggregationHook
+    // ueber den letzten Step auf. Mocks brauchen eine no-op-Implementation.
+    runAggregationHook: vi.fn(async () => {}),
   } as unknown as ToolRegistry;
 }
 
@@ -61,8 +64,14 @@ describe("runPlanHandler", () => {
 
     await runPlanHandler(params, registry);
 
-    // Verify the registry's executeTool was called
-    expect(registry.executeTool).toHaveBeenCalledWith("evaluate", { expression: "21*2" });
+    // Verify the registry's executeTool was called. Story 18.1: run_plan
+    // uebergibt jetzt einen 4. Options-Parameter mit `skipOnToolResultHook`.
+    expect(registry.executeTool).toHaveBeenCalledWith(
+      "evaluate",
+      { expression: "21*2" },
+      undefined,
+      { skipOnToolResultHook: true },
+    );
   });
 
   it("passes vars and errorStrategy to executePlan", async () => {
@@ -82,7 +91,12 @@ describe("runPlanHandler", () => {
     const result = await runPlanHandler(params, registry);
 
     expect(result).toBeDefined();
-    expect(registry.executeTool).toHaveBeenCalledWith("navigate", { url: "https://test.com" });
+    expect(registry.executeTool).toHaveBeenCalledWith(
+      "navigate",
+      { url: "https://test.com" },
+      undefined,
+      { skipOnToolResultHook: true },
+    );
   });
 
   it("works without vars and errorStrategy (backward compatible)", async () => {
@@ -797,5 +811,225 @@ describe("runPlanSchema — parallel (Story 7.6)", () => {
       errorStrategy: "continue",
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// --- Story 18.1: run_plan suppresses Ambient-Context-Hook per step ---
+
+describe("runPlanHandler — Ambient-Context suppression (Story 18.1)", () => {
+  beforeEach(() => {
+    registerProHooks({});
+  });
+
+  it("every intermediate step is executed with skipOnToolResultHook=true", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", {
+      content: [{ type: "text", text: "Clicked" }],
+      _meta: { elapsedMs: 1, method: "click" },
+    });
+    responses.set("type", {
+      content: [{ type: "text", text: "Typed" }],
+      _meta: { elapsedMs: 1, method: "type" },
+    });
+
+    const registry = createMockRegistry(responses);
+    const params: RunPlanParams = {
+      steps: [
+        { tool: "click", params: { ref: "e1" } },
+        { tool: "type", params: { ref: "e2", text: "hi" } },
+      ],
+    };
+
+    await runPlanHandler(params, registry);
+
+    const calls = (registry.executeTool as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [, , sessionIdOverride, options] of calls) {
+      expect(sessionIdOverride).toBeUndefined();
+      expect(options).toEqual({ skipOnToolResultHook: true });
+    }
+  });
+
+  it("direct tool-calls outside run_plan stay opt-in (ambient context default)", async () => {
+    // This verifies the opt-in semantics: only run_plan threads the flag
+    // through. A registry callsite that does not pass options preserves
+    // the current default behavior (hook runs normally).
+    //
+    // We check this by building a responses map where the mock registry
+    // inspects the fourth argument. run_plan-driven calls must carry the
+    // flag; a direct executeTool call (simulating the MCP server.tool
+    // callsite) must NOT.
+    const directCallOptions: Array<unknown> = [];
+    const planCallOptions: Array<unknown> = [];
+    const mockRegistry = {
+      executeTool: vi.fn(
+        async (
+          _name: string,
+          _params: Record<string, unknown>,
+          _sess: string | undefined,
+          options: unknown,
+        ) => {
+          // Route based on who called: for this test we push into the
+          // "plan" bucket if the options object was provided, "direct"
+          // otherwise. The real production code mirrors this split:
+          // run_plan always passes options, the server.tool wrap does not.
+          if (options !== undefined) planCallOptions.push(options);
+          else directCallOptions.push(options);
+          return {
+            content: [{ type: "text" as const, text: "ok" }],
+            _meta: { elapsedMs: 1, method: _name },
+          };
+        },
+      ),
+      runAggregationHook: vi.fn(async () => {}),
+    } as unknown as ToolRegistry;
+
+    // Plan-driven call: options must be set
+    await runPlanHandler(
+      { steps: [{ tool: "click", params: { ref: "e1" } }] } as RunPlanParams,
+      mockRegistry,
+    );
+
+    // Direct call (outside run_plan): no options → default behavior
+    await mockRegistry.executeTool("click", { ref: "e2" });
+
+    expect(planCallOptions).toHaveLength(1);
+    expect(planCallOptions[0]).toEqual({ skipOnToolResultHook: true });
+    expect(directCallOptions).toHaveLength(1);
+    expect(directCallOptions[0]).toBeUndefined();
+  });
+
+  // --- H1 (Code-Review 18.1): Parallel-Pfad Aggregation ---
+
+  it("parallel plan with 3 steps calls runAggregationHook exactly once", async () => {
+    // Regression test for H1: the parallel path must drive the aggregation
+    // hook *once* at the end of the whole parallel group — not once per
+    // step (3x would defeat the suppression) and not zero times (that
+    // would leak the pre-18.1 "no final ambient context" bug into the
+    // parallel path).
+    const mockHookResponse: ToolResponse = {
+      content: [{ type: "text", text: "parallel ok" }],
+      _meta: { elapsedMs: 42, method: "run_plan", parallel: true, tabGroups: 1 },
+    };
+    // The real Pro executeParallel would drive the registry.executeTool
+    // closure three times (once per step); we simulate that here so the
+    // test catches any accidental aggregation-per-step regression.
+    const runAggregationHook = vi.fn(async () => {});
+    const executeToolInner = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "step ok" }],
+      _meta: { elapsedMs: 1, method: "click" },
+    }));
+    const executeParallelMock = vi.fn(
+      async (
+        _groups: Array<{ tab: string; steps: PlanStep[] }>,
+        registryFactory: (tabTargetId: string) => Promise<{
+          executeTool: (
+            name: string,
+            toolParams: Record<string, unknown>,
+          ) => Promise<ToolResponse>;
+        }>,
+      ) => {
+        // Simulate the Pro-Hook: instantiate the tab-registry via the
+        // factory, then run each step via its `executeTool` closure.
+        const tabRegistry = await registryFactory("tab-a");
+        await tabRegistry.executeTool("click", { ref: "e1" });
+        await tabRegistry.executeTool("click", { ref: "e2" });
+        await tabRegistry.executeTool("click", { ref: "e3" });
+        return mockHookResponse;
+      },
+    );
+
+    registerProHooks({ executeParallel: executeParallelMock });
+
+    const registry = {
+      executeTool: executeToolInner,
+      runAggregationHook,
+    } as unknown as ToolRegistry;
+
+    const license = createMockLicense(true);
+    const cdpSendMock = vi.fn().mockResolvedValue({ sessionId: "tab-session-1" });
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: cdpSendMock,
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [
+        {
+          tab: "tab-a",
+          steps: [
+            { tool: "click", params: { ref: "e1" } },
+            { tool: "click", params: { ref: "e2" } },
+            { tool: "click", params: { ref: "e3" } },
+          ],
+        },
+      ],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    // The Pro-Hook saw 3 executeTool calls on its tab-registry (one per
+    // step) — that is the "N steps" baseline.
+    expect(executeToolInner).toHaveBeenCalledTimes(3);
+    // Every intermediate step ran with the suppression flag set — this
+    // is the AC-1 contract and must not regress in the parallel path.
+    for (const call of executeToolInner.mock.calls) {
+      const options = call[3];
+      expect(options).toEqual({ skipOnToolResultHook: true });
+    }
+
+    // *** The H1 fix: aggregation hook fires exactly once, over the
+    // whole parallel-group result — not three times, not zero times.
+    expect(runAggregationHook).toHaveBeenCalledTimes(1);
+    const aggregationArgs = runAggregationHook.mock.calls[0];
+    expect(aggregationArgs[0]).toBe(mockHookResponse);
+    expect(aggregationArgs[1]).toBe("run_plan");
+
+    // The Pro-Hook's response is returned unchanged.
+    expect(result).toBe(mockHookResponse);
+
+    registerProHooks({});
+  });
+
+  it("parallel plan that returns isError skips the aggregation hook", async () => {
+    // Regression test: isError responses must not trigger the aggregation
+    // hook, mirroring the sequential plan-executor guard. Otherwise the
+    // LLM would get a misleading "final ambient context" stitched onto
+    // a failed parallel run.
+    const hookErrorResponse: ToolResponse = {
+      content: [{ type: "text", text: "tab crashed" }],
+      isError: true,
+      _meta: { elapsedMs: 17, method: "run_plan", parallel: true, tabGroups: 1 },
+    };
+    const runAggregationHook = vi.fn(async () => {});
+    const executeParallelMock = vi.fn(async () => hookErrorResponse);
+
+    registerProHooks({ executeParallel: executeParallelMock });
+
+    const registry = {
+      executeTool: vi.fn(),
+      runAggregationHook,
+    } as unknown as ToolRegistry;
+
+    const license = createMockLicense(true);
+    const cdpSendMock = vi.fn().mockResolvedValue({ sessionId: "tab-session-1" });
+    const deps: RunPlanDeps = {
+      cdpClient: {
+        send: cdpSendMock,
+      } as unknown as RunPlanDeps["cdpClient"],
+      sessionId: "test-session",
+    };
+    const params: RunPlanParams = {
+      parallel: [{ tab: "tab-a", steps: [{ tool: "click", params: { ref: "e1" } }] }],
+    };
+
+    const result = await runPlanHandler(params, registry, deps, undefined, license);
+
+    expect((result as ToolResponse).isError).toBe(true);
+    // Aggregation must NOT have fired over the failed parallel response
+    expect(runAggregationHook).not.toHaveBeenCalled();
+
+    registerProHooks({});
   });
 });

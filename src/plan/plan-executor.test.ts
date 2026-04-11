@@ -20,6 +20,9 @@ function createMockRegistry(
       }
       return response;
     },
+    // Story 18.1: Plan-Executor ruft am Plan-Ende runAggregationHook
+    // ueber den letzten Step auf. Mocks brauchen eine no-op-Implementation.
+    runAggregationHook: async () => {},
   } as unknown as ToolRegistry;
 }
 
@@ -27,6 +30,26 @@ function okResponse(tool: string, text: string, elapsedMs = 5): ToolResponse {
   return {
     content: [{ type: "text", text }],
     _meta: { elapsedMs, method: tool },
+  };
+}
+
+/**
+ * Story 18.1 (M1-Fix): Transition-Tool Response — sets `_meta.elementClass`
+ * to `"clickable"`, which is the shape that the real `click` and `type`
+ * handlers produce when the LLM interacted with a clickable element. The
+ * aggregation-hook guard in `plan-executor.ts` only fires for transition
+ * tools, so helper tests that want the hook to run MUST use this helper
+ * for their last step.
+ */
+function transitionResponse(
+  tool: string,
+  text: string,
+  elementClass: "clickable" | "widget-state" = "clickable",
+  elapsedMs = 5,
+): ToolResponse {
+  return {
+    content: [{ type: "text", text }],
+    _meta: { elapsedMs, method: tool, elementClass },
   };
 }
 
@@ -339,7 +362,13 @@ describe("executePlan", () => {
     expect(textBlocks[0].text).toContain("raw string error");
   });
 
-  it("preserves image content blocks from screenshot steps", async () => {
+  it("does NOT propagate image content blocks from successful screenshot steps (Story 18.2)", async () => {
+    // Story 18.2 (AC-2): Image-Bloecke aus erfolgreichen Steps werden nicht
+    // mehr in den Plan-Response uebernommen. Begruendung: ein Screenshot-Image
+    // pro Zwischen-Step ist der Token-Killer (50–200 KB base64). Wer einen
+    // Screenshot wirklich braucht, ruft `screenshot` ausserhalb des Plans
+    // direkt auf, oder nutzt `errorStrategy: "screenshot"` (das Image bleibt
+    // dann am Fehler-Step erhalten — siehe `appendErrorContext`).
     const screenshotResponse: ToolResponse = {
       content: [
         { type: "text", text: "Screenshot taken" },
@@ -356,12 +385,14 @@ describe("executePlan", () => {
 
     const result = await executePlan(steps, registry);
 
-    expect(result.content).toHaveLength(2); // text header + image block
+    // Nur die Aggregations-Zeile, kein Image-Block
+    expect(result.content).toHaveLength(1);
     expect(result.content[0].type).toBe("text");
-    expect(result.content[1].type).toBe("image");
-    expect((result.content[1] as { type: "image"; data: string; mimeType: string }).data).toBe(
-      "base64data",
-    );
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toMatch(/\[1\/1\] OK screenshot \(20ms\):/);
+    // Image-Bloecke duerfen NICHT in der Response sein
+    const imageBlocks = result.content.filter((c) => c.type === "image");
+    expect(imageBlocks).toHaveLength(0);
   });
 });
 
@@ -1155,5 +1186,797 @@ describe("executePlan — Suspend Edge Cases (Story 6.5)", () => {
     );
 
     warnSpy.mockRestore();
+  });
+});
+
+// --- Story 18.1: Ambient-Context-Hook-Suppression in run_plan ---
+
+describe("executePlan — Ambient-Context suppression (Story 18.1)", () => {
+  /**
+   * Mock registry that:
+   *  - returns canned responses for known tools
+   *  - records the options parameter of every executeTool call
+   *  - simulates the Ambient-Context hook behavior: if the executeTool
+   *    caller DOES NOT pass skipOnToolResultHook=true, the mock appends
+   *    a "[hook] ambient-context" text block to the response — mirroring
+   *    what the real hook would do.
+   *  - runAggregationHook appends "[agg] aggregated-context" regardless
+   */
+  function createHookAwareRegistry(
+    responses: Map<string, ToolResponse>,
+  ): {
+    registry: ToolRegistry;
+    callOptions: Array<Record<string, unknown> | undefined>;
+    aggregationCalls: Array<{ toolName: string }>;
+  } {
+    const callOptions: Array<Record<string, unknown> | undefined> = [];
+    const aggregationCalls: Array<{ toolName: string }> = [];
+    const registry = {
+      executeTool: vi.fn(
+        async (
+          name: string,
+          _params: Record<string, unknown>,
+          _sessionIdOverride: string | undefined,
+          options?: Record<string, unknown>,
+        ) => {
+          callOptions.push(options);
+          const canned = responses.get(name);
+          if (!canned) {
+            return {
+              content: [{ type: "text" as const, text: `Unknown tool: ${name}` }],
+              isError: true,
+              _meta: { elapsedMs: 0, method: name },
+            };
+          }
+          // Deep-clone so we don't mutate the shared fixture across calls
+          const cloned: ToolResponse = {
+            ...canned,
+            content: [...canned.content],
+            _meta: canned._meta ? { ...canned._meta } : undefined,
+          };
+          // Simulate the onToolResult hook: only append when NOT skipped
+          if (!options || options.skipOnToolResultHook !== true) {
+            cloned.content.push({ type: "text", text: "[hook] ambient-context" });
+          }
+          return cloned;
+        },
+      ),
+      runAggregationHook: vi.fn(async (result: ToolResponse, toolName: string) => {
+        aggregationCalls.push({ toolName });
+        result.content.push({ type: "text", text: "[agg] aggregated-context" });
+      }),
+    } as unknown as ToolRegistry;
+    return { registry, callOptions, aggregationCalls };
+  }
+
+  it("propagates skipOnToolResultHook=true to every intermediate step", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "clicked"));
+    responses.set("type", okResponse("type", "typed"));
+    responses.set("wait_for", okResponse("wait_for", "ok"));
+
+    const { registry, callOptions } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+      { tool: "wait_for", params: { ms: 10 } },
+    ];
+
+    await executePlan(steps, registry);
+
+    expect(callOptions).toHaveLength(3);
+    for (const opts of callOptions) {
+      expect(opts).toEqual({ skipOnToolResultHook: true });
+    }
+  });
+
+  it("does not inject ambient-context into intermediate step results", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "clicked"));
+    responses.set("type", okResponse("type", "typed"));
+    responses.set("wait_for", okResponse("wait_for", "waited"));
+
+    const { registry } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+      { tool: "wait_for", params: { ms: 10 } },
+    ];
+
+    const result = await executePlan(steps, registry);
+    const allText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+
+    // Intermediate step text must NOT contain the ambient-context marker
+    expect(allText).not.toContain("[hook] ambient-context");
+  });
+
+  it("runs the aggregation hook exactly once at the plan end", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", transitionResponse("click", "clicked"));
+    responses.set("type", transitionResponse("type", "typed"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+    ];
+
+    const result = await executePlan(steps, registry);
+
+    // Aggregation hook called exactly once over the last step
+    expect(aggregationCalls).toHaveLength(1);
+    expect(aggregationCalls[0].toolName).toBe("type");
+    // Its output is visible in the aggregated plan response (last step text)
+    const allText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    expect(allText).toContain("[agg] aggregated-context");
+  });
+
+  // --- M1 (Code-Review 18.1): Transition-Category Guard ---
+
+  it("skips the aggregation hook when the last step is not a transition tool", async () => {
+    // M1-Fix: the aggregation hook is guarded by the Transition-Category
+    // check — only `click`/`type` calls set `_meta.elementClass`, which
+    // matches "clickable" or "widget-state". Read-only or wait tools
+    // (here: `wait_for`, which has no `elementClass`) must NOT drive the
+    // aggregation hook, because they do not change the DOM and the hook
+    // would just add useless tokens.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", transitionResponse("click", "clicked"));
+    responses.set("wait_for", okResponse("wait_for", "waited")); // no elementClass
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "wait_for", params: { ms: 10 } },
+    ];
+
+    await executePlan(steps, registry);
+
+    // Last step is `wait_for` without `elementClass` → hook must NOT fire
+    expect(aggregationCalls).toHaveLength(0);
+  });
+
+  it("fires the aggregation hook when the last step is a widget-state transition", async () => {
+    // Covers the `widget-state` branch of the Transition-Category guard —
+    // i.e. a `type` into a form input / checkbox where `classifyRef`
+    // returned "widget-state".
+    const responses = new Map<string, ToolResponse>();
+    responses.set("type", transitionResponse("type", "typed", "widget-state"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "type", params: { ref: "e1", text: "hello" } },
+    ];
+
+    await executePlan(steps, registry);
+
+    expect(aggregationCalls).toHaveLength(1);
+    expect(aggregationCalls[0].toolName).toBe("type");
+  });
+
+  it("skips the aggregation hook when the last step failed (errorStrategy=continue)", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "clicked"));
+    responses.set("type", errorResponse("type", "type failed"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+    ];
+
+    const result = await executePlan(steps, registry, { errorStrategy: "continue" });
+
+    expect(aggregationCalls).toHaveLength(0);
+    const allText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    expect(allText).not.toContain("[agg] aggregated-context");
+    // Failed step is still visible in the response
+    expect(allText).toContain("FAIL type");
+    // Full error context from the failed step is preserved (AC-5)
+    expect(allText).toContain("type failed");
+    // errorStrategy="continue" only sets isError when EVERY step failed.
+    // With 1 OK + 1 FAIL we get a partial-failure plan (isError undefined),
+    // which is the current baseline behavior — the Story-18.1 fix must not
+    // regress it.
+    const partialFailureSummary = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    expect(partialFailureSummary).toContain("Plan completed with errors");
+  });
+
+  it("skips the aggregation hook on abort (first-step error)", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", errorResponse("click", "click failed"));
+    responses.set("type", okResponse("type", "should not run"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+    ];
+
+    const result = await executePlan(steps, registry); // default: abort
+
+    expect(aggregationCalls).toHaveLength(0);
+    // Error context is still in the response — AC-5 guarantee
+    const allText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    expect(allText).toContain("FAIL click");
+    expect(allText).toContain("click failed");
+    expect(result.isError).toBe(true);
+  });
+
+  it("skips the aggregation hook when the last step was skipped by its condition", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "clicked"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "click", params: { ref: "e2" }, if: "$neverTrue" },
+    ];
+
+    await executePlan(steps, registry, { vars: { neverTrue: false } });
+
+    expect(aggregationCalls).toHaveLength(0);
+  });
+
+  it("still runs the aggregation hook when the last executed step succeeded (errorStrategy=continue mix)", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", errorResponse("click", "click failed"));
+    responses.set("type", transitionResponse("type", "typed ok"));
+
+    const { registry, aggregationCalls } = createHookAwareRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "hi" } },
+    ];
+
+    await executePlan(steps, registry, { errorStrategy: "continue" });
+
+    // Last step (type) succeeded, so aggregation fires over it
+    expect(aggregationCalls).toHaveLength(1);
+    expect(aggregationCalls[0].toolName).toBe("type");
+  });
+
+  it("aggregation-hook exceptions do not break the plan response", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", okResponse("click", "clicked"));
+
+    const registry = {
+      executeTool: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "clicked" }],
+        _meta: { elapsedMs: 1, method: "click" },
+      })),
+      runAggregationHook: vi.fn(async () => {
+        throw new Error("hook exploded");
+      }),
+    } as unknown as ToolRegistry;
+
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e1" } }];
+
+    const result = await executePlan(steps, registry);
+
+    // Plan still returns a normal response despite the hook blowing up
+    expect(result.isError).toBeFalsy();
+    expect(result._meta).toBeDefined();
+    expect(result._meta!.stepsCompleted).toBe(1);
+  });
+});
+
+// --- Story 18.2: Step-Response-Aggregation verschmaelern (FR-034) ---
+
+describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
+  function refResponse(tool: string, text: string, elapsedMs = 5): ToolResponse {
+    return {
+      content: [{ type: "text", text }],
+      _meta: { elapsedMs, method: tool },
+    };
+  }
+
+  it("successful steps render as single-line aggregation with ref-extraction", async () => {
+    // 3 Steps, alle OK, Mock-Tool gibt "Clicked element e5" zurueck → die
+    // Aggregations-Zeile fasst auf `ref=e5` zusammen.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", refResponse("navigate", "Navigated to https://example.com", 100));
+    responses.set("click", refResponse("click", "Clicked element e5", 30));
+    responses.set("type", refResponse("type", "Typed 'hello' into e7", 25));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e5" } },
+      { tool: "type", params: { ref: "e7", text: "hello" } },
+    ];
+
+    const result = await executePlan(steps, registry);
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    expect(textBlocks).toHaveLength(3);
+    // navigate hat keinen Ref → Kurztext-Pfad
+    expect(textBlocks[0].text).toBe(
+      "[1/3] OK navigate (100ms): Navigated to https://example.com",
+    );
+    // click hat `e5` → ref=e5
+    expect(textBlocks[1].text).toBe("[2/3] OK click (30ms): ref=e5");
+    // type hat `e7` → ref=e7
+    expect(textBlocks[2].text).toBe("[3/3] OK type (25ms): ref=e7");
+  });
+
+  it("ref=eN prefix format takes priority over bare eN", async () => {
+    // Wenn Tool `"ref=e3 and also e9"` schreibt, soll `e3` gewinnen.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", refResponse("click", "ref=e3 and also e9", 12));
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e3" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toBe("[1/1] OK click (12ms): ref=e3");
+  });
+
+  it("multi-line tool output is truncated to first line without newlines", async () => {
+    // Mock-Tool gibt einen Multi-Line-Output ohne Ref zurueck → die
+    // Aggregations-Zeile enthaelt nur die erste Zeile, kein \nline2.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("evaluate", refResponse("evaluate", "line1\nline2\nline3", 8));
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "evaluate", params: { expression: "1" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toBe("[1/1] OK evaluate (8ms): line1");
+    expect(text).not.toContain("\nline2");
+    expect(text).not.toContain("line3");
+  });
+
+  it("compact text longer than 80 chars is truncated with ellipsis", async () => {
+    // Erste Zeile > STEP_LINE_COMPACT_MAX_CHARS (80) → Truncate auf 77 + "..."
+    const longLine = "x".repeat(120); // keine Refs, kein Newline
+    const responses = new Map<string, ToolResponse>();
+    responses.set("evaluate", refResponse("evaluate", longLine, 4));
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "evaluate", params: { expression: "1" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    // Erwartung: Suffix ist exakt 80 Zeichen lang (77 x + "...")
+    const suffix = text.replace("[1/1] OK evaluate (4ms): ", "");
+    expect(suffix).toHaveLength(80);
+    expect(suffix.endsWith("...")).toBe(true);
+    expect(suffix.startsWith("x".repeat(77))).toBe(true);
+  });
+
+  it("step with no text output renders as <no-output>", async () => {
+    // Mock-Tool gibt content: [] zurueck → Zeile endet mit `: <no-output>`
+    const responses = new Map<string, ToolResponse>();
+    responses.set("screenshot", {
+      content: [],
+      _meta: { elapsedMs: 18, method: "screenshot" },
+    });
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "screenshot" }];
+
+    const result = await executePlan(steps, registry);
+    expect(result.content).toHaveLength(1);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toBe("[1/1] OK screenshot (18ms): <no-output>");
+  });
+
+  it("image blocks from successful steps are excluded from aggregation", async () => {
+    // AC-2: Image-Bloecke aus erfolgreichen Steps duerfen nicht durchkommen.
+    const screenshotResponse: ToolResponse = {
+      content: [
+        { type: "text", text: "Screenshot taken" },
+        { type: "image", data: "base64data", mimeType: "image/webp" },
+      ],
+      _meta: { elapsedMs: 20, method: "screenshot" },
+    };
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", refResponse("navigate", "Navigated", 50));
+    responses.set("screenshot", screenshotResponse);
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "screenshot" },
+    ];
+
+    const result = await executePlan(steps, registry);
+
+    // 2 text-Bloecke, 0 Image-Bloecke
+    const imageBlocks = result.content.filter((c) => c.type === "image");
+    expect(imageBlocks).toHaveLength(0);
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    expect(textBlocks).toHaveLength(2);
+    expect(textBlocks[1].text).toBe("[2/2] OK screenshot (20ms): Screenshot taken");
+  });
+
+  it("skipped steps still render as one line with condition", async () => {
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", refResponse("click", "Clicked element e5"));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e5" }, if: "$skip === true" },
+    ];
+
+    const result = await executePlan(steps, registry, { vars: { skip: false } });
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].text).toContain("SKIP click");
+    expect(textBlocks[0].text).toContain("condition:");
+    expect(textBlocks[0].text).toContain("$skip === true");
+  });
+
+  it("failed step with errorStrategy=continue keeps full error context, OK steps stay single-line", async () => {
+    // AC-4: 4 Steps, Step 2 failed (mit Multi-Line-Fehlertext), continue.
+    // Erwartung: Step 1, 3, 4 sind ein-zeilig; Step 2 enthaelt alle text-
+    // Bloecke des Fehler-Tools (Multi-Line, ungekuerzt).
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", refResponse("navigate", "Navigated to https://example.com", 90));
+    responses.set("click", {
+      content: [
+        { type: "text", text: "Element not found\nTried selector e99\nNo match" },
+      ],
+      isError: true,
+      _meta: { elapsedMs: 12, method: "click" },
+    });
+    responses.set("evaluate", refResponse("evaluate", "42", 7));
+    responses.set("type", refResponse("type", "Typed 'foo' into e3", 19));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e99" } },
+      { tool: "evaluate", params: { expression: "1+1" } },
+      { tool: "type", params: { ref: "e3", text: "foo" } },
+    ];
+
+    const result = await executePlan(steps, registry, { errorStrategy: "continue" });
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+
+    // Step 1, 3, 4 OK ein-zeilig; Step 2 FAIL voll; plus continue-Footer
+    // (text count: 4 step lines + 1 footer = 5)
+    expect(textBlocks.length).toBe(5);
+    expect(textBlocks[0].text).toBe(
+      "[1/4] OK navigate (90ms): Navigated to https://example.com",
+    );
+    // FAIL-Step behaelt vollen Multi-Line-Kontext
+    expect(textBlocks[1].text).toBe(
+      "[2/4] FAIL click (12ms): Element not found\nTried selector e99\nNo match",
+    );
+    // OK-Steps nach dem FAIL bleiben ein-zeilig
+    expect(textBlocks[2].text).toBe("[3/4] OK evaluate (7ms): 42");
+    expect(textBlocks[3].text).toBe("[4/4] OK type (19ms): ref=e3");
+    expect(textBlocks[4].text).toContain("Plan completed with errors");
+  });
+
+  it("error step with screenshot strategy keeps image block (Story 18.2 AC-4)", async () => {
+    // Step 1 OK, Step 2 failed mit errorStrategy=screenshot → der angehaengte
+    // Screenshot-Image-Block muss am Fehler-Step sichtbar bleiben.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", refResponse("navigate", "Navigated", 60));
+    responses.set("click", {
+      content: [{ type: "text", text: "Not found e99" }],
+      isError: true,
+      _meta: { elapsedMs: 8, method: "click" },
+    });
+    responses.set("screenshot", {
+      content: [
+        { type: "text", text: "Screenshot taken" },
+        { type: "image", data: "base64-error-shot", mimeType: "image/webp" },
+      ],
+      _meta: { elapsedMs: 20, method: "screenshot" },
+    });
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e99" } },
+    ];
+
+    const result = await executePlan(steps, registry, {
+      errorStrategy: "screenshot",
+    });
+
+    // Plan ist aborted, Image-Block muss da sein (am Fehler-Step)
+    expect(result.isError).toBe(true);
+    const imageBlocks = result.content.filter((c) => c.type === "image");
+    expect(imageBlocks).toHaveLength(1);
+    expect(
+      (imageBlocks[0] as { type: "image"; data: string; mimeType: string }).data,
+    ).toBe("base64-error-shot");
+
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    // Step 1 OK ein-zeilig
+    expect(textBlocks[0].text).toBe("[1/2] OK navigate (60ms): Navigated");
+    // Step 2 FAIL voll (text-Bloecke joined)
+    expect(textBlocks[1].text).toContain("[2/2] FAIL click (8ms):");
+    expect(textBlocks[1].text).toContain("Not found e99");
+    // Footer
+    expect(textBlocks.some((b) => b.text.includes("Plan aborted at step 2/2"))).toBe(true);
+  });
+
+  it("aborted plan still uses verbose error format for the failing step", async () => {
+    // errorStrategy=abort, Step 2 failed → Step 1 ein-zeilig (OK), Step 2
+    // voll (FAIL), Footer "Plan aborted at step 2/3"
+    const responses = new Map<string, ToolResponse>();
+    responses.set("navigate", refResponse("navigate", "Navigated to start", 40));
+    responses.set("click", {
+      content: [{ type: "text", text: "Selector failed\nstale ref" }],
+      isError: true,
+      _meta: { elapsedMs: 5, method: "click" },
+    });
+    responses.set("type", refResponse("type", "should not run", 1));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [
+      { tool: "navigate", params: { url: "https://example.com" } },
+      { tool: "click", params: { ref: "e99" } },
+      { tool: "type", params: { ref: "e1", text: "foo" } },
+    ];
+
+    const result = await executePlan(steps, registry); // default = abort
+
+    expect(result.isError).toBe(true);
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    // 1 OK + 1 FAIL + abort-Footer = 3 text blocks
+    expect(textBlocks).toHaveLength(3);
+    expect(textBlocks[0].text).toBe("[1/3] OK navigate (40ms): Navigated to start");
+    // FAIL behaelt Multi-Line-Kontext
+    expect(textBlocks[1].text).toBe(
+      "[2/3] FAIL click (5ms): Selector failed\nstale ref",
+    );
+    expect(textBlocks[2].text).toContain("Plan aborted at step 2/3");
+  });
+
+  it("aggregation-hook overlay is appended as separate block, not squeezed into the last step line", async () => {
+    // Aggregations-Hook (Story 18.1) mutiert das letzte Step-Result mit
+    // einem zusaetzlichen text-Block. Story 18.2 schneidet diesen Overlay
+    // aus dem Step-Result heraus und haengt ihn separat an. Der LLM sieht
+    // die Hook-Output-Zeile am Plan-Ende, nicht in der kompakten Step-
+    // Aggregation gequetscht.
+    const aggregationCalls: Array<{ toolName: string }> = [];
+    const registry = {
+      executeTool: vi.fn(
+        async (
+          name: string,
+          _params: Record<string, unknown>,
+        ): Promise<ToolResponse> => {
+          if (name === "click") {
+            return {
+              content: [{ type: "text", text: "Clicked element e5" }],
+              _meta: { elapsedMs: 11, method: "click", elementClass: "clickable" },
+            };
+          }
+          return {
+            content: [{ type: "text", text: `${name} done` }],
+            _meta: { elapsedMs: 5, method: name },
+          };
+        },
+      ),
+      runAggregationHook: vi.fn(async (result: ToolResponse, toolName: string) => {
+        aggregationCalls.push({ toolName });
+        result.content.push({
+          type: "text",
+          text: "[hook] dom-diff: +1 added, -0 removed",
+        });
+      }),
+    } as unknown as ToolRegistry;
+
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e5" } }];
+    const result = await executePlan(steps, registry);
+
+    expect(aggregationCalls).toHaveLength(1);
+
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    // Erwartung: 2 text-Bloecke — Step-Aggregation + Overlay-Block
+    expect(textBlocks).toHaveLength(2);
+    // Step-Zeile bleibt kompakt mit ref=e5 (Overlay nicht eingequetscht)
+    expect(textBlocks[0].text).toBe("[1/1] OK click (11ms): ref=e5");
+    // Overlay als eigener Block
+    expect(textBlocks[1].text).toBe("[hook] dom-diff: +1 added, -0 removed");
+  });
+
+  it("H1-Fix: hook that unshifts (not pushes) new blocks — overlay extracted correctly via reference-set diffing", async () => {
+    // Review 18.2 H1: Der alte `slice(contentLengthBefore)`-Schnitt hat
+    // implizit angenommen, dass der Hook neue Bloecke per `push` am Ende
+    // anfuegt. Mit unshift (Hook schiebt neuen Block an die Spitze) wuerde
+    // der alte Code den Overlay-Block und den Original-Step-Text
+    // vertauschen — Step-Line enthaelt Hook-Text, Overlay enthaelt Original.
+    // Der Fix via Set-Based-Diffing darf davon nicht betroffen sein.
+    const registry = {
+      executeTool: vi.fn(
+        async (name: string): Promise<ToolResponse> => {
+          if (name === "click") {
+            return {
+              content: [{ type: "text", text: "Clicked element e5" }],
+              _meta: { elapsedMs: 13, method: "click", elementClass: "clickable" },
+            };
+          }
+          return {
+            content: [{ type: "text", text: `${name} done` }],
+            _meta: { elapsedMs: 2, method: name },
+          };
+        },
+      ),
+      runAggregationHook: vi.fn(async (result: ToolResponse, _toolName: string) => {
+        // Hook schiebt den Overlay-Block an den ANFANG (unshift), nicht ans
+        // Ende — das ist der H1-Stresstest.
+        result.content.unshift({
+          type: "text",
+          text: "[hook-unshift] dom-diff-prepended",
+        });
+      }),
+    } as unknown as ToolRegistry;
+
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e5" } }];
+    const result = await executePlan(steps, registry);
+
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    // Erwartung: 2 text-Bloecke — Step-Aggregation + Overlay
+    expect(textBlocks).toHaveLength(2);
+    // Step-Zeile enthaelt den ORIGINAL-Step-Text (ref=e5), NICHT den Hook-
+    // Text. Mit dem alten `slice`-Schnitt waere hier
+    // "ref=[hook-unshift]..." gelandet, weil slice(1) den Original-Step-
+    // Block als Overlay genommen und den unshift-Block in der Step-Line
+    // gerendert haette.
+    expect(textBlocks[0].text).toBe("[1/1] OK click (13ms): ref=e5");
+    // Overlay als eigener Block am Ende, mit genau dem Hook-Text
+    expect(textBlocks[1].text).toBe("[hook-unshift] dom-diff-prepended");
+  });
+
+  it("M1-Fix: bare eN in free-form error text is NOT extracted when params.ref differs", async () => {
+    // Review 18.2 M1: Der alte Regex `\b(e\d+)\b` wuerde `e500` in
+    // "HTTP error 500" matchen (false positive) oder ein fremdes `e99`
+    // in einem Fehler-Text. Die Haertung via params.ref-Cross-Validation
+    // verhindert das — bare-`eN`-Matches werden nur akzeptiert, wenn sie
+    // mit dem in params erwarteten Ref uebereinstimmen.
+    const responses = new Map<string, ToolResponse>();
+    // Step 1: click mit e5, Output enthaelt einen fremden `e500`-Token
+    // (simuliert z.B. ein Success-Log-Message "Fired event e500 on ancestor")
+    responses.set(
+      "click",
+      refResponse("click", "Fired event e500 on ancestor of element", 10),
+    );
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e5" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    // Erwartung: KEIN ref=e500. Stattdessen Kurztext-Pfad, weil `e500`
+    // nicht mit `params.ref=e5` matched.
+    expect(text).not.toContain("ref=e500");
+    expect(text).toBe(
+      "[1/1] OK click (10ms): Fired event e500 on ancestor of element",
+    );
+  });
+
+  it("M1-Fix: bare eN that matches params.ref is still extracted (positive path remains intact)", async () => {
+    // Gegenbeispiel: Wenn der bare Ref mit params.ref uebereinstimmt, soll
+    // die Extraktion wie gehabt funktionieren — diese Haertung darf den
+    // Happy-Path nicht brechen.
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", refResponse("click", "Clicked element e5", 10));
+
+    const registry = createMockRegistry(responses);
+    const steps: PlanStep[] = [{ tool: "click", params: { ref: "e5" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toBe("[1/1] OK click (10ms): ref=e5");
+  });
+
+  it("M1-Fix: `e2e` in text is not extracted as ref even when params.ref exists", async () => {
+    // `\b(e\d+)\b` fordert Word-Boundary nach den Ziffern. In `e2e-test`
+    // folgt der `2` ein `e` (Word-Char), also kein Boundary → kein Match.
+    // Dieser Test verifiziert das explizit, damit `e2e` (End-to-End) in
+    // Tool-Output nicht versehentlich als Ref interpretiert wird.
+    const responses = new Map<string, ToolResponse>();
+    responses.set(
+      "evaluate",
+      refResponse(
+        "evaluate",
+        "Running e2e-test suite — 42 tests passed",
+        7,
+      ),
+    );
+
+    const registry = createMockRegistry(responses);
+    // evaluate hat keinen `ref`-Param → expectedRef = undefined → nur
+    // Praefix-Format kann matchen, und hier gibt es kein `ref=eN`-Praefix.
+    const steps: PlanStep[] = [{ tool: "evaluate", params: { expression: "1" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).not.toMatch(/ref=e\d/);
+    expect(text).toBe(
+      "[1/1] OK evaluate (7ms): Running e2e-test suite — 42 tests passed",
+    );
+  });
+
+  it("M1-Fix: prefix format `ref=eN` is always accepted, even without params.ref", async () => {
+    // Das Praefix-Format ist explizit und sicher — es matched unabhaengig
+    // davon, ob params.ref gesetzt ist. Diese Regression-Guard stellt
+    // sicher, dass die Haertung den Praefix-Pfad nicht beeintraechtigt.
+    const responses = new Map<string, ToolResponse>();
+    responses.set(
+      "evaluate",
+      refResponse("evaluate", "discovered ref=e42 in current page", 5),
+    );
+    const registry = createMockRegistry(responses);
+    // KEIN ref in params — trotzdem soll das Praefix-Match greifen.
+    const steps: PlanStep[] = [{ tool: "evaluate", params: { expression: "1" } }];
+
+    const result = await executePlan(steps, registry);
+    const text = (result.content[0] as { type: "text"; text: string }).text;
+    expect(text).toBe("[1/1] OK evaluate (5ms): ref=e42");
+  });
+
+  it("steps with FAIL after a hook overlay attempt: overlay is not extracted (hook only fires on success)", async () => {
+    // Sicherheitspruefung: Wenn der letzte Step ein FAIL ist, laeuft der
+    // Aggregations-Hook nicht (Story 18.1-Guard) → kein Overlay → die
+    // Step-Liste enthaelt nur die normale FAIL-Verbose-Form.
+    const aggregationCalls: Array<{ toolName: string }> = [];
+    const responses = new Map<string, ToolResponse>();
+    responses.set("click", refResponse("click", "ok"));
+    responses.set("type", {
+      content: [{ type: "text", text: "type failed" }],
+      isError: true,
+      _meta: { elapsedMs: 4, method: "type" },
+    });
+
+    const registry = {
+      executeTool: vi.fn(async (name: string) => responses.get(name)!),
+      runAggregationHook: vi.fn(async (_r: ToolResponse, toolName: string) => {
+        aggregationCalls.push({ toolName });
+      }),
+    } as unknown as ToolRegistry;
+
+    const steps: PlanStep[] = [
+      { tool: "click", params: { ref: "e1" } },
+      { tool: "type", params: { ref: "e2", text: "x" } },
+    ];
+
+    const result = await executePlan(steps, registry, { errorStrategy: "continue" });
+
+    expect(aggregationCalls).toHaveLength(0);
+    const textBlocks = result.content.filter(
+      (c): c is { type: "text"; text: string } => c.type === "text",
+    );
+    // 2 step-Bloecke + continue-Footer = 3
+    expect(textBlocks).toHaveLength(3);
+    expect(textBlocks[0].text).toContain("[1/2] OK click");
+    expect(textBlocks[1].text).toContain("[2/2] FAIL type");
+    expect(textBlocks[1].text).toContain("type failed");
   });
 });

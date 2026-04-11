@@ -9,7 +9,7 @@ import type { TabStateCache } from "./cache/tab-state-cache.js";
 import type { SessionDefaults as SessionDefaultsType } from "./cache/session-defaults.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
-import type { ToolResponse, ToolContentBlock } from "./types.js";
+import type { ToolResponse, ToolContentBlock, ExecuteToolOptions } from "./types.js";
 import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
@@ -381,7 +381,19 @@ export class ToolRegistry implements ToolRegistryPublic {
     return "connected";
   }
 
-  async executeTool(name: string, params: Record<string, unknown>, sessionIdOverride?: string): Promise<ToolResponse> {
+  /**
+   * Story 18.1: `options` ist optional und strikt opt-in. Bestehende
+   * Call-Sites ohne 4. Parameter behalten das bisherige Verhalten. Wenn
+   * `options.skipOnToolResultHook === true` ist, wird der Ambient-Context-
+   * Pro-Hook nach dem Tool-Handler NICHT aufgerufen (`run_plan` nutzt das
+   * fuer Zwischen-Steps). Siehe `docs/friction-fixes.md#FR-033`.
+   */
+  async executeTool(
+    name: string,
+    params: Record<string, unknown>,
+    sessionIdOverride?: string,
+    options?: ExecuteToolOptions,
+  ): Promise<ToolResponse> {
     const handler = this._handlers.get(name);
     if (!handler) {
       const content: ToolContentBlock[] = [{ type: "text", text: `Unknown tool: ${name}` }];
@@ -436,8 +448,11 @@ export class ToolRegistry implements ToolRegistryPublic {
     const result = await handler(resolvedParams, sessionIdOverride);
     this._injectDialogNotifications(result);
     this._injectRelaunchNotice(result);
-    // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook
-    await this._runOnToolResultHook(result, name);
+    // Story 15.3: Ambient Page Context — delegated to Pro-Repo via onToolResult hook.
+    // Story 18.1: `skipOnToolResultHook` erlaubt `run_plan`, den Ambient-Context
+    // fuer Zwischen-Steps zu unterdruecken. Dialog-Notifications und
+    // Relaunch-Notice laufen oben bewusst unabhaengig davon.
+    await this._runOnToolResultHook(result, name, options?.skipOnToolResultHook === true);
     // Story 7.3: Inject auto-promote suggestion into _meta
     if (suggestionText && result._meta) {
       result._meta.suggestion = suggestionText;
@@ -490,14 +505,27 @@ export class ToolRegistry implements ToolRegistryPublic {
    * returns a new `_meta` object, the original reference is restored to
    * prevent downstream mutations from writing to a detached object.
    */
-  private async _runOnToolResultHook(result: ToolResponse, name: string): Promise<void> {
+  private async _runOnToolResultHook(
+    result: ToolResponse,
+    name: string,
+    skipHook = false,
+  ): Promise<void> {
     // FR-007: Navigate invalidates all refs — reset immediately so next
     // tool gets clear stale-error even if no hook is registered.
+    //
+    // Story 18.1: `reset()` laeuft BEWUSST vor dem `skipHook`-Check, damit
+    // `run_plan` seine navigate-Zwischen-Steps sauber die Ref-Caches
+    // invalidieren laesst, auch wenn der Ambient-Context-Hook uebersprungen
+    // wird.
     if (name === "navigate") {
       a11yTree.reset();
     }
 
     if (result.isError) return;
+
+    // Story 18.1: Bypass fuer `run_plan`-Zwischen-Steps. Platziert NACH dem
+    // `isError`-Guard, damit Fehler-Semantik (AC-5) unveraendert bleibt.
+    if (skipHook) return;
 
     const hooks = getProHooks();
     if (!hooks.onToolResult) return;
@@ -546,6 +574,26 @@ export class ToolRegistry implements ToolRegistryPublic {
       Object.assign(result, enhanced);
       result._meta = originalMeta;
     }
+  }
+
+  /**
+   * Story 18.1: Aggregations-Hook fuer `run_plan`.
+   *
+   * `run_plan` setzt `skipOnToolResultHook: true` auf alle Zwischen-Steps,
+   * damit der Ambient-Context-Hook nicht pro Step feuert. Am Plan-Ende ruft
+   * der Plan-Executor diese Methode genau einmal ueber das letzte Step-
+   * Ergebnis auf, damit der LLM am Plan-Ende trotzdem DOM-Diff/Compact-
+   * Snapshot des finalen Seitenzustands sieht.
+   *
+   * Verhaelt sich identisch zu `_runOnToolResultHook` ohne Bypass:
+   *  - `a11yTree.reset()` auf navigate
+   *  - `isError`-Guard bleibt
+   *  - Pro-Hook wird mit vollem Kontext aufgerufen
+   *
+   * @see docs/friction-fixes.md#FR-033
+   */
+  async runAggregationHook(result: ToolResponse, toolName: string): Promise<void> {
+    await this._runOnToolResultHook(result, toolName, false);
   }
 
   /**

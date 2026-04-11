@@ -820,7 +820,7 @@ Nice-to-Have-Gaps werden im Laufe der Implementierung in `docs/pattern-updates.m
 
 **First Implementation Priority.**
 
-Die erste Story von Epic 18 ist der **Ambient-Context-Hook-Forensik-Fix** aus `docs/friction-fixes.md` (Haupt-Hebel laut Forensik: rund 2850 Chars und 1050–4050 ms pro Plan eingespart). Diese Story ist code-seitig isoliert, beruehrt die neue Operator-Architektur nicht, und validiert das Implementation-Gate (MQS +2 bis +3) vor dem Kartentisch-Sprung.
+Die erste Story von Epic 18 ist der **Ambient-Context-Hook-Forensik-Fix** aus `docs/friction-fixes.md` (Haupt-Hebel laut Forensik: spart auf click-lastigen Plaenen **100–1350 ms pro Click-Step** — Herleitung: die `waitForAXChange`-Wait-Konstanten 350/500/1350 ms in `src/hooks/default-on-tool-result.ts` — plus etwa **2850 Chars pro Plan** durch entfallende Ambient-Context-Snapshots; der zeitliche Hebel skaliert mit der Anzahl der Click-/Type-Steps — Plaene ohne Transition-Steps sehen die Zeit-Einsparung nicht, die Token-Einsparung aber schon). Diese Story ist code-seitig isoliert, beruehrt die neue Operator-Architektur nicht, und validiert das Implementation-Gate (MQS +2 bis +3) vor dem Kartentisch-Sprung.
 
 Die erste Story von Epic 19 sollte **Card Data Model** sein (`src/cards/card-schema.ts` plus `card-loader.ts` plus drei handgepflegte Seed-Karten als Test-Datensatz). Grund: Dieses Modul hat keine Chrome-Abhaengigkeit und kann vollstaendig mit Unit-Tests validiert werden. Es ist das Fundament fuer alle nachfolgenden Scan-Match-Pipeline-Stories.
 

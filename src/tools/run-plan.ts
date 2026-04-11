@@ -160,15 +160,22 @@ export async function runPlanHandler(
       await cdpClient.send("Runtime.enable", {}, tabSessionId);
       await cdpClient.send("Accessibility.enable", {}, tabSessionId);
       return {
+        // Story 18.1: Parallel-Pfad muss dieselbe Suppression-Semantik haben
+        // wie der sequentielle Plan-Executor, sonst leakt der Ambient-Context-
+        // Hook in das Pro-Repo zurueck. Das Closure setzt das Flag auf jedem
+        // einzelnen `executeTool`-Call; der Aggregations-Hook am Group-Ende
+        // liegt im Pro-Repo (executeParallel-Hook).
         executeTool: (name: string, toolParams: Record<string, unknown>): Promise<ToolResponse> =>
-          registry.executeTool(name, toolParams, tabSessionId),
+          registry.executeTool(name, toolParams, tabSessionId, {
+            skipOnToolResultHook: true,
+          }),
       };
     };
 
     // H1-Fix (Code-Review 15.4): Hook-Exceptions in MCP-konforme isError-Response
     // wandeln statt nach oben durchzulassen.
     try {
-      return await hooks.executeParallel(
+      const parallelResult = await hooks.executeParallel(
         params.parallel as Array<{ tab: string; steps: PlanStep[] }>,
         registryFactory,
         {
@@ -177,6 +184,29 @@ export async function runPlanHandler(
           concurrencyLimit: 5,
         },
       );
+
+      // Story 18.1 H1 (Code-Review 18.1): Aggregations-Hook fuer den
+      // Parallel-Pfad. Der `registryFactory`-Vertrag exponiert bewusst nur
+      // `executeTool` (nicht `runAggregationHook`), damit der Pro-`executeParallel`
+      // keinen tab-spezifischen End-Hook rufen muss. Stattdessen rufen wir
+      // hier im Free-Repo, nach Abschluss der gesamten Parallel-Gruppe,
+      // den Aggregations-Hook genau einmal ueber die aktuelle (nicht-tab)
+      // Session. Das garantiert AC-2 auch fuer Parallel-Runs: N Steps →
+      // Hook laeuft genau 1x am Ende, nicht 3x (bei 3 Steps) und nicht 0x.
+      //
+      // Guards:
+      //  - Nur wenn die Parallel-Response kein `isError` ist (kein Early-Abort).
+      //  - Hook-Exceptions werden geschluckt (best-effort), damit der
+      //    Plan-Response nicht wegen eines Hook-Fehlers kippt.
+      if (!parallelResult.isError) {
+        try {
+          await registry.runAggregationHook(parallelResult, "run_plan");
+        } catch {
+          // Best-effort — siehe plan-executor.ts Aggregations-Hook.
+        }
+      }
+
+      return parallelResult;
     } catch (error) {
       return {
         content: [{

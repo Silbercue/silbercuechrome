@@ -6,6 +6,7 @@ import type { FreeTierConfig } from "./license/free-tier-config.js";
 import { registerProHooks } from "./hooks/pro-hooks.js";
 import type { ProHooks } from "./hooks/pro-hooks.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
+import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 
 describe("ToolRegistry", () => {
@@ -2538,6 +2539,312 @@ describe("ToolRegistry", () => {
       expect(typeof result._meta!.response_bytes).toBe("number");
       expect((result._meta!.response_bytes as number) > 0).toBe(true);
     });
+
+    // --- Story 18.1: skipOnToolResultHook flag ---
+
+    it("executeTool with skipOnToolResultHook=true skips the onToolResult hook", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => ({
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "enhanced-18-1" },
+          ],
+        }),
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-18-1",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const result = await registry.executeTool(
+        "evaluate",
+        { expression: "21*2", await_promise: false },
+        undefined,
+        { skipOnToolResultHook: true },
+      );
+
+      // Hook must NOT have fired
+      expect(hookFn).not.toHaveBeenCalled();
+      // Content must NOT contain the "enhanced-18-1" text
+      const hasEnhanced = result.content.some(
+        (b) => b.type === "text" && (b as { text: string }).text === "enhanced-18-1",
+      );
+      expect(hasEnhanced).toBe(false);
+      // Base tool result still present — "42" from evaluate
+      expect((result.content[0] as { text: string }).text).toBe("42");
+    });
+
+    it("executeTool without options still invokes the hook (default opt-in)", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => result,
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-18-1-default",
+        {} as never,
+      );
+      registry.registerAll();
+
+      // No 4th arg — current behavior preserved
+      await registry.executeTool("evaluate", {
+        expression: "1",
+        await_promise: false,
+      });
+
+      expect(hookFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("executeTool with skipOnToolResultHook=true still runs a11yTree.reset on navigate", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockImplementation(async (method: string) => {
+          if (method === "Page.navigate") return { frameId: "frame1" };
+          if (method === "Runtime.evaluate")
+            return { result: { type: "string", value: "complete" } };
+          return {};
+        }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      // Hook registered — must still be bypassed due to flag
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => result,
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const resetSpy = vi.spyOn(a11yTree, "reset");
+      resetSpy.mockClear();
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-18-1-reset",
+        {} as never,
+      );
+      registry.registerAll();
+
+      await registry.executeTool(
+        "navigate",
+        { url: "http://example.com" },
+        undefined,
+        { skipOnToolResultHook: true },
+      );
+
+      // reset() must still run (navigation invariant)
+      expect(resetSpy).toHaveBeenCalled();
+      // Hook must NOT fire
+      expect(hookFn).not.toHaveBeenCalled();
+      resetSpy.mockRestore();
+    });
+
+    it("runAggregationHook invokes the onToolResult hook without bypass", async () => {
+      const mockCdpClient = {
+        send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
+      } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => ({
+          ...result,
+          content: [
+            ...result.content,
+            { type: "text" as const, text: "aggregated" },
+          ],
+        }),
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-18-1-agg",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const fakeResult: import("./types.js").ToolResponse = {
+        content: [{ type: "text", text: "click ok" }],
+        _meta: { elapsedMs: 5, method: "click" },
+      };
+      await registry.runAggregationHook(fakeResult, "click");
+
+      expect(hookFn).toHaveBeenCalledTimes(1);
+      const [calledName] = hookFn.mock.calls[0];
+      expect(calledName).toBe("click");
+      const lastBlock = fakeResult.content[fakeResult.content.length - 1] as {
+        text: string;
+      };
+      expect(lastBlock.text).toBe("aggregated");
+    });
+
+    it("runAggregationHook respects the isError guard", async () => {
+      const mockCdpClient = { send: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+
+      const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+        async (_name, result, _ctx) => result,
+      );
+      registerProHooks({ onToolResult: hookFn });
+
+      const registry = new ToolRegistry(
+        mockServer,
+        mockCdpClient,
+        "session-18-1-agg-err",
+        {} as never,
+      );
+      registry.registerAll();
+
+      const fakeResult: import("./types.js").ToolResponse = {
+        content: [{ type: "text", text: "boom" }],
+        isError: true,
+        _meta: { elapsedMs: 1, method: "click" },
+      };
+      await registry.runAggregationHook(fakeResult, "click");
+
+      // isError-Guard in _runOnToolResultHook bleibt auch fuer Aggregation scharf
+      expect(hookFn).not.toHaveBeenCalled();
+    });
+
+    // --- M2 (Code-Review 18.1): Dialog/Relaunch-Injection trotz Skip ---
+
+    it(
+      "executeTool with skipOnToolResultHook=true still runs _injectDialogNotifications and _injectRelaunchNotice",
+      async () => {
+        // Regression test for Task 1.3 / M2: Dialog-Notifications and
+        // Relaunch-Notices are *user-/safety-feedback* paths that must keep
+        // firing even when the Ambient-Context-Hook is suppressed. run_plan
+        // relies on this so the LLM still sees "[dialog] alert: ..." text
+        // between steps, and the one-shot relaunch notice is not lost
+        // because of the plan-level hook suppression.
+        const mockCdpClient = {
+          send: vi.fn().mockResolvedValue({
+            result: { type: "number", value: 42 },
+          }),
+        } as never;
+        const toolFn = vi.fn();
+        const mockServer = { tool: toolFn } as never;
+
+        // Dialog-Handler with a pending notification — mirrors Story 6.1
+        // registry test pattern (registry.test.ts:395).
+        const consumeDialogs = vi.fn().mockReturnValue([
+          {
+            type: "alert",
+            message: "Hello from dialog!",
+            url: "https://example.com",
+          },
+        ]);
+        const mockDialogHandler = {
+          consumeNotifications: consumeDialogs,
+          pushHandler: vi.fn(),
+          popHandler: vi.fn(),
+          pendingCount: 1,
+          init: vi.fn(),
+          detach: vi.fn(),
+          reinit: vi.fn(),
+        } as never;
+
+        // Construct an `IBrowserSession` mock so we can drive
+        // `consumeRelaunchNotice()` — the legacy constructor path returns
+        // `() => null` for that hook, which would defeat the test.
+        const consumeRelaunchNoticeMock = vi
+          .fn<() => string | null>()
+          .mockReturnValue(
+            "[silbercuechrome] Chrome was relaunched silently after a lost connection.",
+          );
+        const tabCache = new TabStateCacheCtor({ ttlMs: 30_000 });
+        const browserSession = {
+          isReady: true,
+          wasEverReady: true,
+          cdpClient: mockCdpClient,
+          sessionId: "session-m2",
+          headless: false,
+          tabStateCache: tabCache,
+          sessionDefaults: new SessionDefaults(),
+          sessionManager: undefined,
+          dialogHandler: mockDialogHandler,
+          consoleCollector: undefined,
+          networkCollector: undefined,
+          domWatcher: undefined,
+          ensureReady: async () => {
+            /* test no-op */
+          },
+          consumeRelaunchNotice: consumeRelaunchNoticeMock,
+          waitForAXChange: async () => false,
+          applyTabSwitch: () => {
+            /* test no-op */
+          },
+          shutdown: async () => {
+            /* test no-op */
+          },
+        };
+
+        // Ambient-Context-Hook MUST be bypassed — if the production code
+        // accidentally skipped `_injectDialogNotifications` alongside the
+        // Ambient-Context-Hook, the test would catch it because the
+        // skipOnToolResultHook path shares the same call-site.
+        const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+          async (_name, r, _ctx) => r,
+        );
+        registerProHooks({ onToolResult: hookFn });
+
+        const registry = new ToolRegistry(
+          mockServer,
+          browserSession as never,
+        );
+        registry.registerAll();
+
+        const result = await registry.executeTool(
+          "evaluate",
+          { expression: "21*2", await_promise: false },
+          undefined,
+          { skipOnToolResultHook: true },
+        );
+
+        // Ambient-Context-Hook: MUST have been skipped
+        expect(hookFn).not.toHaveBeenCalled();
+
+        // Dialog-Handler: MUST have been consumed exactly once
+        expect(consumeDialogs).toHaveBeenCalledTimes(1);
+        // Relaunch-Notice: MUST have been consumed exactly once
+        expect(consumeRelaunchNoticeMock).toHaveBeenCalledTimes(1);
+
+        // Both user-/safety-feedback blocks MUST be in the result content
+        const allTexts = result.content
+          .filter(
+            (c): c is { type: "text"; text: string } => c.type === "text",
+          )
+          .map((c) => c.text);
+        expect(allTexts.some((t) => t.includes('[dialog] alert: "Hello from dialog!"'))).toBe(
+          true,
+        );
+        expect(allTexts.some((t) => t.includes("Chrome was relaunched silently"))).toBe(
+          true,
+        );
+      },
+    );
 
     // FR-022 (P3 fix): registerAll() must install the default Free-tier
     // onToolResult hook when the Pro-Repo did not register one. This is the

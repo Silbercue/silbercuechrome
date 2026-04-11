@@ -366,6 +366,8 @@ Niedrige Priorität. Canvas ist inherent opak (Pixel, keine DOM-Nodes). Ein obse
 | 19 | FR-030 Benchmark aus /tmp | Niedrig | Prozess (kein Code) | offen |
 | 20 | FR-031 Cross-Platform Binaries | Mittel | build-binary.sh, publish.ts | offen |
 | 21 | FR-032 Memory aufraemen | Minimal | Memory-Dateien | offen |
+| 22 | FR-033 Ambient Context pro Step in run_plan | Mittel | registry.ts, plan-executor.ts, run-plan.ts | gefixt |
+| 23 | FR-034 Step-Response-Aggregation in run_plan verbose | Mittel | plan-executor.ts | gefixt |
 
 ---
 
@@ -719,3 +721,134 @@ Mindestens 5-6 Memory-Eintraege in `MEMORY.md` sind historisch abgeschlossen und
 Veraltete Memory-Eintraege entfernen oder als "historisch" markieren. Nicht durch den Frictioneer — manuell oder per session-recall Cleanup.
 
 **Aufwand:** Minimal — Memory-Dateien loeschen/archivieren.
+
+---
+
+## FR-033: Ambient Context pro Step in run_plan — gefixt (Story 18.1)
+
+### Problem
+`run_plan` hat pro Zwischen-Step den vollen Ambient-Context-Hook ausgeloest
+(`onToolResult` Pro-Hook in `src/registry.ts`). Bei einem typischen 10-Step-Plan
+lief der Hook 10 Mal durch, jedes Mal mit A11y-Tree-Refresh, DOM-Diff-Bau und
+ggf. Compact-Snapshot. Forensik-Messung: etwa **2850 Chars pro Plan** durch
+entfallende Ambient-Context-Snapshots, plus **100–1350 ms pro Click-Step**
+(Herleitung: die `waitForAXChange`-Wait-Konstanten 350/500/1350 ms in
+`src/hooks/default-on-tool-result.ts`). Der zeitliche Hebel skaliert mit der
+Anzahl der Click-/Type-Steps — Plaene ohne Transition-Steps sehen die
+Zeit-Einsparung nicht, die Token-Einsparung aber schon. Der LLM braucht den
+Zwischen-Kontext nicht — er will nur den finalen Seitenzustand nach dem
+gesamten Plan sehen.
+
+**Historische Korrektur:** Die urspruenglich zitierte Zahl "1050–4050 ms pro
+Plan" war eine Papierrechnung (3 Click-Steps × Wait-Konstante), keine
+gemessene Wall-Clock auf einem konkreten Referenz-Plan. Der Deep-Dive vom
+2026-04-11 (`/tmp/forensic-deep-dive.md`) hat die korrekte Einheit geklaert:
+Einsparung ist **pro Click-Step**, nicht pro Plan.
+
+### Root Cause
+`src/plan/plan-executor.ts:161` rief `registry.executeTool(step.tool, resolvedParams)`
+ohne Opt-out fuer den `onToolResult`-Hook auf. `ToolRegistry.executeTool()`
+hatte keinen Bypass-Kanal, weil der Hook in Story 15.3 zentral pro Tool-Call
+eingehaengt wurde, ohne an `run_plan` als Spezialfall zu denken.
+
+### Fix (Epic 18.1)
+- `src/types.ts`: neuer Typ `ExecuteToolOptions` mit `skipOnToolResultHook?: boolean`.
+- `src/registry.ts`:
+  - `executeTool()` bekommt einen optionalen 4. Parameter `options?: ExecuteToolOptions`.
+  - `_runOnToolResultHook()` respektiert das Flag nach dem `isError`-Guard und
+    vor dem `hooks.onToolResult`-Aufruf. `a11yTree.reset()` auf navigate laeuft
+    bewusst davor, damit navigate-Zwischen-Steps die Ref-Caches sauber
+    invalidieren.
+  - Neue Public-Methode `runAggregationHook(result, toolName)` ruft intern
+    `_runOnToolResultHook` ohne Bypass auf.
+- `src/plan/plan-executor.ts`:
+  - Alle Step-Calls laufen jetzt mit `{ skipOnToolResultHook: true }`.
+  - Am Plan-Ende wird einmalig `registry.runAggregationHook()` ueber das letzte
+    Step-Ergebnis aufgerufen — aber nur wenn der letzte Step weder `skipped`
+    noch `isError` ist.
+- `src/tools/run-plan.ts`: Parallel-Pfad-Closure gibt das Flag in den
+  `executeTool`-Call im `registryFactory`-Closure weiter (Pro-Repo
+  executeParallel-Hook nutzt dieselbe Suppression-Semantik).
+- Unit-Tests co-located in `src/registry.test.ts`, `src/plan/plan-executor.test.ts`,
+  `src/tools/run-plan.test.ts`.
+- Messung via `scripts/run-plan-delta.mjs` (Baseline in
+  `test-hardest/ops-run-plan-baseline-v0.5.0.json`).
+
+### Erhaltene Invarianten
+- **AC-5:** `isError`-Guard bleibt VOR dem Bypass. Fehler-Steps umgehen den
+  Hook weiterhin, Aggregations-Hook wird nicht ueber ein Error-Result gelegt.
+- **AC-6:** Direkte Tool-Calls ausserhalb `run_plan` (MCP server.tool()-Pfad)
+  uebergeben keine Options — Hook laeuft wie bisher.
+- `a11yTree.reset()` auf navigate laeuft immer, auch bei gesetztem Flag.
+
+**Aufwand:** Mittel — Flag-Plumbing + Aggregations-Hook + Tests.
+
+**Source:** Story 18.1 (`_bmad-output/implementation-artifacts/18-1-ambient-context-hook-in-run-plan-unterdruecken.md`).
+
+---
+
+## FR-034: Step-Response-Aggregation in run_plan verbose — gefixt (Story 18.2)
+
+### Problem
+`run_plan` hat pro Step **alle** text-Bloecke des Tool-Outputs in den Plan-
+Response gespiegelt — bei einem `read_page`-Step landet der gesamte A11y-Tree
+(hunderte Zeilen) als Zwischen-Step-Output, bei `screenshot` wandert ein 50–
+200 KB base64-Image durch. Forensik-Messung: pro 6-Step-Plan ~250 Zeilen
+Step-Output, dominiert von genau einem `read_page`. FR-033 (Story 18.1) hat
+schon den Ambient-Context-Hook unterdrueckt — FR-034 ist der zweite Token-
+Hebel: die Form, in der `buildPlanResponse` die Step-Results selbst
+aufbereitet.
+
+### Root Cause
+`src/plan/plan-executor.ts:314–332` (Story-18.1-Stand) hat den vollen
+text-Block-Inhalt jedes Steps in eine Multi-Line-Step-Header-Zeile gequetscht
+und Image-Bloecke unverstaendert durchgereicht. Es gab keine "kompakte
+Aggregation" — der LLM bekam alle Outputs aller Steps.
+
+### Fix (Epic 18.2)
+- `src/plan/plan-executor.ts`:
+  - Neue file-lokale Helper `extractFirstRef`, `formatStepLine`,
+    `appendErrorContext`. Erfolgs-Steps werden auf eine Zeile reduziert
+    (`[i/N] OK tool (Xms): ref=eK` ODER `[i/N] OK tool (Xms): <kurztext>`,
+    max. 80 Zeichen — `STEP_LINE_COMPACT_MAX_CHARS`).
+  - Image-Bloecke aus erfolgreichen Steps werden NICHT mehr in den
+    Plan-Response uebernommen. Image-Bloecke aus Fehler-Steps (z.B.
+    `errorStrategy: "screenshot"`-Pfad) bleiben via `appendErrorContext`
+    erhalten.
+  - Fehler-Steps behalten die volle Verbose-Form (alle text-Bloecke joined
+    mit `\n`, plus Non-Text-Bloecke). Begruendung: AC-4 — der LLM braucht
+    den vollen Fehler-Kontext, um zu entscheiden, was zu tun ist.
+  - Aggregations-Hook-Output (Story 18.1) wird *nach* dem Hook-Aufruf aus
+    dem letzten Step-Result herausgeschnitten und als separater Block-
+    Schwanz an `buildPlanResponse` uebergeben — sonst verschwinden die
+    DOM-Diff-Zeilen in der Ein-Zeilen-Aggregation.
+  - Skip-Branch ist unveraendert (`[i/N] SKIP tool (condition: <expr>)`).
+- `scripts/run-plan-delta.mjs`: Gates kumulativ Story 18.1 + 18.2 angehoben
+  auf `CHAR_GATE = 2500` und `MS_GATE = 1500`. Konstanten als benannte
+  `STORY_18_1_*` / `STORY_18_2_*` mit JSDoc-Kommentar (Invariante 5).
+- Unit-Tests in `src/plan/plan-executor.test.ts` (`describe`-Block
+  "Step-Response-Aggregation (Story 18.2)"): 12 neue Tests fuer Ref-
+  Extraktion, Multi-Line-Truncate, Long-Line-Truncate-Ellipsis,
+  no-output-Fall, Image-Block-Exclusion, Skip-Branch, FAIL-Branch-Vollform,
+  errorStrategy=screenshot Image-Erhalt, Aborted-Pfad, Aggregations-Overlay-
+  Separation, FAIL-mit-Hook-Guard.
+- Bestehender `preserves image content blocks from screenshot steps`-Test
+  invertiert in `does NOT propagate image content blocks from successful
+  screenshot steps (Story 18.2)`.
+
+### Erhaltene Invarianten
+- **AC-4:** Fehler-Steps behalten den vollstaendigen Fehler-Kontext —
+  gekuerzt wird ausschliesslich auf erfolgreichen Steps.
+- **AC-5:** Skip-Branch unveraendert.
+- **AC-6:** Direkte MCP-Tool-Calls und Suspend-/Resume-Pfade beruehrt es
+  nicht — die Aggregat-Logik laeuft nur in `executePlan` Happy-Path /
+  `continue`-Pfad VOR `buildPlanResponse`.
+- **Invariante 5:** `STEP_LINE_COMPACT_MAX_CHARS = 80` als benannte Konstante
+  mit JSDoc-Kommentar; Mess-Gates ebenfalls benannte Konstanten.
+- **Invariante 4:** `extractFirstRef` nutzt `match()`+`null`-Check, keinen
+  try/catch — Fallback ist ein `undefined`-Returnwert, kein Exception-Pfad.
+
+**Aufwand:** Mittel — Helper-Extraktion + Aggregations-Overlay-Schnitt +
+Tests + Mess-Skript.
+
+**Source:** Story 18.2 (`_bmad-output/implementation-artifacts/18-2-step-response-aggregation-verschmaelern.md`).
