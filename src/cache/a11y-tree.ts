@@ -4,6 +4,7 @@ import { wrapCdpError } from "../tools/error-utils.js";
 import { CLICKABLE_TAGS, CLICKABLE_ROLES, COMPUTED_STYLES } from "../tools/visual-constants.js";
 import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
 import { debug } from "../cdp/debug.js";
+import { prefetchSlot } from "./prefetch-slot.js";
 
 /** Strip hash fragment from URL for navigation comparison.
  *  Hash-only changes (anchor navigation) should NOT reset refs. */
@@ -351,6 +352,28 @@ export class A11yTreeProcessor {
   }
 
   reset(): void {
+    // Story 18.5: Cancel any in-flight speculative prefetch BEFORE clearing
+    // the maps. If the prefetch finished after we cleared but before we
+    // cancelled, its writes would land in the freshly-emptied state with
+    // stale ref numbers (Race 3 in the Story-18.5 race-condition catalogue).
+    //
+    // Important: only the EXTERNAL `reset()` cancels the slot. The slot's
+    // own build re-uses `_resetState()` directly (without the cancel) when
+    // it discovers a URL change inside refreshPrecomputed — otherwise the
+    // build would self-abort and never write its result. See Story 18.5
+    // race-condition note "self-cancel during URL-change reset".
+    prefetchSlot.cancel();
+    this._resetState();
+  }
+
+  /**
+   * Story 18.5: Internal map-clearing helper used by `reset()` and by
+   * `refreshPrecomputed` when it detects a URL change mid-build. Does NOT
+   * touch the prefetch slot — calling `prefetchSlot.cancel()` from inside
+   * the slot's own build would self-abort the in-flight build before its
+   * cache write, defeating the entire prefetch.
+   */
+  private _resetState(): void {
     this.refMap.clear();
     this.reverseMap.clear();
     this.nodeInfoMap.clear();
@@ -471,12 +494,40 @@ export class A11yTreeProcessor {
     this._cacheVersion++;
   }
 
-  /** Hintergrund-Refresh: Laedt A11y-Tree und speichert als Cache */
+  /**
+   * Hintergrund-Refresh: Laedt A11y-Tree und speichert als Cache.
+   *
+   * Story 18.5: Optionaler `signal`-Parameter erlaubt es dem Speculative-
+   * Prefetch-Pfad, einen laufenden Build von aussen abzubrechen. Wenn der
+   * Signal vor einem Cache-Write feuert, wird das Ergebnis verworfen und
+   * der Cache bleibt unveraendert. Bestehende Aufrufer (Pro-Repo-Hook,
+   * BrowserSession.dom-watcher-callback, Tests) ueberspringen den Parameter
+   * und verhalten sich exakt wie vor Story 18.5.
+   *
+   * URL-Race (Story 18.5 AC-3): Zwischen dem URL-Fetch zu Beginn und dem
+   * Cache-Write am Ende kann die Page weiter navigieren. Vor dem Cache-Write
+   * wird die URL erneut gegen den Stand vom Anfang verglichen — bei Mismatch
+   * werden die frischen Nodes verworfen und der Cache bleibt leer/alt.
+   *
+   * Story 18.5 L1 fix: Optionaler `expectedUrl`-Parameter aktiviert den
+   * PrefetchSlot-seitigen URL-Guard. Wenn gesetzt, prueft `refreshPrecomputed`
+   * bereits am Anfang UND nochmal direkt vor dem Cache-Write, ob die aktuelle
+   * Page-URL zum Schedule-Zeitpunkt-URL passt. Weicht sie ab (stripped Hash),
+   * wird der Build verworfen — die URL hat sich zwischen Schedule und Cache-
+   * Write geaendert und der frische Stand gehoert nicht in den Cache des
+   * aktuellen Navigationsziels.
+   */
   async refreshPrecomputed(
     cdpClient: CdpClient,
     sessionId: string,
     sessionManager?: SessionManager,
+    signal?: AbortSignal,
+    expectedUrl?: string,
   ): Promise<void> {
+    // Story 18.5: Frueher Abort-Check — wenn der Slot bereits abgebrochen
+    // wurde, bevor wir ueberhaupt anfangen, sofort exit.
+    if (signal?.aborted) return;
+
     // 1. URL pruefen — wenn sich die Basis-URL (ohne Hash) geaendert hat, reset() aufrufen
     //    Hash-only-Aenderungen (z.B. /#step-alpha → /#step-beta) behalten Refs,
     //    da das DOM bei Anchor-Navigation identisch bleibt.
@@ -485,11 +536,43 @@ export class A11yTreeProcessor {
       { expression: "document.URL", returnByValue: true },
       sessionId,
     );
-    const currentUrl = urlResult.result.value;
-    if (stripHash(currentUrl) !== stripHash(this.lastUrl)) {
-      this.reset();
+    if (signal?.aborted) return;
+    const startUrl = urlResult.result.value;
+
+    // Story 18.5 L1: Pre-Read-Check — wenn der Slot einen nicht-leeren
+    // `expectedUrl` mitgegeben hat (d.h. wir laufen im Prefetch-Pfad UND
+    // der Scheduler kannte bereits eine Zielseiten-URL) und die aktuelle
+    // Page-URL schon beim Start nicht mehr passt, sofort aufgeben. Der
+    // Slot-Trigger dachte, wir pre-fetchen URL X, aber die Page ist
+    // bereits auf Y — der Cache-Write wuerde den falschen URL-Stand cachen.
+    //
+    // Leerer String ("") ist KEIN Mismatch: nach `a11yTree.reset()`
+    // (z.B. vom navigate-onToolResult-Hook) ist `currentUrl` leer, und
+    // der Registry-Trigger ruft `schedule(..., expectedUrl="")`. In dem
+    // Fall haben wir keine Referenz-URL und fallen auf den Start-URL-
+    // basierten Re-Check weiter unten zurueck.
+    if (
+      expectedUrl !== undefined
+      && expectedUrl !== ""
+      && stripHash(startUrl) !== stripHash(expectedUrl)
+    ) {
+      debug(
+        "A11yTreeProcessor: prefetch expectedUrl mismatch (expected %s, current %s), aborting build",
+        expectedUrl,
+        startUrl,
+      );
+      return;
     }
-    this.lastUrl = currentUrl;
+    if (stripHash(startUrl) !== stripHash(this.lastUrl)) {
+      // Story 18.5: Use the internal helper instead of `reset()` so the
+      // slot's own AbortController is NOT cancelled — see _resetState()
+      // doc and the "self-cancel" note in the Story-18.5 race-condition
+      // catalogue. The slot's identity-check in PrefetchSlot.schedule()
+      // protects a NEXT-scheduled slot from being clobbered, so the
+      // missing cancel here is safe.
+      this._resetState();
+    }
+    this.lastUrl = startUrl;
 
     // 2. A11y-Tree via CDP laden — no depth limit (BUG-019).
     // The precomputed cache previously primed only the top 3 levels, so any
@@ -500,6 +583,7 @@ export class A11yTreeProcessor {
       {},
       sessionId,
     );
+    if (signal?.aborted) return;
     if (!result.nodes || result.nodes.length === 0) return;
 
     // 3. Ref-IDs zuweisen (STABIL — bestehende Refs bleiben, neue bekommen neue Nummern)
@@ -529,10 +613,49 @@ export class A11yTreeProcessor {
     }
     this._activeRefsAfterRefresh = observedRefs;
 
+    // Story 18.5: Abort-Check unmittelbar vor dem Cache-Write. Wenn der
+    // Slot zwischen getFullAXTree und hier abgebrochen wurde (z.B. durch
+    // einen neuen navigate auf URL B), darf der frische Stand NICHT in
+    // den Cache geschrieben werden — sonst sieht der naechste read_page
+    // die Slot-1-Daten statt der erwarteten Slot-2-Daten.
+    if (signal?.aborted) return;
+
+    // Story 18.5 (AC-3): URL-Race-Pruefung. Zwischen dem Start-URL-Fetch
+    // (oben) und JETZT kann die Page weiter navigiert sein — z.B. weil ein
+    // click() einen Redirect ausgeloest hat oder ein paralleler navigate
+    // gefeuert wurde. Vor dem Cache-Write die URL erneut fetchen und mit
+    // dem Start-URL vergleichen. Bei Mismatch: alle frischen Nodes
+    // verwerfen, Cache bleibt unangetastet, kein Fehler.
+    //
+    // Story 18.5 L1 fix: Wenn der Slot einen NICHT-leeren expectedUrl
+    // mitgegeben hat, wird die Pruefung gegen diesen Stand durchgefuehrt —
+    // das ist der stabilere Referenzpunkt, weil er den Zeitpunkt des
+    // Schedule-Aufrufs markiert (also VOR dem Start von refreshPrecomputed).
+    // Bei leerem expectedUrl (z.B. direkt nach `reset()` im navigate-Hook)
+    // fallen wir auf startUrl zurueck, wie vor der L1-Aenderung.
+    const recheckResult = await cdpClient.send<{ result: { value: string } }>(
+      "Runtime.evaluate",
+      { expression: "document.URL", returnByValue: true },
+      sessionId,
+    );
+    if (signal?.aborted) return;
+    const recheckUrl = recheckResult.result.value;
+    const referenceUrl = (expectedUrl !== undefined && expectedUrl !== "")
+      ? expectedUrl
+      : startUrl;
+    if (stripHash(recheckUrl) !== stripHash(referenceUrl)) {
+      debug(
+        "A11yTreeProcessor: URL changed during refreshPrecomputed (%s → %s), dropping result",
+        referenceUrl,
+        recheckUrl,
+      );
+      return;
+    }
+
     // 4. Cache speichern — BUG-019: primed with Infinity so subsequent
     // cdpFetchDepth <= _precomputedDepth comparisons are always satisfied.
     this._precomputedNodes = result.nodes;
-    this._precomputedUrl = currentUrl;
+    this._precomputedUrl = startUrl;
     this._precomputedSessionId = sessionId;
     this._precomputedDepth = Infinity;
     this._cacheVersion++;
@@ -540,6 +663,7 @@ export class A11yTreeProcessor {
     // 5. Register root node for Accessibility.nodesUpdated tracking (Story 13a.2 fix).
     // getFullAXTree does NOT populate Chrome's nodes_requested_ set, so nodesUpdated
     // never fires. A single getRootAXNode call registers the root — 1 extra CDP call.
+    if (signal?.aborted) return;
     try {
       await cdpClient.send("Accessibility.getRootAXNode", {}, sessionId);
     } catch {
@@ -548,9 +672,11 @@ export class A11yTreeProcessor {
     }
 
     // 6. FR-004 + FR-005: Enrich nodes with HTML attributes and click listeners
+    if (signal?.aborted) return;
     await this._enrichNodeMetadata(cdpClient, sessionId);
 
     // Phase 3: FR-001 — detect scrollable containers (1 CDP call total)
+    if (signal?.aborted) return;
     try {
       const scrollResult = await cdpClient.send<{ result: { value: string } }>(
         "Runtime.evaluate",

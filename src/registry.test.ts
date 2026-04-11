@@ -8,6 +8,7 @@ import type { ProHooks } from "./hooks/pro-hooks.js";
 import { SessionDefaults } from "./cache/session-defaults.js";
 import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
+import { prefetchSlot } from "./cache/prefetch-slot.js";
 
 describe("ToolRegistry", () => {
   // Story 9.5: Reset Pro hooks between tests
@@ -3781,5 +3782,685 @@ describe("jsonSchemaToZodShape", () => {
     expect(obj.parse({ weird: { a: 1 } })).toEqual({ weird: { a: 1 } });
     expect(obj.parse({ weird: "string" })).toEqual({ weird: "string" });
     expect(obj.parse({ weird: 42 })).toEqual({ weird: 42 });
+  });
+});
+
+// =============================================================================
+// Story 18.5 — Speculative Prefetch
+// =============================================================================
+//
+// Integration-Tests fuer den Registry-Trigger des Speculative-Prefetch-Mechanismus.
+// Die `PrefetchSlot`-Klasse selbst hat eigene Unit-Tests in
+// `src/cache/prefetch-slot.test.ts`; dieser Block testet das Zusammenspiel:
+//
+//   executeTool(navigate|click) → fire-and-forget refreshPrecomputed im Hintergrund
+//
+// Mock-Strategie: Wir spioneren `prefetchSlot.schedule` und `a11yTree.refreshPrecomputed`
+// aus, fangen die fire-and-forget-Promises ab, und awaiten sie nach `executeTool`
+// um Reihenfolge und Cache-Effekte deterministisch zu verifizieren. Production-Code
+// awaitet diese Promises NIE — das ist der Punkt der Story.
+//
+// Jeder Test installiert einen `unhandledRejection`-Spy (siehe Dev-Notes der Story
+// "Testing Standards"), damit verpasste Catch-Ketten als harter Test-Fail
+// rotaufleuchten — sonst wuerden sie als stiller Node-Crash erst in CI erscheinen.
+
+describe("ToolRegistry — Speculative Prefetch (Story 18.5)", () => {
+  let unhandledRejections: unknown[];
+  const unhandledHandler = (err: unknown): void => {
+    unhandledRejections.push(err);
+  };
+
+  beforeEach(() => {
+    registerProHooks({});
+    process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
+    unhandledRejections = [];
+    process.on("unhandledRejection", unhandledHandler);
+    // Belt-and-suspenders: empty the slot before each test so a previous
+    // test's leftover state cannot influence ours.
+    prefetchSlot.cancel();
+  });
+
+  afterEach(() => {
+    process.off("unhandledRejection", unhandledHandler);
+    expect(unhandledRejections).toHaveLength(0);
+    delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
+    prefetchSlot.cancel();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Helper: capture the schedule()-promise so tests can await it deterministically
+  // ---------------------------------------------------------------------------
+  function spySchedule(): { capturedPromises: Promise<void>[]; restore: () => void } {
+    const capturedPromises: Promise<void>[] = [];
+    const original = prefetchSlot.schedule.bind(prefetchSlot);
+    const spy = vi
+      .spyOn(prefetchSlot, "schedule")
+      .mockImplementation((build, sessionId, expectedUrl) => {
+        const p = original(build, sessionId, expectedUrl);
+        capturedPromises.push(p);
+        return p;
+      });
+    return {
+      capturedPromises,
+      restore: () => {
+        spy.mockRestore();
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mock CDP factory: counts getFullAXTree calls per session, returns a
+  // configurable URL on Runtime.evaluate, and tracks call order so we can
+  // assert "navigate-return came BEFORE prefetch-getFullAXTree".
+  // ---------------------------------------------------------------------------
+  interface MockCdpOptions {
+    /** URL returned by Runtime.evaluate(document.URL). Can be a function for
+     *  per-call values (e.g. "first call returns A, second call returns B"). */
+    url?: string | (() => string);
+    /** If true, getFullAXTree throws — used by AC-5 error-absorption test. */
+    throwOnGetFullAXTree?: boolean;
+    /** Optional event log — pushed for each CDP call by name. */
+    callLog?: string[];
+  }
+  function makeMockCdp(opts: MockCdpOptions = {}): {
+    client: import("./cdp/cdp-client.js").CdpClient;
+    getFullAXTreeCalls: number;
+  } {
+    const state = { getFullAXTreeCalls: 0 };
+    const client = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        opts.callLog?.push(method);
+        if (method === "Runtime.evaluate") {
+          const v = typeof opts.url === "function"
+            ? opts.url()
+            : (opts.url ?? "http://localhost/");
+          return { result: { type: "string", value: v } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          state.getFullAXTreeCalls++;
+          if (opts.throwOnGetFullAXTree) {
+            throw new Error("CDP boom — getFullAXTree failed");
+          }
+          return {
+            nodes: [
+              {
+                nodeId: "1",
+                role: { value: "rootWebArea" },
+                name: { value: "Test" },
+                properties: [],
+                childIds: ["2"],
+                backendDOMNodeId: 1,
+              },
+              {
+                nodeId: "2",
+                role: { value: "button" },
+                name: { value: "Click me" },
+                properties: [],
+                childIds: [],
+                backendDOMNodeId: 2,
+              },
+            ],
+          };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        if (method === "Page.navigate") return { frameId: "f1" };
+        if (method === "DOM.resolveNode") return { object: { objectId: "obj1" } };
+        if (method === "Runtime.callFunctionOn") {
+          return { result: { type: "object", value: { x: 100, y: 100, width: 50, height: 20 } } };
+        }
+        if (method === "Input.dispatchMouseEvent") return {};
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+    return {
+      client,
+      get getFullAXTreeCalls() { return state.getFullAXTreeCalls; },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // AC-1: prefetch fires fire-and-forget — executeTool does NOT wait for it
+  // ---------------------------------------------------------------------------
+  //
+  // Test strategy: We hang the prefetch's getFullAXTree on an unresolved
+  // promise. If `executeTool` is correctly fire-and-forget, it will still
+  // return — even though the prefetch is stuck in flight. If the registry
+  // accidentally `await`ed the prefetch, the test would time out.
+  //
+  // We additionally assert that:
+  //  - the navigate handler's Page.navigate call ran BEFORE the prefetch's
+  //    getFullAXTree call (i.e. the prefetch is sequentially after, not
+  //    parallel/before)
+  //  - the prefetchSlot was scheduled exactly once
+  //  - the prefetch slot is still active when executeTool returns
+  //    (because the build is hanging)
+  it("prefetch triggers after navigate return, not before (fire-and-forget)", async () => {
+    const callOrder: string[] = [];
+    let releaseGetFullAXTree: (() => void) | undefined;
+    // Story 18.5 H1 fix: Signal the test when getFullAXTree is actually
+    // entered. The build runs in a `setImmediate()` tick and makes several
+    // `await`s before reaching getFullAXTree — awaiting a single timer tick
+    // is not enough. This promise lets the test block until the prefetch's
+    // getFullAXTree call has landed.
+    let getFullAXTreeEntered: (() => void) | undefined;
+    const getFullAXTreeEnteredPromise = new Promise<void>((resolve) => {
+      getFullAXTreeEntered = resolve;
+    });
+    const cdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        callOrder.push(method);
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          // Notify the test that the call has landed, then hang.
+          getFullAXTreeEntered?.();
+          getFullAXTreeEntered = undefined;
+          // Hang until the test releases us — proves executeTool does NOT
+          // wait for this call to finish.
+          await new Promise<void>((resolve) => {
+            releaseGetFullAXTree = resolve;
+          });
+          return { nodes: [] };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        if (method === "Page.navigate") return { frameId: "f1" };
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      cdpClient as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("navigate", { url: "http://example.com" });
+
+    // executeTool returned even though the prefetch's getFullAXTree is hung.
+    expect(result.isError).toBeFalsy();
+    expect(prefetchSlot.schedule).toHaveBeenCalledTimes(1);
+    expect(capturedPromises).toHaveLength(1);
+    // The slot promise has NOT yet resolved — proves fire-and-forget.
+    expect(prefetchSlot.isActive).toBe(true);
+
+    // Story 18.5 H1 fix: The build runs in a `setImmediate()` tick plus
+    // several `await`s before reaching getFullAXTree. Wait on the
+    // dedicated ready-signal promise for deterministic sequencing.
+    await getFullAXTreeEnteredPromise;
+
+    // Sequencing: Page.navigate (from the handler) ran BEFORE the prefetch's
+    // first getFullAXTree call. This proves the prefetch is triggered AFTER
+    // the handler logic, not in parallel.
+    const pageNavigateIdx = callOrder.indexOf("Page.navigate");
+    const firstGetFullAXTreeIdx = callOrder.indexOf("Accessibility.getFullAXTree");
+    expect(pageNavigateIdx).toBeGreaterThanOrEqual(0);
+    expect(firstGetFullAXTreeIdx).toBeGreaterThanOrEqual(0);
+    expect(firstGetFullAXTreeIdx).toBeGreaterThan(pageNavigateIdx);
+
+    // Release the prefetch and wait for it to finish so the slot can clean up.
+    releaseGetFullAXTree?.();
+    await capturedPromises[0];
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-1 / AC-6 Test 2: prefetch triggers after click return for non-error
+  // results, but NOT for isError: true
+  // ---------------------------------------------------------------------------
+  it("prefetch triggers after click return for non-error results", async () => {
+    const mock = makeMockCdp();
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      mock.client as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // First read_page so click can resolve "e2" via the precomputed cache.
+    await registry.executeTool("read_page", {});
+    // Drain any prefetch the registry triggered as part of read_page (it
+    // should NOT trigger one — read_page is not in the trigger list — but
+    // belt-and-suspenders).
+    await Promise.all(capturedPromises.splice(0));
+
+    const clickResult = await registry.executeTool("click", { ref: "e2" });
+    expect(clickResult.isError).toBeFalsy();
+
+    // The click triggered a prefetch.
+    expect(capturedPromises).toHaveLength(1);
+    await capturedPromises[0];
+
+    restore();
+  });
+
+  it("prefetch does NOT trigger when click returns isError:true", async () => {
+    const mock = makeMockCdp();
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      mock.client as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // Click on an unknown ref → isError: true
+    const result = await registry.executeTool("click", { ref: "e9999" });
+    expect(result.isError).toBe(true);
+
+    // No prefetch was scheduled.
+    expect(capturedPromises).toHaveLength(0);
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-1 / AC-6 Test 3: prefetch does NOT trigger for non-navigate/non-click tools
+  // ---------------------------------------------------------------------------
+  it("prefetch does NOT trigger for tools other than navigate/click", async () => {
+    const cdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return {
+            nodes: [
+              {
+                nodeId: "1",
+                role: { value: "rootWebArea" },
+                name: { value: "Test" },
+                properties: [],
+                childIds: [],
+                backendDOMNodeId: 1,
+              },
+            ],
+          };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      cdpClient as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // Tools that should NOT trigger a prefetch. We pick ones that work
+    // cleanly with this minimal CDP mock (press_key, scroll, read_page).
+    // type/fill_form/evaluate need richer mocks; the registry path through
+    // executeTool is identical for all of them, so the trigger-condition
+    // assertion is unaffected.
+    await registry.executeTool("press_key", { key: "Enter" });
+    await registry.executeTool("scroll", { direction: "down", amount: 100 });
+    await registry.executeTool("read_page", {});
+
+    // Drain any leftover slot promise (none expected, but defensive).
+    if (capturedPromises.length > 0) {
+      await Promise.all(capturedPromises);
+    }
+
+    expect(capturedPromises).toHaveLength(0);
+    expect(prefetchSlot.schedule).not.toHaveBeenCalled();
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Story 18.5 H2 review follow-up — extended AC-6 negative coverage
+  // ---------------------------------------------------------------------------
+  //
+  // Tests the negative case for the remaining non-transition tools that the
+  // original AC-6 test-3 omitted: type, fill_form, screenshot, wait_for.
+  // These tools need richer CDP mocks than press_key/scroll/read_page, so
+  // instead of wiring up a full CDP-mock for each, we inject a synthetic
+  // "always-success" handler directly into the registry's `_handlers` map
+  // for each name. This isolates the executeTool trigger-condition
+  // (`name === "navigate" || name === "click"`) as the unit under test —
+  // which is exactly what the review finding asked for.
+  it("H2 fix — prefetch does NOT trigger for type, fill_form, screenshot, wait_for (even on success)", async () => {
+    const mock = makeMockCdp();
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      mock.client as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // Inject synthetic success-handlers so we can drive the four tools
+    // cleanly without needing a full CDP mock per tool. The trigger-check
+    // in executeTool runs on `name` only — the handler body is irrelevant
+    // as long as `isError` is falsy.
+    const successHandler = async (): Promise<import("./types.js").ToolResponse> => ({
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      _meta: { elapsedMs: 0, method: "fake", response_bytes: 0 },
+    });
+    const handlers = (registry as unknown as {
+      _handlers: Map<
+        string,
+        (params: Record<string, unknown>) => Promise<import("./types.js").ToolResponse>
+      >;
+    })._handlers;
+    handlers.set("type", successHandler);
+    handlers.set("fill_form", successHandler);
+    handlers.set("screenshot", successHandler);
+    handlers.set("wait_for", successHandler);
+
+    // Execute each tool; none of them may trigger a prefetch schedule.
+    const typeResult = await registry.executeTool("type", { ref: "e1", text: "x" });
+    expect(typeResult.isError).toBeFalsy();
+    const fillResult = await registry.executeTool("fill_form", { fields: [] });
+    expect(fillResult.isError).toBeFalsy();
+    const screenshotResult = await registry.executeTool("screenshot", {});
+    expect(screenshotResult.isError).toBeFalsy();
+    const waitResult = await registry.executeTool("wait_for", { selector: "body" });
+    expect(waitResult.isError).toBeFalsy();
+
+    // The trigger-condition must have rejected all four calls.
+    expect(capturedPromises).toHaveLength(0);
+    expect(prefetchSlot.schedule).not.toHaveBeenCalled();
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-3 / AC-6 Test 4: URL mismatch between prefetch and use drops the result
+  // ---------------------------------------------------------------------------
+  //
+  // Strategy: refreshPrecomputed makes TWO `document.URL` queries — the start
+  // fetch and the post-getFullAXTree re-check. Other Runtime.evaluate calls
+  // (from the navigate handler, scrollable detection, etc.) use different
+  // expressions. We track ONLY the document.URL queries by expression and
+  // return URL A on the first, URL B on the second — simulating a real
+  // navigation that completed while the prefetch was in flight.
+  it("URL mismatch during refresh drops the cache write without error", async () => {
+    let documentUrlCallCount = 0;
+    const cdpClient = {
+      send: vi.fn().mockImplementation(async (method: string, params?: unknown) => {
+        if (method === "Runtime.evaluate") {
+          const expr = (params as { expression?: string } | undefined)?.expression ?? "";
+          if (expr === "document.URL") {
+            documentUrlCallCount++;
+            // First doc-URL inside refreshPrecomputed → A.
+            // Second doc-URL → B (the URL changed!).
+            // Anything beyond → A (defensive default; not reached).
+            if (documentUrlCallCount === 1) {
+              return { result: { type: "string", value: "http://a.com/" } };
+            }
+            if (documentUrlCallCount === 2) {
+              return { result: { type: "string", value: "http://b.com/" } };
+            }
+            return { result: { type: "string", value: "http://a.com/" } };
+          }
+          // Other Runtime.evaluate calls (navigate handler readyState etc.)
+          return { result: { type: "string", value: "http://a.com/" } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          return {
+            nodes: [
+              {
+                nodeId: "1",
+                role: { value: "rootWebArea" },
+                name: { value: "Test" },
+                properties: [],
+                childIds: [],
+                backendDOMNodeId: 1,
+              },
+            ],
+          };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        if (method === "Page.navigate") return { frameId: "f1" };
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      cdpClient as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    const result = await registry.executeTool("navigate", { url: "http://a.com" });
+    expect(result.isError).toBeFalsy();
+
+    // Wait for the prefetch to complete (or rather: to drop its result).
+    expect(capturedPromises).toHaveLength(1);
+    await capturedPromises[0];
+
+    // Both document.URL calls happened — proves the recheck path ran.
+    expect(documentUrlCallCount).toBeGreaterThanOrEqual(2);
+
+    // Cache must NOT contain the prefetch's result. Because the URL changed
+    // mid-build, refreshPrecomputed bailed out before writing the precomputed
+    // cache. hasPrecomputed("session-A") therefore returns false.
+    expect(a11yTree.hasPrecomputed("session-A")).toBe(false);
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-4 / AC-6 Test 5: Single slot — second prefetch cancels the first
+  // ---------------------------------------------------------------------------
+  it("single slot: second prefetch cancels the first", async () => {
+    // Two rapid-fire navigate calls. We need a way to make the FIRST refresh
+    // hang long enough so the second navigate aborts it. Strategy: the first
+    // call returns slowly, the second proceeds normally.
+    let firstResolveGetTree: (() => void) | undefined;
+    let getFullAXTreeCallCount = 0;
+    // Story 18.5 H1 fix: signal when the first getFullAXTree call has
+    // actually entered (after the setImmediate tick + URL evaluate).
+    let firstCallEntered: (() => void) | undefined;
+    const firstCallEnteredPromise = new Promise<void>((resolve) => {
+      firstCallEntered = resolve;
+    });
+    const cdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          getFullAXTreeCallCount++;
+          if (getFullAXTreeCallCount === 1) {
+            // Notify the test that slot 1 has reached its getFullAXTree.
+            firstCallEntered?.();
+            firstCallEntered = undefined;
+            // Hang the first call until we manually release it.
+            await new Promise<void>((resolve) => {
+              firstResolveGetTree = resolve;
+            });
+          }
+          return {
+            nodes: [
+              {
+                nodeId: "1",
+                role: { value: "rootWebArea" },
+                name: { value: "Test" },
+                properties: [],
+                childIds: [],
+                backendDOMNodeId: 1,
+              },
+            ],
+          };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        if (method === "Page.navigate") return { frameId: "f1" };
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      cdpClient as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // First navigate — kicks off slot 1 (which hangs on getFullAXTree).
+    await registry.executeTool("navigate", { url: "http://example.com/a" });
+    expect(capturedPromises).toHaveLength(1);
+    // Slot 1 is alive; verify it has not finished yet.
+    expect(prefetchSlot.isActive).toBe(true);
+
+    // Story 18.5 H1 fix: the build runs in a setImmediate tick plus
+    // several awaits. Block until slot 1 has actually landed in its
+    // getFullAXTree call — otherwise slot 2's abort would hit slot 1
+    // BEFORE the build body even started, and slot 1 would return on
+    // its leading `if (signal.aborted) return;` without ever incrementing
+    // the getFullAXTree counter.
+    await firstCallEnteredPromise;
+
+    // Second navigate — kicks off slot 2 and aborts slot 1.
+    await registry.executeTool("navigate", { url: "http://example.com/b" });
+    expect(capturedPromises).toHaveLength(2);
+
+    // Now release slot 1's hung getFullAXTree. Its result must be dropped.
+    firstResolveGetTree?.();
+
+    // Wait for both slot promises to resolve.
+    await Promise.all(capturedPromises);
+
+    // Final state: slot is empty, slot 2's data won the cache, slot 1 was
+    // dropped via signal.aborted before its cache write.
+    expect(prefetchSlot.isActive).toBe(false);
+    // Both slot builds called getFullAXTree — slot 1 (released after abort)
+    // and slot 2 (normal completion) — but only slot 2 made it to the
+    // cache write. Total getFullAXTree calls = 2.
+    expect(getFullAXTreeCallCount).toBe(2);
+    // Cache holds slot 2's stand.
+    expect(a11yTree.hasPrecomputed("session-A")).toBe(true);
+
+    restore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // AC-5 / AC-6 Test 6: prefetch errors are silently absorbed
+  // ---------------------------------------------------------------------------
+  it("prefetch errors are silently absorbed — no user-visible impact", async () => {
+    // Build a CDP client that succeeds for the navigate handler itself but
+    // throws when called from refreshPrecomputed. We discriminate by call
+    // sequence: navigate triggers Page.navigate + a few Runtime.evaluate
+    // calls, refreshPrecomputed calls Runtime.evaluate FIRST then
+    // Accessibility.getFullAXTree. We make getFullAXTree throw — the
+    // navigate handler does not call it directly (the click handler would,
+    // but we are testing navigate here).
+    let throwOnGetFullAXTree = false;
+    const cdpClient = {
+      send: vi.fn().mockImplementation(async (method: string) => {
+        if (method === "Runtime.evaluate") {
+          return { result: { type: "string", value: "http://localhost/" } };
+        }
+        if (method === "Accessibility.getFullAXTree") {
+          if (throwOnGetFullAXTree) {
+            throw new Error("CDP boom — getFullAXTree refused");
+          }
+          return {
+            nodes: [
+              {
+                nodeId: "1",
+                role: { value: "rootWebArea" },
+                name: { value: "Test" },
+                properties: [],
+                childIds: [],
+                backendDOMNodeId: 1,
+              },
+            ],
+          };
+        }
+        if (method === "Accessibility.getRootAXNode") return {};
+        if (method === "Page.navigate") return { frameId: "f1" };
+        return {};
+      }),
+      on: vi.fn(),
+      once: vi.fn(),
+      off: vi.fn(),
+    } as unknown as import("./cdp/cdp-client.js").CdpClient;
+
+    const { capturedPromises, restore } = spySchedule();
+    a11yTree.reset();
+
+    const registry = new ToolRegistry(
+      { tool: vi.fn() } as never,
+      cdpClient as never,
+      "session-A",
+      {} as never,
+    );
+    registry.registerAll();
+
+    // Arm the throw NOW — refreshPrecomputed during the navigate-trigger
+    // prefetch will hit the failing getFullAXTree.
+    throwOnGetFullAXTree = true;
+
+    const result = await registry.executeTool("navigate", { url: "http://example.com" });
+
+    // The navigate handler itself returns success — the prefetch error
+    // is absorbed and never bubbles back to the LLM.
+    expect(result.isError).toBeFalsy();
+    // The error text from getFullAXTree must NOT appear in the response.
+    const allText = result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    expect(allText).not.toContain("CDP boom");
+    expect(allText).not.toContain("getFullAXTree");
+
+    // Wait for the prefetch promise to complete (with absorbed error).
+    expect(capturedPromises).toHaveLength(1);
+    await capturedPromises[0];
+
+    // Slot is empty, cache was not written, and the unhandledRejection-spy
+    // (in afterEach) will verify no rejection leaked.
+    expect(prefetchSlot.isActive).toBe(false);
+
+    restore();
   });
 });

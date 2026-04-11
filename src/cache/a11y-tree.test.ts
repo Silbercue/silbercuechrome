@@ -5088,4 +5088,152 @@ describe("A11yTreeProcessor", () => {
       expect(youtubeLink?.backendNodeId).toBe(257);
     });
   });
+
+  // =========================================================================
+  // Story 18.5 M2 review follow-up — Race 3 reset/prefetch interaction
+  // =========================================================================
+  //
+  // These tests lock down the exact split between the EXTERNAL `reset()`
+  // entrypoint (which cancels the prefetch slot) and the INTERNAL
+  // `_resetState()` helper (which does NOT touch the slot). The split is
+  // what prevents `refreshPrecomputed`'s URL-change branch from self-
+  // aborting the very build it is running inside.
+  describe("Story 18.5 M2 — reset / _resetState / prefetchSlot interaction", () => {
+    it("reset() cancels the prefetch slot (external path)", async () => {
+      // Import the singleton lazily so we can spy on its cancel method.
+      const { prefetchSlot } = await import("./prefetch-slot.js");
+      const cancelSpy = vi.spyOn(prefetchSlot, "cancel");
+
+      // Prime the processor with a tree so there is real state to reset.
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      await processor.refreshPrecomputed(
+        mockCdpClient(nodes, "https://example.com/reset-test"),
+        "s1",
+      );
+
+      cancelSpy.mockClear();
+      processor.reset();
+
+      // External reset path MUST cancel the slot.
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+
+      cancelSpy.mockRestore();
+    });
+
+    it("refreshPrecomputed URL-change branch uses _resetState(), NOT reset() (no self-cancel)", async () => {
+      // Story 18.5 Race 3 regression test: verify that when
+      // refreshPrecomputed detects a URL change mid-build it uses the
+      // internal `_resetState()` helper (which leaves the prefetch slot
+      // alone) instead of the external `reset()` (which would self-cancel
+      // the slot and drop the cache write).
+      const { prefetchSlot } = await import("./prefetch-slot.js");
+      const cancelSpy = vi.spyOn(prefetchSlot, "cancel");
+
+      // First refresh: prime lastUrl to URL-A so the next refresh detects
+      // a URL change and enters the reset branch.
+      const nodesA: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      await processor.refreshPrecomputed(
+        mockCdpClient(nodesA, "https://example.com/page-a"),
+        "s1",
+      );
+
+      // Clear the spy so we only observe calls from the SECOND refresh.
+      cancelSpy.mockClear();
+
+      // Second refresh: URL is now B. The URL-change branch must clear
+      // maps via _resetState() (internal) without cancelling the slot.
+      const nodesB: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 200,
+        }),
+      ];
+      await processor.refreshPrecomputed(
+        mockCdpClient(nodesB, "https://example.com/page-b"),
+        "s1",
+      );
+
+      // CRITICAL assertion: no cancel() call during the URL-change branch.
+      // If the implementation calls `reset()` here, the slot would self-
+      // cancel and the cache-write below would never happen.
+      expect(cancelSpy).not.toHaveBeenCalled();
+
+      // The refresh's cache-write ran to completion (slot was NOT self-
+      // cancelled) — verified by the fresh precomputed cache with the new
+      // refs.
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+      expect(processor.resolveRef("e1")).toBe(200);
+
+      cancelSpy.mockRestore();
+    });
+
+    it("L1 fix — refreshPrecomputed(signal, expectedUrl) drops the build on URL mismatch", async () => {
+      // The L1 follow-up added active use of `expectedUrl` as a URL-race
+      // guard. When the prefetch was scheduled for URL X but the page is
+      // already on URL Y by the time refreshPrecomputed starts, the build
+      // must abort without touching the cache.
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+
+      // The mock returns URL "page-y" — but the scheduler expected "page-x".
+      const cdp = mockCdpClient(nodes, "https://example.com/page-y");
+      const controller = new AbortController();
+
+      await processor.refreshPrecomputed(
+        cdp,
+        "s1",
+        undefined,
+        controller.signal,
+        "https://example.com/page-x", // expectedUrl mismatches document.URL
+      );
+
+      // Cache must NOT have been written — the pre-read URL guard bailed
+      // before getFullAXTree was even called.
+      expect(processor.hasPrecomputed("s1")).toBe(false);
+    });
+
+    it("L1 fix — refreshPrecomputed accepts matching expectedUrl and writes cache", async () => {
+      // Positive counterpart: when expectedUrl matches the live URL, the
+      // build proceeds normally and primes the cache.
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+
+      const cdp = mockCdpClient(nodes, "https://example.com/page-x");
+      const controller = new AbortController();
+
+      await processor.refreshPrecomputed(
+        cdp,
+        "s1",
+        undefined,
+        controller.signal,
+        "https://example.com/page-x", // expectedUrl matches
+      );
+
+      expect(processor.hasPrecomputed("s1")).toBe(true);
+      expect(processor.resolveRef("e1")).toBe(100);
+    });
+  });
 });

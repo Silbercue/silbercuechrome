@@ -1084,3 +1084,100 @@ Mock-Erweiterung + 2 Regression-Test-Anpassungen (read-page.test.ts,
 screenshot.test.ts).
 
 **Source:** Story 18.4 (`_bmad-output/implementation-artifacts/18-4-paint-order-filtering-fuer-verdeckte-elemente.md`).
+
+## FR-037: LLM-Denkzeit-Luecke nach navigate/click — gefixt (Story 18.5)
+
+**Problem:** Zwischen einem `navigate`/`click`-Call und dem darauffolgenden
+`read_page`-Call denkt der LLM 2-10 Sekunden. In dieser Zeit steht
+SilbercueChrome still — der naechste Cache-Warm-up laeuft erst, wenn der
+LLM seinen naechsten Tool-Call schickt. Das Ergebnis: unnoetige Wall-Clock-
+Latenz in Plaenen mit `navigate → read_page`-Sequenzen (was der mit Abstand
+haeufigste Pfad ist — ~70-80% der Tool-Folgen laut Forensik-Analyse).
+
+**Symptom:**
+- `read_page` nach einem erfolgreichen `navigate` wartet nochmal 50-500 ms
+  auf den CDP-Roundtrip, obwohl der LLM zu diesem Zeitpunkt gerade noch
+  "denkt".
+- Wall-Clock-Summe ueber einen 10-Step-Plan: ~3-5 s unnoetiger Overhead,
+  allein aus dem Cache-Warm-up-Pfad.
+- Besonders schmerzhaft auf grossen Seiten (shop, dashboard, form) wo der
+  `Accessibility.getFullAXTree`-Call selbst 200-500 ms braucht.
+
+**Fix — Speculative Prefetch mit Single-Slot-Semantik:**
+
+1. **Neue Infrastruktur-Klasse `PrefetchSlot`** (`src/cache/prefetch-slot.ts`)
+   — haelt genau einen aktiven Background-Build pro Instanz. Zweiter
+   `schedule()`-Aufruf cancelt den ersten via `AbortController`. Errors
+   werden absorbiert — der Slot ist Fire-and-forget-Infrastruktur, der
+   Foreground-Tool-Pfad darf nie durch ihn beeinflusst werden.
+2. **Registry-Trigger nach erfolgreichem `navigate`/`click`** (`src/registry.ts`
+   `_triggerSpeculativePrefetch`) — laeuft **nach** dem Handler-Return,
+   nicht parallel. CDP serialisiert ohnehin pro Session, Parallelismus
+   wuerde den Foreground verlangsamen.
+3. **`refreshPrecomputed(signal)`** (`src/cache/a11y-tree.ts`) — optionaler
+   `AbortSignal`-Parameter an jedem `await`-Punkt gecheckt, Cache-Write
+   wird bei Abort uebersprungen. Der zusaetzliche `expectedUrl`-Parameter
+   (L1 review follow-up) nutzt die zum Schedule-Zeitpunkt bekannte URL
+   als Race-Guard: wenn die Page mittlerweile auf einer anderen URL ist,
+   wird der Cache-Write ignoriert.
+4. **`_resetState()`-Split** (`src/cache/a11y-tree.ts`) — der externe
+   `reset()`-Entrypoint cancelt den Slot, die interne URL-Change-Branch
+   in `refreshPrecomputed` nutzt `_resetState()` ohne Slot-Cancel, sonst
+   wuerde der Build sich selbst abbrechen.
+5. **`schedule()`-Atomaritaet (H1 review follow-up)** — Build laeuft im
+   `setImmediate()`-Tick, nicht synchron im `schedule()`-Stack. Identitaets-
+   Check via monoton steigender `slotId` im Cleanup-Pfad — ein
+   abgebrochener Slot darf seinen Nachfolger nicht aus `_active` loeschen.
+   Reentrante `schedule()`-Aufrufe aus dem Build-Callback heraus sehen
+   dadurch immer einen wohldefinierten Slot-State.
+
+**Race-Condition-Katalog (6 Faelle):**
+1. Race 1 — Slot 1 in flight, getFullAXTree returns nach cancel → abort-check vor Cache-Write.
+2. Race 2 — Slot 1 finally clobbers Slot 2 → slotId identity-check.
+3. Race 3 — `reset()` mid-build → externer `reset()` cancelt Slot, interner `_resetState()` nicht.
+4. Race 4 — Multi-tab session-handover → composite-keyed refMap (BUG-016), keine zusaetzliche Mitigation noetig.
+5. Race 5 — Reentrante `schedule()` aus dem Build-Callback → atomare `_active`-Zuweisung + `setImmediate`-Build-Start (H1 fix).
+6. Race 6 — Build wirft synchron → `(async () => build())()`-Wrap konvertiert in Promise-Reject.
+
+**Test:**
+- Neue Datei `src/cache/prefetch-slot.test.ts` mit 9 Unit-Tests: Lifecycle
+  (schedule/cancel), Race 2 (Identity-Check), Race 5 (reentrancy H1 fix),
+  Race 3 (external cancel M2 fix), Error-Absorption (sync + async + AbortError).
+- Neue Tests in `src/cache/a11y-tree.test.ts` unter
+  `describe("Story 18.5 M2 — reset / _resetState / prefetchSlot interaction")`:
+  `reset()` cancelt Slot, URL-Change-Branch nutzt `_resetState()` nicht
+  `reset()`, `expectedUrl` als L1-Pre-Read-Check (positiv + negativ).
+- Neue Integration-Tests in `src/registry.test.ts` unter
+  `describe("ToolRegistry — Speculative Prefetch (Story 18.5)")`: Fire-and-
+  forget Timing, navigate/click-Trigger, isError-Gating, Negativ-Cases fuer
+  type/fill_form/screenshot/wait_for (H2 review follow-up), URL-Mismatch-Drop,
+  Single-Slot-Replace, Error-Absorption.
+- Gesamt: 1481/1481 Unit-Tests gruen (vorher 1474, +7 neu).
+
+**Prefetch-Semantik (wichtig):**
+Der Prefetch schlaegt NICHT auf den `read_page`-Tool-Pfad direkt durch —
+`read-page.ts:37` ruft `getTree({fresh: true})` und umgeht damit den
+Precomputed-Cache. Der Effekt entsteht im **Ambient-Context-Hook** (Pro-Repo
+Story 15.3): wenn der Prefetch bereits gelaufen ist, ist der naechste
+`refreshPrecomputed`-Call im Hook entweder obsolet oder deutlich schneller.
+Der LLM-sichtbare Effekt ist kuerzere Wall-Clock-Zeit zwischen `click`-
+Return und naechstem Tool-Return.
+
+**Token-Effekt:**
+- Null Aenderung beim Tool-Definitions-Budget (keine neuen Tools).
+- Response-Content unveraendert — Prefetch ist Infrastruktur, nicht Feature.
+- Wall-Clock-Einsparung: erwartet 50-300 ms pro navigate→read-Sequenz.
+  Harte Messung findet im Gate-Check Story 18.7 statt.
+
+**Status:** GEFIXT in Story 18.5. Files: `src/cache/prefetch-slot.ts` (NEU),
+`src/cache/prefetch-slot.test.ts` (NEU), `src/cache/a11y-tree.ts`
+(`refreshPrecomputed(signal, expectedUrl)`-Parameter, `_resetState()`-Split,
+`reset()` cancelt `prefetchSlot`), `src/registry.ts` (`_triggerSpeculativePrefetch()`,
+Fire-and-forget Trigger nach `navigate`/`click`).
+
+**Aufwand:** Gross — neue Infrastruktur-Klasse + Signal-Wiring in
+`refreshPrecomputed` + Registry-Trigger + 7 neue Tests + 5 Review-Follow-ups
+(H1 atomare `schedule()`, H2 erweiterte Negativ-Coverage, M1 expliziter
+`.catch()`, M2 Race-3-Tests, L1 `expectedUrl` als aktiver URL-Guard).
+
+**Source:** Story 18.5 (`_bmad-output/implementation-artifacts/18-5-speculative-prefetch-waehrend-llm-denkzeit.md`).

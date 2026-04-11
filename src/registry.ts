@@ -63,6 +63,8 @@ import { getProHooks, registerProHooks, proFeatureError } from "./hooks/pro-hook
 import type { ToolRegistryPublic } from "./hooks/pro-hooks.js";
 import { createDefaultOnToolResult } from "./hooks/default-on-tool-result.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
+import { prefetchSlot } from "./cache/prefetch-slot.js";
+import { debug } from "./cdp/debug.js";
 
 /**
  * Story 18.3 — Transition-Set fuer die schlanke Default-Tool-Liste.
@@ -521,7 +523,94 @@ export class ToolRegistry implements ToolRegistryPublic {
         result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
       }
     }
+    // Story 18.5: Speculative Prefetch — kick off a background A11y-Tree
+    // refresh after a successful navigate/click so the next read_page hits
+    // a warm cache (or, more precisely, the next ambient-context hook
+    // skips its own refreshPrecomputed roundtrip). Fire-and-forget; errors
+    // are absorbed inside PrefetchSlot, never surfaced to the LLM.
+    //
+    // Restricted to navigate/click — see Dev Notes in
+    // _bmad-output/implementation-artifacts/18-5-speculative-prefetch-waehrend-llm-denkzeit.md
+    // (Alternative D rejection): type/fill_form/press_key carry an AJAX
+    // settle tail that would let the prefetch capture an in-between DOM.
+    if (!result.isError && (name === "navigate" || name === "click")) {
+      this._triggerSpeculativePrefetch();
+    }
     return result;
+  }
+
+  /**
+   * Story 18.5: Kicks off a background A11y-Tree build that warms the
+   * precomputed cache so the next read_page can skip the CDP round-trip.
+   * Fire-and-forget — must NEVER block the current tool response.
+   *
+   * Lifecycle rules (enforced by `PrefetchSlot`):
+   *  - Exactly one slot per session — second trigger cancels the first
+   *    via AbortController.
+   *  - URL mismatch between schedule and completion → result dropped
+   *    (the URL re-check inside `refreshPrecomputed` handles this).
+   *  - Errors are absorbed (debug-log only, never surfaced to LLM).
+   *
+   * The method is sync (no `await`) — that is the contract from AC-1.
+   * If the BrowserSession is not ready (legacy test path with no real
+   * CDP client), the call is a silent no-op.
+   *
+   * @see _bmad-output/implementation-artifacts/18-5-speculative-prefetch-waehrend-llm-denkzeit.md
+   */
+  private _triggerSpeculativePrefetch(): void {
+    // Defensive readiness check: in production `executeTool` has already
+    // awaited `ensureReady()` so the getters below will not throw, but the
+    // legacy test constructor builds a synthetic session whose CDP client
+    // may be a `{}` stub. We never want a synthetic-session test to crash
+    // through this path.
+    if (!this._browserSession.isReady) return;
+    let cdpClient;
+    let sessionId: string;
+    try {
+      cdpClient = this._browserSession.cdpClient;
+      sessionId = this._browserSession.sessionId;
+    } catch {
+      // Session getters throw if cdpClient/sessionId are not yet set —
+      // skip the prefetch in that case (no LLM-visible error possible).
+      return;
+    }
+    const sessionManager = this._browserSession.sessionManager;
+    const expectedUrl = a11yTree.currentUrl;
+
+    // Story 18.5 Task 3 / M1 review follow-up: fire-and-forget mit
+    // EXPLIZITEM `.catch()`-Callsite. `PrefetchSlot.schedule()` absorbiert
+    // bereits alle Fehler intern (AC-5), aber der explizite `.catch()` hier
+    // ist Defense-in-Depth: wenn ein zukuenftiger Refactor das interne
+    // Schlucken aufhebt, bleibt der `unhandledRejection`-Kanal clean.
+    //
+    // Story 18.5 L1: Der Build-Callback bekommt `expectedUrl` durchgereicht
+    // und reicht ihn an `refreshPrecomputed` weiter — dort wird die URL als
+    // aktiver Race-Guard genutzt (siehe `refreshPrecomputed`-Implementation).
+    void prefetchSlot
+      .schedule(
+        async (signal: AbortSignal, slotExpectedUrl: string) => {
+          if (signal.aborted) return;
+          await a11yTree.refreshPrecomputed(
+            cdpClient,
+            sessionId,
+            sessionManager,
+            signal,
+            slotExpectedUrl,
+          );
+        },
+        sessionId,
+        expectedUrl,
+      )
+      .catch((err: unknown) => {
+        // Defense-in-depth: der Slot schluckt eigentlich alles.
+        // Falls doch mal etwas durchkommt, debug-loggen und verwerfen —
+        // aber NIEMALS an den LLM propagieren (AC-5).
+        if (err instanceof Error && err.name === "AbortError") return;
+        debug(
+          "PrefetchSlot trigger leaked an error: %s",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
   }
 
   /**
