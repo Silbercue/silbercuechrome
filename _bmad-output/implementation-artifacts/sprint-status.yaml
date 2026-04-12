@@ -54,10 +54,12 @@
 
 generated: 2026-04-11
 last_updated: 2026-04-12
+# 2026-04-12: Story 19.4 created (ready-for-dev) — Aggregator, Matcher und why_this_card
 # 2026-04-12: Story 19.1 → review (dev complete: Card Data Model + Loader + 3 Seed-Karten, 38 new tests, 1546/1546 green, build clean)
 # 2026-04-12: Story 19.2 created (ready-for-dev) — Fathom-Library-Spike
 # 2026-04-12: Story 19.2 → done (Negativ-Entscheid: Fathom MPL-2.0, jsdom@11-Kette, 2 kritische + 6 moderate betroffene Pakete, Architektur-Mismatch — eigene Heuristiken in Story 19.3)
 # 2026-04-12: Story 19.3 created (ready-for-dev) — Signal-Extractor, eigene Heuristiken basierend auf A11y-Tree (Fathom-Negativ-Entscheid)
+# 2026-04-12: Story 19.3 → review (dev complete: Signal-Extractor 4 Kategorien, 35 new tests, 1589/1589 green, build clean)
 project: SilbercueChrome
 # Story 18.3 status change: backlog → ready-for-dev on 2026-04-11
 project_key: NOKEY
@@ -84,8 +86,8 @@ development_status:
   epic-19: in-progress
   19-1-card-data-model-mit-drei-seed-karten: done
   19-2-fathom-library-spike: done
-  19-3-signal-extractor: ready-for-dev
-  19-4-aggregator-matcher-und-why-this-card: backlog
+  19-3-signal-extractor: done
+  19-4-aggregator-matcher-und-why-this-card: ready-for-dev
   19-5-operator-return-schema-und-seitenlesart: backlog
   19-6-operator-state-machine: backlog
   19-7-top-level-tools-operator-und-virtual-desk: backlog
