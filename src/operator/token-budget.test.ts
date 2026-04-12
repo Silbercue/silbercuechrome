@@ -406,3 +406,53 @@ describe("token-budget", () => {
     expect(text.length).toBeLessThanOrEqual(MAX_RESULT_TOKENS * CHARS_PER_TOKEN);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 5 — Tool-Definition-Overhead < 3000 Tokens (AC-1, NFR1)
+// ---------------------------------------------------------------------------
+
+import { vi } from "vitest";
+import { ToolRegistry } from "../registry.js";
+
+describe("tool-definition-overhead", () => {
+  /**
+   * C2 fix: Measure the REAL tools/list response from the registry,
+   * not hardcoded strings. This test instantiates ToolRegistry in
+   * standard mode (no FULL_TOOLS), captures server.tool() calls,
+   * and measures the actual descriptions + schema JSON.
+   */
+  it("tool-definition overhead for standard mode (real registry) is under 3000 tokens", () => {
+    // Ensure standard mode (not FULL_TOOLS)
+    delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
+
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
+    const mockCdpClient = {} as never;
+
+    const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+    registry.registerAll();
+
+    // server.tool() is called with: (name, description, zodShape, handler)
+    let totalChars = 0;
+    const registeredNames: string[] = [];
+
+    for (const call of toolFn.mock.calls) {
+      const name = call[0] as string;
+      const description = call[1] as string;
+      const zodShape = call[2] as Record<string, unknown>;
+
+      registeredNames.push(name);
+
+      // Accumulate: name + description + JSON-serialized schema
+      totalChars += name.length;
+      totalChars += description.length;
+      totalChars += JSON.stringify(zodShape).length;
+    }
+
+    // Standard mode should have exactly 2 tools
+    expect(registeredNames).toEqual(["virtual_desk", "operator"]);
+
+    const estimatedTokens = totalChars / CHARS_PER_TOKEN;
+    expect(estimatedTokens).toBeLessThan(3000);
+  });
+});

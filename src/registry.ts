@@ -67,22 +67,23 @@ import { createDefaultOnToolResult } from "./hooks/default-on-tool-result.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 import { prefetchSlot } from "./cache/prefetch-slot.js";
 import { debug } from "./cdp/debug.js";
+import { operatorHandler, operatorZodShape } from "./operator/operator-tool.js";
+import type { OperatorDeps } from "./operator/operator-tool.js";
+import { virtualDeskOperatorZodShape } from "./operator/virtual-desk-tool.js";
+import { settle } from "./cdp/settle.js";
 
 /**
- * Story 18.3 — Transition-Set fuer die schlanke Default-Tool-Liste.
+ * Story 19.7 — Operator-Modus: Nur zwei Top-Level-Tools.
  *
- * Dieses Array enthaelt genau die zehn Tools, die im Default-Modus ueber
- * `tools/list` exponiert werden. Die Reihenfolge entspricht der
- * Positional-Bias-optimierten Reihenfolge in `ToolRegistry.registerAll()`
- * (orientation → reading → interaction → navigation → timing → visual →
- * meta → evaluate). `evaluate` steht absichtlich als Letztes (Story 16.5,
- * BiasBusters arXiv:2510.00307).
+ * Im Standard-Modus exportiert SilbercueChrome genau zwei Tools:
+ * `virtual_desk` (Session- und Tab-Verwaltung) und `operator`
+ * (Scan, Match, Execute). Der gesamte Tool-Definition-Overhead
+ * liegt unter 3000 Tokens (AC-1, NFR1).
  *
- * Extended-Tools (`press_key`, `scroll`, `switch_tab`, `tab_status`,
- * `observe`, `dom_snapshot`, `handle_dialog`, `file_upload`, `console_logs`,
- * `network_monitor`, `configure_session`) bleiben im internen
- * `_handlers`-Dispatcher erreichbar, damit `run_plan` sie weiter aufrufen
- * kann — sie werden nur in `tools/list` ausgeblendet.
+ * Alle bestehenden Tool-Handler bleiben im internen `_handlers`-
+ * Dispatcher erreichbar, damit `run_plan` und der ToolDispatcher
+ * sie weiter aufrufen koennen — sie werden nur in `tools/list`
+ * ausgeblendet.
  *
  * Opt-in: Wer das volle Set braucht, setzt `SILBERCUE_CHROME_FULL_TOOLS=true`.
  *
@@ -90,15 +91,7 @@ import { debug } from "./cdp/debug.js";
  */
 export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "virtual_desk",
-  "read_page",
-  "click",
-  "type",
-  "fill_form",
-  "navigate",
-  "wait_for",
-  "screenshot",
-  "run_plan",
-  "evaluate",
+  "operator",
 ] as const;
 
 /**
@@ -1203,10 +1196,12 @@ export class ToolRegistry implements ToolRegistryPublic {
     //        visual → special → debug → meta → evaluate (last resort).
 
     // --- 1. Orientation ---
+    // M2 fix: Use virtualDeskOperatorZodShape from virtual-desk-tool.ts
+    // instead of inline {}, so the wrapper module is actually wired in.
     maybeRegisterFreeMCPTool(
       "virtual_desk",
       "PRIMARY orientation tool — call first in every new session, after reconnect, or when unsure. Lists all tabs with IDs, URLs, state. Use returned IDs with switch_tab(tab: '<id>') instead of opening duplicates via navigate. Cheap, call liberally.",
-      {},
+      virtualDeskOperatorZodShape,
       wrap(this.wrapWithGate("virtual_desk", async (params) => {
         this._contextChecked = true;
         return virtualDeskHandler(
@@ -1218,6 +1213,64 @@ export class ToolRegistry implements ToolRegistryPublic {
         );
       }, finalHooks), "virtual_desk"),
     );
+
+    // --- 1b. Operator (Story 19.7) ---
+    {
+      const OPERATOR_DESCRIPTION =
+        "OPERATOR — scans the current page, recognizes interaction patterns (login forms, search fields, content readers), and offers matching cards with executable parameters.\n\nTwo call modes:\n1. operator() — Scans the page and returns cards with parameter schemas. Choose a card and fill in the required parameters.\n2. operator(card: '<name>', params: { ... }) — Executes the chosen card. Returns the result plus the new page state.\n\nIf no card matches, returns a fallback message — use virtual_desk to navigate elsewhere or retry after page changes.";
+
+      const operatorDeps = (): OperatorDeps => ({
+        // C1 fix: Use a11yTree cache when available, fall back to CDP.
+        getAXNodes: async () => {
+          const cached = a11yTree.getPrecomputedNodes(this.sessionId);
+          if (cached) return cached;
+          // Cache miss — fetch directly from CDP
+          const result = await this.cdpClient.send<{ nodes: Array<import("./cache/a11y-tree.js").AXNode> }>(
+            "Accessibility.getFullAXTree",
+            {},
+            this.sessionId,
+          );
+          return result.nodes ?? [];
+        },
+        tabStateCache: this._browserSession.tabStateCache,
+        sessionManager: this._browserSession.sessionManager,
+        clickHandler: async (params) =>
+          clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager),
+        fillFormHandler: async (params) =>
+          fillFormHandler(params as unknown as FillFormParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager),
+        pressKeyHandler: async (params) =>
+          pressKeyHandler(params as unknown as PressKeyParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager),
+        scrollHandler: async (params) =>
+          scrollHandler(params as unknown as ScrollParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager),
+        settle: async () => {
+          try {
+            // Get the current page's frameId for settle
+            const result = await this.cdpClient.send<{ frameTree: { frame: { id: string } } }>(
+              "Page.getFrameTree",
+              {},
+              this.sessionId,
+            );
+            const settleResult = await settle({
+              cdpClient: this.cdpClient,
+              sessionId: this.sessionId,
+              frameId: result.frameTree.frame.id,
+            });
+            return settleResult.settled;
+          } catch {
+            return false;
+          }
+        },
+      });
+
+      maybeRegisterFreeMCPTool(
+        "operator",
+        OPERATOR_DESCRIPTION,
+        operatorZodShape,
+        wrap(async (params) => {
+          return operatorHandler(params as Record<string, unknown>, operatorDeps());
+        }, "operator"),
+      );
+    }
 
     // --- 2. Reading ---
     maybeRegisterFreeMCPTool(

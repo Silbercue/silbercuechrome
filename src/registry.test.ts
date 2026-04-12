@@ -57,19 +57,19 @@ describe("ToolRegistry", () => {
     // Story 18.3 Review-Fix H1: `handle_dialog`, `console_logs` und
     // `network_monitor` werden seit dem H1-Fix **unbedingt** registriert
     // (Runtime-Guard im Handler statt Registration-Gate), damit der
-    // FULL_TOOLS-Export tatsaechlich alle 21 Tools enthaelt — auch im
+    // FULL_TOOLS-Export tatsaechlich alle 23 Tools enthaelt — auch im
     // Legacy-Test-Konstruktor, in dem die zugehoerigen Collectors undefined
-    // sind. Zuvor waren es nur 18.
+    // sind.
     //
-    // Zaehlung (FULL_TOOLS=true): virtual_desk, read_page, click, type,
-    // fill_form, press_key, scroll, drag, navigate, switch_tab, tab_status,
-    // wait_for, observe, screenshot, dom_snapshot, handle_dialog,
-    // file_upload, console_logs, network_monitor, configure_session,
-    // run_plan, evaluate = 22 Tools.
+    // Zaehlung (FULL_TOOLS=true): virtual_desk, operator, read_page, click,
+    // type, fill_form, press_key, scroll, drag, navigate, switch_tab,
+    // tab_status, wait_for, observe, screenshot, dom_snapshot,
+    // handle_dialog, file_upload, console_logs, network_monitor,
+    // configure_session, run_plan, evaluate = 23 Tools.
     //
-    // Story 18.6 (FR-028): `drag` ist im Full-Set, nicht im Default-Set.
-    // Default-Set bleibt stabil bei 10 (siehe DEFAULT_TOOL_NAMES).
-    expect(toolFn).toHaveBeenCalledTimes(22);
+    // Story 19.7: `operator` ist sowohl im Default-Set als auch im Full-Set.
+    // Default-Set hat 2 Tools (virtual_desk, operator).
+    expect(toolFn).toHaveBeenCalledTimes(23);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
@@ -3552,8 +3552,12 @@ describe("ToolRegistry", () => {
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
     });
 
+    // Story 19.7: Default-Set hat nur 2 Tools (virtual_desk + operator).
     const DEFAULT_TOOL_NAMES_EXPECTED = [
       "virtual_desk",
+      "operator",
+    ];
+    const EXTENDED_TOOL_NAMES = [
       "read_page",
       "click",
       "type",
@@ -3563,8 +3567,6 @@ describe("ToolRegistry", () => {
       "screenshot",
       "run_plan",
       "evaluate",
-    ];
-    const EXTENDED_TOOL_NAMES = [
       "press_key",
       "scroll",
       "switch_tab",
@@ -3578,7 +3580,7 @@ describe("ToolRegistry", () => {
       "configure_session",
     ];
 
-    it("default-Modus: server.tool() wird genau mit den 10 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
+    it("default-Modus: server.tool() wird genau mit den 2 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
       // Env-Var unset → Default-Modus.
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
@@ -3634,13 +3636,8 @@ describe("ToolRegistry", () => {
       }
     });
 
-    it("FULL_TOOLS=true: server.tool() wird mit allen 21 Free-Tools aufgerufen — inkl. handle_dialog/console_logs/network_monitor", () => {
-      // Story 18.3 Review-Fix H3: Dieser Test bildet die **Produktions-
-      // Realitaet** ab. `handle_dialog`, `console_logs`, `network_monitor`
-      // werden seit dem H1-Fix unbedingt registriert — Runtime-Guards im
-      // Handler uebernehmen die Collector-Existenz-Pruefung. Der Test muss
-      // deshalb alle elf Extended-Tools und die zehn Default-Tools
-      // verifizieren, ohne irgendwelche "optional skip"-Logik.
+    it("FULL_TOOLS=true: server.tool() wird mit allen 23 Free-Tools aufgerufen — inkl. operator/handle_dialog/console_logs/network_monitor", () => {
+      // Story 19.7: FULL_TOOLS exponiert alle Tools inkl. operator.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
@@ -3651,32 +3648,18 @@ describe("ToolRegistry", () => {
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
 
-      // Alle zehn Default-Tools muessen drin sein.
+      // Beide Default-Tools muessen drin sein.
       for (const name of DEFAULT_TOOL_NAMES_EXPECTED) {
         expect(registeredNames).toContain(name);
       }
 
-      // Alle elf Extended-Tools — ohne Ausnahme, inklusive der drei, die
-      // vorher an Collector-Gates hingen.
-      const allExtended = [
-        "press_key",
-        "scroll",
-        "switch_tab",
-        "tab_status",
-        "observe",
-        "dom_snapshot",
-        "handle_dialog",
-        "file_upload",
-        "console_logs",
-        "network_monitor",
-        "configure_session",
-      ];
-      for (const name of allExtended) {
+      // Alle Extended-Tools muessen ebenfalls drin sein (FULL mode).
+      for (const name of EXTENDED_TOOL_NAMES) {
         expect(registeredNames).toContain(name);
       }
 
-      // Insgesamt 10 Default + 11 Extended + drag (Story 18.6) = 22 Tools.
-      expect(toolFn).toHaveBeenCalledTimes(22);
+      // Insgesamt 2 Default + 20 Extended + drag (Story 18.6) = 23 Tools.
+      expect(toolFn).toHaveBeenCalledTimes(23);
     });
 
     it("FULL_TOOLS=true: _handlers-Map enthaelt alle Entries — inkl. handle_dialog/console_logs/network_monitor/drag", () => {
@@ -3826,8 +3809,8 @@ describe("ToolRegistry", () => {
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Exakt 22 Tools: 10 Default + 11 Extended + drag (Story 18.6 FR-028).
-      expect(toolFn).toHaveBeenCalledTimes(22);
+      // Exakt 23 Tools: 2 Default + 20 Extended + drag (Story 18.6 FR-028).
+      expect(toolFn).toHaveBeenCalledTimes(23);
       expect(registeredNames).toContain("handle_dialog");
       expect(registeredNames).toContain("console_logs");
       expect(registeredNames).toContain("network_monitor");
@@ -3952,7 +3935,9 @@ describe("ToolRegistry", () => {
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
       expect(registeredNames[0]).toBe("virtual_desk");
-      expect(registeredNames[registeredNames.length - 1]).toBe("evaluate");
+      // Story 19.7: In default mode, operator is the second (and last) tool.
+      expect(registeredNames[1]).toBe("operator");
+      expect(registeredNames.length).toBe(2);
     });
   });
 });

@@ -99,21 +99,16 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
         (call: unknown[]) => call[0] as string,
       );
       expect(registeredNames).not.toContain("inspect_element");
-      expect(registeredNames).toContain("evaluate");
-      // Story 18.3 Review-Fix M2: Default-Set exakt 10 Tools — schlaegt an,
-      // wenn genau ein Default-Tool verschwindet oder (noch schlimmer) ein
-      // Extended-Tool versehentlich in den Default-Modus rutscht.
-      expect(registeredNames.length).toBe(10);
+      // Story 19.7: Default-Set hat 2 Tools (virtual_desk + operator).
+      // evaluate ist nur im FULL_TOOLS-Modus sichtbar.
+      expect(registeredNames).toContain("virtual_desk");
+      expect(registeredNames).toContain("operator");
+      expect(registeredNames.length).toBe(2);
     });
 
-    it("Free-Tier FULL_TOOLS-Modus registriert alle 22 Tools inkl. dialog/console/network/drag", () => {
-      // Story 18.3 Review-Fix M2: Zweite Assertion — fuer den FULL_TOOLS-
-      // Modus muss der Guard auch H1-Regressions abfangen (handle_dialog /
-      // console_logs / network_monitor unconditional registriert).
-      //
-      // Story 18.6 (FR-028): `drag` ist das 22. Tool im Full-Set — NICHT
-      // im Default-Set. Der Count steigt von 21 auf 22, das Default-Set
-      // bleibt stabil bei 10.
+    it("Free-Tier FULL_TOOLS-Modus registriert alle 23 Tools inkl. operator/dialog/console/network/drag", () => {
+      // Story 19.7: operator ist das 23. Tool im Full-Set.
+      // Default-Set hat 2 Tools (virtual_desk, operator).
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       try {
         const toolFn = vi.fn();
@@ -132,8 +127,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
           (call: unknown[]) => call[0] as string,
         );
         expect(registeredNames).not.toContain("inspect_element");
-        // Full-Set exakt 22 Tools (10 Default + 11 Extended + drag aus Story 18.6).
-        expect(registeredNames.length).toBe(22);
+        // Full-Set exakt 23 Tools (2 Default + 20 Extended + drag).
+        expect(registeredNames.length).toBe(23);
         // Explizit die drei Collector-gated Tools — die Regression-Gefahr
         // lebt hier, siehe Story 18.3 Review H1/H2.
         expect(registeredNames).toContain("handle_dialog");
