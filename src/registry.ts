@@ -52,6 +52,8 @@ import { scrollSchema, scrollHandler } from "./tools/scroll.js";
 import type { ScrollParams } from "./tools/scroll.js";
 import { observeSchema, observeHandler } from "./tools/observe.js";
 import type { ObserveParams } from "./tools/observe.js";
+import { dragSchema, dragHandler } from "./tools/drag.js";
+import type { DragParams } from "./tools/drag.js";
 import { updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
 import type { LicenseStatus } from "./license/license-status.js";
@@ -224,9 +226,43 @@ function jsonSchemaPropToZod(prop: Record<string, unknown>): z.ZodTypeAny {
   return z.unknown();
 }
 
+/**
+ * Story 18.6 (FR-029): Hint-Text fuer den AJAX-Race-Fall nach click.
+ *
+ * Wenn ein Klick auf ein interaktives Element keinen DOM-Diff erzeugt hat,
+ * ist die wahrscheinlichste Erklaerung, dass die Seite noch einen
+ * asynchronen Request laufen laesst. Der LLM sieht sonst "No visible
+ * changes" und wechselt auf `evaluate`-Workarounds. Dieser Hint zeigt einen
+ * konkreten naechsten Schritt an.
+ *
+ * Wird per Streak-Detector nur einmal pro Session gezeigt (Pattern aus
+ * FR-020 / BUG-018), damit der LLM bei echten No-Op-Clicks (disabled button)
+ * den Muster-Anker nicht wegwirft.
+ *
+ * @see docs/friction-fixes.md#FR-029
+ * @see docs/research/llm-tool-steering.md#Anti-Spiral Patterns
+ */
+const FR029_AJAX_RACE_HINT =
+  "No visible changes yet — the page may still be loading (AJAX/SPA). Use wait_for(condition: 'network_idle') or call read_page again to check.";
+
 export class ToolRegistry implements ToolRegistryPublic {
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
+
+  /**
+   * Story 18.6 (FR-029): Per-Session-Flag fuer den AJAX-Race-Hint.
+   *
+   * Der Hint wird pro Session genau einmal angehaengt — ein zweiter Click
+   * mit leerem Diff bekommt ihn nicht mehr (sonst wird er zum Rauschen und
+   * der LLM ignoriert ihn bei echten No-Op-Clicks). Reset passiert via
+   * `navigate`, `a11yTree.reset()`-Pfad und expliziten `configure_session`-
+   * Call — identisch zum Pattern aus FR-020 (`tool-sequence.ts`).
+   *
+   * Key-Konvention: `sessionId` der aktuellen BrowserSession. Bei Tab-
+   * Switch bekommt jede Session ihren eigenen Flag, weil `sessionId` sich
+   * mit dem Tab aendert.
+   */
+  private _fr029HintShown = new Map<string, boolean>();
 
   /**
    * Story 15.2: Delegate for `registerTool()` — set during `registerAll()`
@@ -459,6 +495,21 @@ export class ToolRegistry implements ToolRegistryPublic {
         _meta: { elapsedMs: 0, method: name, response_bytes: Buffer.byteLength(JSON.stringify(content), 'utf8') },
       };
     }
+
+    // Story 18.6 review-fix H1: FR-029 streak-detector reset on session-
+    // boundary tools. This lives in `executeTool()` (not only in the
+    // `wrap()` closure) so that `run_plan` steps with
+    // `configure_session` / `switch_tab` reset the streak consistently
+    // with direct MCP calls. The `navigate` reset stays in
+    // `_runOnToolResultHook` because it is co-located with the
+    // `a11yTree.reset()` call and fires for both paths via the hook.
+    //
+    // Review-fix M3: `switch_tab` also resets so the hint map does not
+    // accumulate stale entries when the caller jumps between tabs —
+    // each fresh tab starts with a re-armed hint.
+    if (name === "configure_session" || name === "switch_tab") {
+      this._resetFr029Streak();
+    }
     // Lazy-launch: ensure Chrome is reachable before the handler runs.
     // On a fresh session this triggers the first ChromeLauncher.connect().
     // On an established session with a lost connection, BrowserSession
@@ -660,8 +711,13 @@ export class ToolRegistry implements ToolRegistryPublic {
     // `run_plan` seine navigate-Zwischen-Steps sauber die Ref-Caches
     // invalidieren laesst, auch wenn der Ambient-Context-Hook uebersprungen
     // wird.
+    //
+    // Story 18.6 (FR-029): Der FR-029-Streak-Detector wird bei navigate
+    // ebenfalls zurueckgesetzt — neue Seite, neuer Orientierungsbedarf fuer
+    // den LLM. Identisch zum Muster aus FR-020 (`tool-sequence.ts`).
     if (name === "navigate") {
       a11yTree.reset();
+      this._resetFr029Streak();
     }
 
     if (result.isError) return;
@@ -671,7 +727,22 @@ export class ToolRegistry implements ToolRegistryPublic {
     if (skipHook) return;
 
     const hooks = getProHooks();
-    if (!hooks.onToolResult) return;
+    // Story 18.6 review-fix H2: FR-029 AJAX-race hint must fire in the
+    // Free-Tier even when NO Pro-Hook (and no Free-Tier-default) is
+    // registered. `registerAll()` always installs the default hook, but
+    // legacy-test paths and bare registries bypass `registerAll()` —
+    // without this early injection the hint would be dead code for the
+    // Free-Tier assertion in AC-4. Placed BEFORE the hook early-return so
+    // it covers both Free-Tier (no hook) and Pro-Tier (custom hook) paths.
+    //
+    // The hint is idempotent with the later injection that runs AFTER
+    // the Pro-Hook merge: the streak-detector in `_maybeAppendFr029...`
+    // guards against double-append, and the content-length check skips
+    // the post-hook branch once the Pro-Hook added a diff block.
+    if (!hooks.onToolResult) {
+      this._maybeAppendFr029AjaxRaceHint(result, name);
+      return;
+    }
 
     // Story 15.3 (AC #5): Build a unified `a11yTree` facade that exposes both
     // the instance methods (classifyRef, getSnapshotMap, refreshPrecomputed, …)
@@ -716,6 +787,79 @@ export class ToolRegistry implements ToolRegistryPublic {
     if (enhanced && enhanced !== result) {
       Object.assign(result, enhanced);
       result._meta = originalMeta;
+    }
+
+    // Story 18.6 (FR-029): AJAX-Race-Hint nach click mit leerem DOM-Diff.
+    //
+    // Platziert NACH dem Pro-Hook-Merge, damit der Hint nicht versehentlich
+    // mit einem bereits existierenden Diff-Text kollidiert. Der Pro-Hook
+    // (oder der Free-Tier-Default aus `createDefaultOnToolResult`) haengt
+    // nur dann Content an, wenn `formatDomDiff` non-empty ist. Bleibt das
+    // Content-Array exakt auf Laenge 1 (nur der originale "Clicked eX ..."-
+    // Text), dann ist der Diff leer — genau der FR-029-Fall.
+    //
+    // Bedingungen:
+    //  1. Tool ist `click` (nur dort macht der Hint Sinn — andere Tools
+    //     haben eigene Feedback-Kanaele)
+    //  2. Click lief auf ein als "clickable" oder "widget-state" klassi-
+    //     fiziertes Element (elementClass aus `_meta`). Disabled-/Static-
+    //     Clicks bekommen den Hint nicht — sie haben legitime No-Op-Results.
+    //  3. Kein zusaetzlicher Text-Content-Block wurde vom Hook angehaengt
+    //     (Content-Array hat genau 1 Text-Block).
+    //  4. Streak-Detector: Hint wurde in dieser Session noch nicht gezeigt.
+    //
+    // @see docs/friction-fixes.md#FR-029
+    this._maybeAppendFr029AjaxRaceHint(result, name);
+  }
+
+  /**
+   * Story 18.6 (FR-029): Haenge den AJAX-Race-Hint an, wenn ein click auf
+   * ein interaktives Element keinen sichtbaren DOM-Diff produziert hat.
+   * Einmal pro Session — danach unterdrueckt der Streak-Detector weitere
+   * Hints, damit der LLM bei echten No-Op-Clicks nicht abstumpft.
+   *
+   * @see docs/friction-fixes.md#FR-029
+   */
+  private _maybeAppendFr029AjaxRaceHint(
+    result: ToolResponse,
+    toolName: string,
+  ): void {
+    if (toolName !== "click") return;
+    if (result.isError) return;
+
+    const elementClass = (result._meta?.elementClass as string | undefined) ?? undefined;
+    if (elementClass !== "clickable" && elementClass !== "widget-state") return;
+
+    // Diff-leer-Check: genau ein Text-Block (der originale Click-Return-Text)
+    // und keine weiteren Content-Bloecke vom Hook.
+    const blocks = result.content ?? [];
+    if (blocks.length !== 1) return;
+    if (blocks[0]?.type !== "text") return;
+
+    // Streak-Detector: einmal pro Session zeigen.
+    let sessionKey: string;
+    try {
+      sessionKey = this._browserSession.sessionId;
+    } catch {
+      // Legacy-test path: kein BrowserSession-sessionId verfuegbar.
+      sessionKey = "legacy-test-session";
+    }
+    if (this._fr029HintShown.get(sessionKey) === true) return;
+    this._fr029HintShown.set(sessionKey, true);
+
+    result.content.push({ type: "text", text: FR029_AJAX_RACE_HINT });
+  }
+
+  /**
+   * Story 18.6 (FR-029): Reset des Streak-Detectors fuer eine Session.
+   * Wird aufgerufen bei `configure_session`, `navigate` (ueber a11yTree.reset)
+   * und bei Tab-Switch — identisch zum Muster aus FR-020.
+   */
+  private _resetFr029Streak(sessionId?: string): void {
+    if (sessionId !== undefined) {
+      this._fr029HintShown.delete(sessionId);
+    } else {
+      this._fr029HintShown.clear();
     }
   }
 
@@ -926,10 +1070,23 @@ export class ToolRegistry implements ToolRegistryPublic {
         try {
           // H2 fix: Skip trackCall/resolveParams for meta-tools
           if (name === "configure_session") {
+            // Story 18.6 (FR-029): configure_session resettet den
+            // AJAX-Race-Hint-Streak-Detector — der User hat explizit
+            // Session-Defaults angefasst, neuer Kontext.
+            this._resetFr029Streak();
             const result = await dialogWrapped(params);
             injectResponseBytes(result);
             injectRelaunchNotice(result);
             return result;
+          }
+          // Story 18.6 review-fix M3: switch_tab also resets the FR-029
+          // streak-detector state. Without this reset the `_fr029HintShown`
+          // map would accumulate stale per-session entries across long-
+          // running sessions and every new tab would inherit a stale
+          // "hint-already-shown" flag (or, depending on session-key
+          // stability, leak memory indefinitely).
+          if (name === "switch_tab") {
+            this._resetFr029Streak();
           }
           // Track call for auto-promote analysis
           sessionDefaults.trackCall(name, params as unknown as Record<string, unknown>);
@@ -1154,6 +1311,36 @@ export class ToolRegistry implements ToolRegistryPublic {
       wrap(async (params) => {
         return scrollHandler(params as unknown as ScrollParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "scroll"),
+    );
+
+    // Story 18.6 (FR-028): drag — native CDP Drag&Drop Primitive.
+    //
+    // ABSICHTLICH NICHT im Default-Set (DEFAULT_TOOL_NAMES). Drag ist
+    // eine Nische-Operation (Kanban-Boards, Slider-Thumbs, Reorder-Listen),
+    // die Tool-Definition-Overhead-Kosten stehen im Default-Set in keinem
+    // Verhaeltnis zur Nutzungsfrequenz. Wird nur registriert wenn
+    // `SILBERCUE_CHROME_FULL_TOOLS=true` gesetzt ist — der interne
+    // `_handlers`-Dispatcher unten haelt den Handler aber unabhaengig
+    // vom Modus bereit, damit `run_plan` das Tool weiterhin aufrufen kann.
+    //
+    // @see docs/friction-fixes.md#FR-028
+    maybeRegisterFreeMCPTool(
+      "drag",
+      "Drag an element via native CDP mouse events (mousePressed → interpolated mouseMoved with buttons:1 → mouseReleased). Works for CSS-driven drag: slider thumbs, resize handles, text selection, mouse-based reorder lists (e.g. SortableJS in mouse mode). NOT suitable for HTML5 Drag&Drop API (draggable=true elements with dragstart/drop listeners, React DnD HTML5Backend, Vuedraggable, ng2-dnd) — that path needs Input.dispatchDragEvent which this tool does not implement. Parameters: from_ref/from_selector OR from_x+from_y as source, to_ref/to_selector OR to_x+to_y as target. `steps` (default 10, min 5) controls mouseMoved granularity.",
+      {
+        from_ref: dragSchema.shape.from_ref,
+        from_selector: dragSchema.shape.from_selector,
+        from_x: dragSchema.shape.from_x,
+        from_y: dragSchema.shape.from_y,
+        to_ref: dragSchema.shape.to_ref,
+        to_selector: dragSchema.shape.to_selector,
+        to_x: dragSchema.shape.to_x,
+        to_y: dragSchema.shape.to_y,
+        steps: dragSchema.shape.steps,
+      },
+      wrap(async (params) => {
+        return dragHandler(params as unknown as DragParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
+      }, "drag"),
     );
 
     // --- 4. Tab management (navigate/switch_tab/tab_status) ---
@@ -1626,6 +1813,12 @@ export class ToolRegistry implements ToolRegistryPublic {
     });
     this._handlers.set("scroll", async (params, sessionIdOverride?) => {
       return scrollHandler(params as unknown as ScrollParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
+    });
+    // Story 18.6 (FR-028): drag bleibt im _handlers-Dispatcher vollstaendig
+    // registriert, auch wenn es nicht im Default-Set ist — run_plan soll
+    // das Tool weiter aufrufen koennen.
+    this._handlers.set("drag", async (params, sessionIdOverride?) => {
+      return dragHandler(params as unknown as DragParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     // Story 18.3 Review-Fix H2: Unbedingte Registrierung analog `handle_dialog`
     // oben. Runtime-Guard im Handler faengt den Fall "Collector noch nicht

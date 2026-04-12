@@ -62,11 +62,14 @@ describe("ToolRegistry", () => {
     // sind. Zuvor waren es nur 18.
     //
     // Zaehlung (FULL_TOOLS=true): virtual_desk, read_page, click, type,
-    // fill_form, press_key, scroll, navigate, switch_tab, tab_status,
+    // fill_form, press_key, scroll, drag, navigate, switch_tab, tab_status,
     // wait_for, observe, screenshot, dom_snapshot, handle_dialog,
     // file_upload, console_logs, network_monitor, configure_session,
-    // run_plan, evaluate = 21 Tools.
-    expect(toolFn).toHaveBeenCalledTimes(21);
+    // run_plan, evaluate = 22 Tools.
+    //
+    // Story 18.6 (FR-028): `drag` ist im Full-Set, nicht im Default-Set.
+    // Default-Set bleibt stabil bei 10 (siehe DEFAULT_TOOL_NAMES).
+    expect(toolFn).toHaveBeenCalledTimes(22);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
@@ -2925,6 +2928,354 @@ describe("ToolRegistry", () => {
         expect(installed.onToolResult).toBe(proHook);
       });
 
+      // Story 18.6 (FR-029): AJAX-Race-Hint nach click mit leerem Diff
+      describe("FR-029 AJAX-Race-Hint (Story 18.6)", () => {
+        function buildRegistryWithHook(hookStub: NonNullable<ProHooks["onToolResult"]>) {
+          registerProHooks({ onToolResult: hookStub });
+          const mockServer = { tool: vi.fn() } as never;
+          const mockCdpClient = { send: vi.fn() } as never;
+          const registry = new ToolRegistry(
+            mockServer,
+            mockCdpClient,
+            "sess-fr029",
+            {} as never,
+          );
+          registry.registerAll();
+          return registry;
+        }
+
+        function makeClickResult(elementClass = "clickable"): import("./types.js").ToolResponse {
+          return {
+            content: [
+              { type: "text", text: "Clicked e1 (ref: e1)" },
+            ],
+            _meta: { elapsedMs: 5, method: "click", elementClass },
+          };
+        }
+
+        it("appends hint when click on clickable element has empty diff (hook left content unchanged)", async () => {
+          // Hook ist no-op: kein Diff-Text angehaengt — simuliert AJAX-Race.
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => r,
+          );
+          const registry = buildRegistryWithHook(hook);
+          const result = makeClickResult("clickable");
+
+          // Access private method via cast (test-only pattern).
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(result, "click");
+
+          const texts = result.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text);
+          expect(texts.some((t) => t.includes("No visible changes yet"))).toBe(true);
+          expect(texts.some((t) => t.includes("wait_for(condition: 'network_idle')"))).toBe(true);
+        });
+
+        it("does NOT append hint when element class is static", async () => {
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => r,
+          );
+          const registry = buildRegistryWithHook(hook);
+          const result = makeClickResult("static");
+
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(result, "click");
+
+          const texts = result.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text);
+          expect(texts.some((t) => t.includes("No visible changes yet"))).toBe(false);
+        });
+
+        it("does NOT append hint when hook already appended a diff-text block", async () => {
+          // Simuliert Pro-Hook, der einen DOM-Diff angehaengt hat.
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => {
+              r.content.push({ type: "text", text: "DOM-Diff: e7 changed" });
+              return r;
+            },
+          );
+          const registry = buildRegistryWithHook(hook);
+          const result = makeClickResult("clickable");
+
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(result, "click");
+
+          const texts = result.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text);
+          // Der DOM-Diff-Text ist drin, der FR-029-Hint NICHT.
+          expect(texts.some((t) => t.includes("DOM-Diff: e7 changed"))).toBe(true);
+          expect(texts.some((t) => t.includes("No visible changes yet"))).toBe(false);
+        });
+
+        it("streak-detector: second click in same session does NOT get the hint", async () => {
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => r,
+          );
+          const registry = buildRegistryWithHook(hook);
+
+          const first = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(first, "click");
+          // Erster Call: Hint angehaengt.
+          expect(
+            first.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+
+          const second = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(second, "click");
+          // Zweiter Call: kein Hint mehr.
+          expect(
+            second.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(false);
+        });
+
+        it("streak-detector reset via navigate re-arms the hint", async () => {
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => r,
+          );
+          const registry = buildRegistryWithHook(hook);
+
+          // Erster Click — Hint.
+          const first = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(first, "click");
+          expect(
+            first.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+
+          // Navigate — resettet den Streak.
+          const navResult: import("./types.js").ToolResponse = {
+            content: [{ type: "text", text: "Navigated" }],
+            _meta: { elapsedMs: 5, method: "navigate" },
+          };
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(navResult, "navigate");
+
+          // Zweiter Click nach navigate — Hint kommt zurueck.
+          const second = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(second, "click");
+          expect(
+            second.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+        });
+
+        // Story 18.6 review-fix H2: Free-Tier path must also fire the
+        // hint when NO onToolResult hook is registered at all. The
+        // earlier tests install a Pro stub via `buildRegistryWithHook`;
+        // this test registers EMPTY hooks to simulate a bare Free-Tier.
+        it("H2 fix — fires hint in Free-Tier (no onToolResult hook registered at all)", async () => {
+          // Explizit KEINEN onToolResult-Hook registrieren. In einem
+          // normalen `registerAll()`-Lauf wuerde der Default-Hook spaeter
+          // hinzugefuegt — aber dieser Test geht den Rohweg und ruft
+          // `_runOnToolResultHook` direkt auf der frisch erzeugten
+          // Registry auf, ohne `registerAll()` dazwischen. Damit ist
+          // `getProHooks().onToolResult` undefined, was den frueheren
+          // early-return getriggert haette.
+          registerProHooks({});
+          const mockServer = { tool: vi.fn() } as never;
+          const mockCdpClient = { send: vi.fn() } as never;
+          const registry = new ToolRegistry(
+            mockServer,
+            mockCdpClient,
+            "sess-free-tier-h2",
+            {} as never,
+          );
+
+          const result: import("./types.js").ToolResponse = {
+            content: [{ type: "text", text: "Clicked e1 (ref: e1)" }],
+            _meta: { elapsedMs: 5, method: "click", elementClass: "clickable" },
+          };
+
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(result, "click");
+
+          const texts = result.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text);
+          expect(texts.some((t) => t.includes("No visible changes yet"))).toBe(true);
+        });
+
+        // Story 18.6 review-fix H1: run_plan with configure_session as an
+        // intermediate step must reset the streak. The previous code only
+        // reset in the wrap() closure (direct-MCP path) — run_plan goes
+        // through `executeTool()` which bypasses wrap().
+        it("H1 fix — executeTool(configure_session) resets the streak (run_plan path)", async () => {
+          registerProHooks({});
+          const mockServer = { tool: vi.fn() } as never;
+          const mockCdpClient = { send: vi.fn() } as never;
+          const registry = new ToolRegistry(
+            mockServer,
+            mockCdpClient,
+            "sess-h1",
+            {} as never,
+          );
+          registry.registerAll();
+
+          // Pre-arm: first click fires hint.
+          const first = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(first, "click");
+          expect(
+            first.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+
+          // Second click without reset — no hint.
+          const blocked = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(blocked, "click");
+          expect(
+            blocked.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(false);
+
+          // Invoke executeTool(configure_session) — this is the run_plan
+          // entry point, NOT wrap(). Without the H1 fix this call would
+          // NOT reset the streak (streak lived only in wrap()).
+          await registry.executeTool("configure_session", {});
+
+          // Third click — streak was reset, hint fires again.
+          const third = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(third, "click");
+          expect(
+            third.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+        });
+
+        // Story 18.6 review-fix M3: switch_tab via executeTool also
+        // resets the FR-029 streak to prevent per-session flag leaks
+        // across long-running tab jumps.
+        it("M3 fix — executeTool(switch_tab) resets the streak", async () => {
+          registerProHooks({});
+          const mockServer = { tool: vi.fn() } as never;
+          const mockCdpClient = { send: vi.fn() } as never;
+          const registry = new ToolRegistry(
+            mockServer,
+            mockCdpClient,
+            "sess-m3",
+            {} as never,
+          );
+          registry.registerAll();
+
+          // Arm the streak.
+          const first = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(first, "click");
+          expect(
+            first.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+
+          // switch_tab over executeTool: it will fail the Pro-gate for
+          // Free-Tier and return an isError response, but the reset runs
+          // BEFORE the handler call so the streak is wiped regardless.
+          await registry.executeTool("switch_tab", { action: "open", url: "about:blank" });
+
+          // Next click sees the hint again.
+          const second = makeClickResult("clickable");
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(second, "click");
+          expect(
+            second.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .some((c) => c.text.includes("No visible changes yet")),
+          ).toBe(true);
+        });
+
+        // Story 18.6 review-fix M2: click-by-selector must NOT trigger
+        // the FR-029 hint, even when the DOM diff is empty. The selector
+        // path sets `elementClass = "selector-click"` which is not in the
+        // allow-list (only `"clickable"` and `"widget-state"` fire).
+        it("M2 fix — click with selector (elementClass='selector-click') does NOT fire the hint", async () => {
+          const hook = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
+            async (_name, r, _ctx) => r,
+          );
+          const registry = buildRegistryWithHook(hook);
+
+          const result: import("./types.js").ToolResponse = {
+            content: [{ type: "text", text: "Clicked span.foo (selector)" }],
+            _meta: {
+              elapsedMs: 5,
+              method: "click",
+              elementClass: "selector-click",
+            },
+          };
+
+          await (registry as unknown as {
+            _runOnToolResultHook: (r: unknown, name: string) => Promise<void>;
+          })._runOnToolResultHook(result, "click");
+
+          const texts = result.content
+            .filter((c): c is { type: "text"; text: string } => c.type === "text")
+            .map((c) => c.text);
+          expect(texts.some((t) => t.includes("No visible changes yet"))).toBe(false);
+        });
+
+        // Story 18.6 review-fix M3 (map growth): repeated switch_tab calls
+        // must keep `_fr029HintShown` bounded. The reset on every
+        // switch_tab is the mechanism — the map size never grows with
+        // call count.
+        it("M3 fix — repeated switch_tab calls keep the hint-map bounded", async () => {
+          registerProHooks({});
+          const mockServer = { tool: vi.fn() } as never;
+          const mockCdpClient = { send: vi.fn() } as never;
+          const registry = new ToolRegistry(
+            mockServer,
+            mockCdpClient,
+            "sess-m3-bounds",
+            {} as never,
+          );
+          registry.registerAll();
+
+          for (let i = 0; i < 100; i++) {
+            await registry.executeTool("switch_tab", {
+              action: "open",
+              url: "about:blank",
+            });
+          }
+
+          // After 100 switch_tab calls the streak map is EMPTY (reset
+          // clears everything on every call).
+          const internal = registry as unknown as {
+            _fr029HintShown: Map<string, boolean>;
+          };
+          expect(internal._fr029HintShown.size).toBe(0);
+        });
+      });
+
       it("default hook appends DOM diff text to a click response on a clickable button", async () => {
         // The mock CDP client services every call refreshPrecomputed makes:
         //   Runtime.evaluate (URL probe), Accessibility.getFullAXTree,
@@ -3324,11 +3675,11 @@ describe("ToolRegistry", () => {
         expect(registeredNames).toContain(name);
       }
 
-      // Insgesamt 10 Default + 11 Extended = 21 Tools.
-      expect(toolFn).toHaveBeenCalledTimes(21);
+      // Insgesamt 10 Default + 11 Extended + drag (Story 18.6) = 22 Tools.
+      expect(toolFn).toHaveBeenCalledTimes(22);
     });
 
-    it("FULL_TOOLS=true: _handlers-Map enthaelt alle 21 Entries — inkl. handle_dialog/console_logs/network_monitor", () => {
+    it("FULL_TOOLS=true: _handlers-Map enthaelt alle Entries — inkl. handle_dialog/console_logs/network_monitor/drag", () => {
       // Story 18.3 Review-Fix H2: `_handlers` wird seit dem H2-Fix ebenfalls
       // unbedingt befuellt, damit `run_plan`-Dispatch alle Tools erreichen
       // kann, auch wenn die Collectors (noch) nicht initialisiert sind.
@@ -3344,8 +3695,10 @@ describe("ToolRegistry", () => {
       const handlers = (registry as unknown as { _handlers: Map<string, unknown> })._handlers;
 
       // `run_plan` ist bewusst NICHT im _handlers-Dispatcher (Recursion-
-      // Schutz, siehe Kommentar in registerAll()). Alle anderen 20 Tools
-      // muessen registriert sein.
+      // Schutz, siehe Kommentar in registerAll()). Alle anderen 21 Tools
+      // muessen registriert sein — inklusive `drag` aus Story 18.6 (FR-028),
+      // das im Full-Set ueber MCP exponiert wird und unabhaengig davon im
+      // _handlers-Dispatcher verfuegbar ist (damit run_plan es nutzen kann).
       const expectedHandlerNames = [
         "evaluate",
         "navigate",
@@ -3364,6 +3717,7 @@ describe("ToolRegistry", () => {
         "fill_form",
         "press_key",
         "scroll",
+        "drag",
         "console_logs",
         "network_monitor",
         "configure_session",
@@ -3472,11 +3826,12 @@ describe("ToolRegistry", () => {
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Exakt 21 Tools: 10 Default + 11 Extended.
-      expect(toolFn).toHaveBeenCalledTimes(21);
+      // Exakt 22 Tools: 10 Default + 11 Extended + drag (Story 18.6 FR-028).
+      expect(toolFn).toHaveBeenCalledTimes(22);
       expect(registeredNames).toContain("handle_dialog");
       expect(registeredNames).toContain("console_logs");
       expect(registeredNames).toContain("network_monitor");
+      expect(registeredNames).toContain("drag");
 
       // Der Handler MUSS jetzt den Mock-Collector erreichen und NICHT mehr
       // den Runtime-Guard-Pfad triggern.

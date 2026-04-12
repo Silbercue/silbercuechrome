@@ -106,10 +106,14 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       expect(registeredNames.length).toBe(10);
     });
 
-    it("Free-Tier FULL_TOOLS-Modus registriert alle 21 Tools inkl. dialog/console/network", () => {
+    it("Free-Tier FULL_TOOLS-Modus registriert alle 22 Tools inkl. dialog/console/network/drag", () => {
       // Story 18.3 Review-Fix M2: Zweite Assertion — fuer den FULL_TOOLS-
       // Modus muss der Guard auch H1-Regressions abfangen (handle_dialog /
       // console_logs / network_monitor unconditional registriert).
+      //
+      // Story 18.6 (FR-028): `drag` ist das 22. Tool im Full-Set — NICHT
+      // im Default-Set. Der Count steigt von 21 auf 22, das Default-Set
+      // bleibt stabil bei 10.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       try {
         const toolFn = vi.fn();
@@ -128,13 +132,15 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
           (call: unknown[]) => call[0] as string,
         );
         expect(registeredNames).not.toContain("inspect_element");
-        // Full-Set exakt 21 Tools (10 Default + 11 Extended).
-        expect(registeredNames.length).toBe(21);
+        // Full-Set exakt 22 Tools (10 Default + 11 Extended + drag aus Story 18.6).
+        expect(registeredNames.length).toBe(22);
         // Explizit die drei Collector-gated Tools — die Regression-Gefahr
         // lebt hier, siehe Story 18.3 Review H1/H2.
         expect(registeredNames).toContain("handle_dialog");
         expect(registeredNames).toContain("console_logs");
         expect(registeredNames).toContain("network_monitor");
+        // Story 18.6: drag ist im Full-Set, nicht im Default-Set.
+        expect(registeredNames).toContain("drag");
       } finally {
         delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
       }

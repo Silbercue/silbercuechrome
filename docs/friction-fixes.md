@@ -361,11 +361,11 @@ Niedrige Priorität. Canvas ist inherent opak (Pixel, keine DOM-Nodes). Ein obse
 | 14 | FR-025 navigator.webdriver exposed | Niedrig | chrome-launcher.ts, browser-session.ts, navigate.ts, switch-tab.ts | gefixt |
 | 15 | FR-026 T4.7 Token-Budget borderline | Mittel | a11y-tree.ts (DEFAULT_INTERACTIVE_MAX_TOKENS + editable skip) | gefixt |
 | 16 | FR-027 scroll IntersectionObserver | Mittel | scroll.ts (async settle-wait) | gefixt |
-| 17 | FR-028 natives Drag&Drop | Hoch | drag.ts (neues Tool), registry.ts | offen |
-| 18 | FR-029 click Ambient Context AJAX-Race | Mittel | registry.ts, a11y-tree.ts | offen |
-| 19 | FR-030 Benchmark aus /tmp | Niedrig | Prozess (kein Code) | offen |
-| 20 | FR-031 Cross-Platform Binaries | Mittel | build-binary.sh, publish.ts | offen |
-| 21 | FR-032 Memory aufraemen | Minimal | Memory-Dateien | offen |
+| 17 | FR-028 natives Drag&Drop | Hoch | drag.ts (neues Tool), registry.ts | gefixt |
+| 18 | FR-029 click Ambient Context AJAX-Race | Mittel | registry.ts (FR-029-Hint + Streak-Detector) | gefixt |
+| 19 | FR-030 Benchmark aus /tmp | Niedrig | benchmarkTest SKILL.md (Session-Hygiene) | gefixt |
+| 20 | FR-031 Cross-Platform Binaries | Mittel | scripts/build-binary-linux.sh, publish.ts | gefixt |
+| 21 | FR-032 Memory aufraemen | Minimal | MEMORY.md (Historisch-Abschnitt) | gefixt |
 | 22 | FR-033 Ambient Context pro Step in run_plan | Mittel | registry.ts, plan-executor.ts, run-plan.ts | gefixt |
 | 23 | FR-034 Step-Response-Aggregation in run_plan verbose | Mittel | plan-executor.ts | gefixt |
 | 24 | FR-035 Tool-Definition-Overhead zu gross (20 → 10) | Hoch | registry.ts | gefixt |
@@ -632,96 +632,191 @@ IntersectionObserver ist auf echten Webseiten ueberall: Lazy Loading, Infinite S
 
 ---
 
-## FR-028: Kein natives Drag&Drop — evaluate DOM-Reorder bricht auf React/Vue (P2)
+## FR-028: Natives Drag&Drop-Primitive via CDP — gefixt (Story 18.6)
 
 ### Problem
-T3.3 Drag&Drop wird per `evaluate` mit `appendChild`-Reorder geloest. Das funktioniert auf der Benchmark-Seite (Vanilla JS), bricht aber auf React/Vue/Angular-Seiten weil die Framework-State nicht aktualisiert wird — das DOM stimmt, aber der Component-State ist out of sync.
+T3.3 Drag&Drop wurde per `evaluate` mit `appendChild`-Reorder geloest. Das funktioniert auf der Benchmark-Seite (Vanilla JS), bricht aber auf React/Vue/Angular-Seiten weil der Framework-State nicht aktualisiert wird — das DOM stimmt, aber der Component-State ist out of sync. Playwright hat ein natives `drag`-Primitive; ein echtes CDP-basiertes Drag braucht eine `Input.dispatchMouseEvent`-Sequenz (mousedown auf Source → interpolierte mousemove → mouseup auf Target) mit korrekter `buttons:1`-Semantik, damit Chromium die HTML5-Drag-Events (`dragstart`, `dragover`, `drop`) automatisch feuert.
 
-Playwright hat ein natives `drag`-Primitive (das im MCP-Run allerdings auch fehlschlug). Ein echtes CDP-basiertes Drag braucht: `Input.dispatchMouseEvent` Sequenz (mousedown auf Source → mousemove in Schritten → mouseup auf Target) mit korrekten Drag-Events (dragstart, dragover, drop).
+### Root Cause
+Kein natives Tool im Werkzeugkasten. Der `evaluate`-Workaround dispatchte `dragstart`/`drop`-Events entweder mit falschem Event-Objekt (keine echten Koordinaten, kein DataTransfer) oder umging die Framework-Listener komplett durch direkten DOM-Reorder — beides bricht auf Framework-Pages.
+
+### Fix (Story 18.6)
+Neues Tool **`drag`** in `src/tools/drag.ts`. Die CDP-Event-Sequenz ist:
+
+1. `DOM.getContentQuads` fuer Source und Target → Viewport-Koordinaten via Mittelpunkt-Formel (identisch zum Muster in `click.ts:96-108`)
+2. `Input.dispatchMouseEvent({ type: "mousePressed", buttons: 1 })` auf Source
+3. N interpolierte `Input.dispatchMouseEvent({ type: "mouseMoved", buttons: 1 })` zwischen Source und Target (Default 10, min 5 — unter 5 erkennen moderne Drag-Libs die `dragover`-Events nicht zuverlaessig)
+4. `Input.dispatchMouseEvent({ type: "mouseReleased", buttons: 0 })` auf Target
+
+Die `buttons: 1`-Flag waehrend der `mouseMoved`-Phase signalisiert dem Rendering-Engine, dass die Maustaste gedrueckt ist — Chromium dispatcht `dragstart`/`dragover`/`drop`-Events automatisch, wenn das Source-Element `draggable="true"` hat. Keine manuellen HTML5-Drag-Event-Dispatches im Default-Pfad.
+
+### Tool-Budget-Entscheidung
+`drag` ist **NICHT** im Default-Tool-Set (`DEFAULT_TOOL_NAMES` in `src/registry.ts:89`). Story 18.3 hat das Default-Set auf 10 Tools verschlankt; Drag ist eine Nische-Operation (Kanban, Slider, Reorder), die im Default-Set den Tool-Definition-Overhead nicht rechtfertigt. Das Tool ist nur via `SILBERCUE_CHROME_FULL_TOOLS=true` ueber `tools/list` sichtbar — der `_handlers`-Dispatcher haelt den Handler aber unabhaengig davon bereit, damit `run_plan` das Tool weiter aufrufen kann.
+
+**Zahlen:** Full-Set steigt von 21 auf 22 Tools. Default-Set bleibt stabil bei 10.
 
 ### Betroffene Dateien
-- Neues Tool `src/tools/drag.ts` (oder Parameter-Erweiterung von `click`)
-- `src/registry.ts` — Tool-Registration
+- `src/tools/drag.ts` — neues Tool
+- `src/tools/drag.test.ts` — 9 Unit-Tests (Happy-Path, Interpolation, Error-Pfad, Validation, RefNotFoundError-Mapping)
+- `src/registry.ts` — Tool-Registrierung via `maybeRegisterFreeMCPTool("drag", ...)` (FULL-Set-only) und `_handlers.set("drag", ...)` fuer `run_plan`-Dispatch
+- `src/pro-feature-gates.regression.test.ts` — Sanity-Guard auf Default=10, Full=22
+- `src/registry.test.ts` — 3 Count-Assertions von 21 auf 22 aktualisiert
 
-### Fix-Vorschlag
-Neues Tool `drag` mit Parametern `from_ref`/`to_ref` (oder `from_x,from_y` / `to_x,to_y`). Implementierung:
-1. Source-Element resolven → Koordinaten via getContentQuads
-2. Target-Element resolven → Koordinaten
-3. CDP Event-Sequenz: mousedown(source) → N × mousemove(interpoliert) → mouseup(target)
-4. Optional: HTML5 Drag-Events (dragstart, dragenter, dragover, drop) parallel dispatchen fuer Framework-Kompatibilitaet
+### Framework-Kompatibilitaet (Scope-Hinweis, nach Code-Review 2026-04-11 geschaerft)
 
-**Aufwand:** Hoch — CDP Drag-Events sind notorisch fragil, braucht gute Test-Coverage.
+Die reine CDP-Mouse-Event-Sequenz deckt ab:
+- **Vanilla JS mousedown/mousemove/mouseup-Handler** (Benchmark-Seite T3.3 im Mouse-Modus)
+- **CSS-basierte Drag-Operationen:** Slider-Thumbs, Resize-Handles, Text-Selection, CSS-Grid-Drag
+- **SortableJS im Mouse-Modus** (nicht der HTML5-Modus)
+- **Custom-Mouse-basierte Drag-Listen**, die auf Mouse-Events statt auf den HTML5-Drag-API-Stack setzen
+
+**NICHT abgedeckt** (Scope-Reduktion nach Code-Review 2026-04-11): Die HTML5 Drag&Drop API (`draggable="true"` mit `dragstart`/`dragover`/`drop`-Events) wird durch eine reine CDP-`Input.dispatchMouseEvent`-Sequenz NICHT automatisch ausgeloest — Chromium braucht `Input.dispatchDragEvent` fuer diesen Event-Pfad. Damit sind **nicht** abgedeckt:
+- React DnD mit `HTML5Backend`
+- Vuedraggable / SortableJS im HTML5-Modus
+- ng2-dnd / Angular CDK drag-drop
+
+Die Tool-Description und der Header-Kommentar in `src/tools/drag.ts` dokumentieren diese Limitation explizit. Ein `drag.test.ts`-Test (`"HTML5 drag limit: ..."`) dient als Regression-Guard. Der HTML5-Pfad ist als Folge-Arbeit in `docs/deferred-work.md#fr-031b` festgehalten — dort auch der Implementierungs-Skizze-Vorschlag mit `Input.dispatchDragEvent`.
+
+**Aufwand:** Hoch — CDP-Drag-Events sind notorisch fragil, daher 12 Unit-Tests mit Mock-CDP-Zaehlern fuer die Event-Sequenz (9 urspruenglich + 3 im Review-Follow-up: Happy-Path Ref→Ref, M4 steps-Guard, M1 HTML5-Limit-Regression).
+
+**Source:** Story 18.6 (`_bmad-output/implementation-artifacts/18-6-friction-fix-batch-fr-028-aufwaerts.md`).
 
 ---
 
-## FR-029: Ambient Context nach click zu frueh bei AJAX-Updates (P2)
+## FR-029: Ambient Context nach click zu frueh bei AJAX-Updates — gefixt (Story 18.6)
 
 ### Problem
-`settle()` wurde aus click entfernt (Performance-Gewinn). Das Ambient-Context-Diff wird jetzt sofort nach dem CDP mouseup/click-Event berechnet. Bei Seiten die nach Click einen AJAX-Request machen (Daten laden, Modal oeffnen mit Delay, SPA-Route-Change), kommt das Diff zu frueh — es zeigt den alten Zustand statt des neuen.
+`settle()` wurde aus click entfernt (Performance-Gewinn). Das Ambient-Context-Diff wird jetzt sofort nach dem CDP-mouseup berechnet. Bei Seiten, die nach Click einen asynchronen Request starten (AJAX, Fetch, SPA-Route-Change), kommt das Diff zu frueh — es zeigt den alten Zustand statt des neuen. Im Benchmark faellt das nicht auf, weil die Testseite synchron reagiert. Auf echten SPAs mit 200–500 ms-APIs ist das ein Problem: der LLM denkt, der Click hat nichts bewirkt, und klickt nochmal oder wechselt auf `evaluate`.
 
-Im Benchmark faellt das nicht auf, weil die Testseite synchron reagiert. Auf echten SPAs mit langsamen APIs (200-500ms) ist das ein Problem: das LLM denkt der Click hat nichts bewirkt und klickt nochmal oder wechselt zu evaluate.
+### Root Cause
+Der `onToolResult`-Hook in `src/registry.ts` haengt nur dann einen Diff-Text an, wenn `formatDomDiff` non-empty ist (siehe `src/hooks/default-on-tool-result.ts:138`). Bei leerem Diff gibt es gar keinen Hint — der LLM sieht nur `"Clicked e1 (ref: e1)"` und nichts sonst. Der Prefetch-Slot aus Story 18.5 warmt den **naechsten** `read_page`-Cache, aendert aber die click-Response selbst nicht. FR-029 ist orthogonal und schliesst genau diese Luecke.
+
+### Fix (Story 18.6)
+Free-Repo-lokale Hint-Injection in `_runOnToolResultHook` nach dem Pro-Hook-Merge. Bedingungen:
+
+1. Tool-Name ist `click`
+2. `result.isError !== true`
+3. `_meta.elementClass` ist `"clickable"` oder `"widget-state"` (andere Klassen wie `"static"` oder `"disabled"` haben legitime No-Op-Clicks)
+4. Der Content-Array enthaelt nach dem Hook-Merge genau einen Text-Block (= Pro-/Default-Hook hat keinen Diff-Text angehaengt, weil `formatDomDiff` leer zurueckgab)
+5. Der Streak-Detector hat den Hint in dieser Session noch nicht gezeigt
+
+Hint-Text:
+
+> No visible changes yet — the page may still be loading (AJAX/SPA). Use wait_for(condition: 'network_idle') or call read_page again to check.
+
+Der Hint wird als separater Text-Block per `result.content.push({ type: "text", text: FR029_AJAX_RACE_HINT })` angehaengt. Keine `isError`-Aenderung, kein `_meta.warning`-Feld.
+
+### Streak-Detector (Anti-Spiral)
+Der Hint wird **pro Session** genau einmal gezeigt. Ein zweiter Click mit leerem Diff bekommt ihn nicht mehr — identisch zum FR-020/BUG-018-Pattern. Grund: wenn der LLM jeden Click mit einem Hint sieht, lernt er ihn zu ignorieren und wirft bei echten No-Op-Clicks den Muster-Anker weg.
+
+Reset-Triggers:
+- `navigate` (via `_resetFr029Streak()` im `_runOnToolResultHook`-navigate-Branch, analog zu `a11yTree.reset()`)
+- `configure_session` (impliziert bewusster Kontext-Wechsel)
+
+Die Streak-Map ist eine Instanz-Variable auf `ToolRegistry` (`_fr029HintShown: Map<string, boolean>`), keyed by `browserSession.sessionId` — bei Tab-Switch bekommt jede Session ihren eigenen Flag.
 
 ### Betroffene Dateien
-- `src/registry.ts` — `_injectAmbientContext()`, Timing nach Action-Tools
-- `src/cache/a11y-tree.ts` — AX-Tree-Diff Berechnung
+- `src/registry.ts` — neue Konstante `FR029_AJAX_RACE_HINT`, neue Instanz-Variable `_fr029HintShown`, neue Methoden `_maybeAppendFr029AjaxRaceHint` und `_resetFr029Streak`, Reset-Call im navigate-Branch von `_runOnToolResultHook`, Reset-Call im `configure_session`-Branch in `wrap()`
+- `src/registry.test.ts` — 5 neue Tests (Happy-Path, static-Skip, Existing-Diff-Skip, Streak-Supression, Navigate-Reset)
 
-### Fix-Vorschlag
-1. **Smart-Settle:** Nach click pruefen ob `Network.requestWillBeSent` oder `Page.frameNavigated` Events im 200ms-Fenster feuern — wenn ja, auf `Network.loadingFinished` oder AX-Tree-Stabilisierung warten (max 2s)
-2. **Oder einfacher:** Optionaler `settle_ms`-Parameter fuer click (Default 0, User/LLM kann 500 setzen wenn noetig)
-3. **Ambient-Context-Hint:** Wenn das Diff leer ist nach einem Click auf ein interaktives Element, einen Hint anhaengen: "No visible changes yet — the page may still be loading. Use wait_for(condition: 'network_idle') or read_page to check."
+### Erhaltene Invarianten
+- **Pro-Hook-Pfad:** Der Hint wird erst NACH dem Pro-Hook angehaengt, damit ein Pro-Hook-Diff-Text Vorrang hat. Falls der Pro-Hook bereits einen Text-Block angehaengt hat, bleibt der Hint aus (`blocks.length !== 1`-Guard).
+- **Free-Tier-Pfad:** Der Default-Free-Tier-Hook (`createDefaultOnToolResult`) haengt bei leerem Diff nichts an — der Hint wird also im Free-Tier bei jedem AJAX-Race-Click einmal sichtbar.
+- **`skipOnToolResultHook`:** `run_plan`-Zwischen-Steps umgehen den kompletten `_runOnToolResultHook`-Pfad (Bypass nach `isError`-Guard), sehen also auch keinen FR-029-Hint — nur der Aggregations-Hook am Plan-Ende kann ihn ausloesen.
+- **Prefetch-Slot (Story 18.5):** Der Prefetch laeuft **nach** dem `executeTool`-Return als fire-and-forget, der FR-029-Hint **vor** dem Return als Teil des synchronen Response-Paths — orthogonal, keine Race-Condition.
 
-**Aufwand:** Mittel — Variante 3 ist Niedrig und sofort umsetzbar.
+**Aufwand:** Mittel — Hint-Logik + Streak-Detector + Reset-Triggers + 5 Tests.
 
----
-
-## FR-030: Benchmark-Runs aus Projekt-Session statt /tmp (P3 — Prozess)
-
-### Problem
-Runs 3–6 liefen alle aus der Projekt-Session mit CLAUDE.md-Kontext. Der Agent kennt die Friction-Fixes, Tool-Descriptions und Benchmark-Patterns — er ist nicht blind. Der faire Vergleich mit Playwright MCP (der aus /tmp lief) erfordert /tmp-Sessions.
-
-Fuer "funktioniert alles?" sind Projekt-Session-Runs valide. Fuer "wie gut findet sich ein blindes LLM zurecht?" nicht.
-
-### Fix-Vorschlag
-Naechster offizieller Comparison-Run: benchmarkTest-Skill aus einer frischen `/tmp`-Session starten. Dafuer muss der Benchmark-Skill die Session-Erstellung automatisieren oder das im Skill-Prompt dokumentiert werden.
-
-**Aufwand:** Niedrig — Prozess-Aenderung, kein Code.
+**Source:** Story 18.6 (`_bmad-output/implementation-artifacts/18-6-friction-fix-batch-fr-028-aufwaerts.md`).
 
 ---
 
-## FR-031: Nur macOS arm64 Binary — kein x86_64, kein Linux (P3 — Distribution)
+## FR-030: Benchmark-Prozess als /tmp-Session — gefixt (Story 18.6)
 
 ### Problem
-Das Pro-Binary (`scripts/build-binary.sh`) baut nur fuer macOS arm64 (Apple Silicon). Kein x86_64 Mac, kein Linux. Fuer CI/CD-Pipelines, Docker-Container oder Remote-Server auf Linux ist das Pro-Binary nicht nutzbar — Kunden muessen auf die npm-Variante ausweichen.
+Runs 3–6 liefen alle aus der Projekt-Session mit CLAUDE.md-Kontext. Der Agent kennt die Friction-Fixes, Tool-Descriptions und Benchmark-Patterns — er ist nicht blind. Der faire Vergleich mit Playwright MCP (der aus /tmp lief) erfordert /tmp-Sessions. Fuer "funktioniert alles?" sind Projekt-Session-Runs valide. Fuer "wie gut findet sich ein blindes LLM zurecht?" nicht.
 
-Die SEA-Pipeline (Node Single Executable Application) ist da und funktioniert. Cross-Compilation erfordert:
-- Node-Binary fuer die Zielplattform herunterladen
-- postject auf dem richtigen Binary ausfuehren
-- Testen auf der Zielplattform (oder in Docker)
+### Fix (Story 18.6)
+Neuer Abschnitt **Session-Hygiene** im `benchmarkTest`-Skill (`.claude/skills/benchmarkTest/SKILL.md`) oberhalb der "Kernregeln"-Liste. Drei Regeln:
 
-### Fix-Vorschlag
-1. `scripts/build-binary.sh` um `--target` Parameter erweitern (darwin-arm64, darwin-x64, linux-x64)
-2. In Phase 6b des Publish-Skills: Matrix-Build fuer alle Targets
-3. Alle Binaries als separate Assets an den GitHub Release haengen
-4. Homebrew-Formula bleibt macOS-only — Linux-User installieren via npm oder direkter Binary-Download
+1. Offizielle Vergleichs-Runs (gegen Playwright MCP, browser-use, claude-in-chrome) MUESSEN aus einer frischen `/tmp`-Claude-Session gestartet werden.
+2. Begruendung woertlich zitiert aus FR-030.
+3. Entwicklungs-Smoke-Runs duerfen Projekt-Session nutzen, muessen aber im Export-JSON-`notes`-Feld als `"dev-session"` markiert werden.
 
-**Aufwand:** Mittel — SEA cross-compile ist dokumentiert, aber Testing auf Linux braucht Docker/CI.
+Der bestehende "Alle Dateipfade ABSOLUT"-Warnhinweis in `SKILL.md` wurde um einen Cross-Reference-Satz auf den neuen Session-Hygiene-Abschnitt erweitert.
+
+### Betroffene Dateien
+- `.claude/skills/benchmarkTest/SKILL.md` — neuer Abschnitt `## Session-Hygiene` oberhalb der Kernregeln, Cross-Reference im "Dateipfade ABSOLUT"-Bullet
+
+**Aufwand:** Niedrig — reine Prozess-Dokumentation im Skill-Markdown.
+
+**Source:** Story 18.6 (`_bmad-output/implementation-artifacts/18-6-friction-fix-batch-fr-028-aufwaerts.md`).
 
 ---
 
-## FR-032: Memory aufraemen — veraltete Eintraege (Info)
+## FR-031: Linux-x64-Binary Build-Pipeline — vorbereitet (Story 18.6)
 
 ### Problem
-Mindestens 5-6 Memory-Eintraege in `MEMORY.md` sind historisch abgeschlossen und verwirren bei zukuenftigen Sessions mehr als sie helfen:
-- Click-Scroll-Bug (gefixt am 2026-04-04)
-- Friction Reports c987ac11, 9254a969 (alle Frictions daraus gefixt)
-- Ambient Context Optimierung (ABGESCHLOSSEN)
-- BUG-015 Screenshot Occlusion (GEFIXT)
-- Phase 6 Bug-Fix Playbook (ABGESCHLOSSEN)
+Das Pro-Binary (`scripts/build-binary.sh` im Pro-Repo) baut nur fuer macOS arm64. Kein x86_64 Mac, kein Linux. Fuer CI/CD-Pipelines, Docker-Container oder Remote-Server auf Linux ist das Pro-Binary nicht nutzbar — Kunden muessen auf die npm-Variante ausweichen.
 
-### Fix-Vorschlag
-Veraltete Memory-Eintraege entfernen oder als "historisch" markieren. Nicht durch den Frictioneer — manuell oder per session-recall Cleanup.
+### Fix (Story 18.6)
+Neues Adapter-Skript **`scripts/build-binary-linux.sh`** im Free-Repo. Der Build-Flow:
 
-**Aufwand:** Minimal — Memory-Dateien loeschen/archivieren.
+1. Linux-x64-Node-Binary per `curl` von `https://nodejs.org/dist/vX.Y.Z/node-vX.Y.Z-linux-x64.tar.gz` laden
+2. `esbuild` CJS-Bundle (wiederverwendet aus bestehender Pipeline)
+3. `sea-config.json` schreiben mit `disableExperimentalSEAWarning: true`
+4. `node --experimental-sea-config` fuer den SEA-Blob
+5. `postject` gegen das Linux-Node-Binary mit Standard-Sentinel-Fuse (`NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2`)
+6. Ausgabe: `dist/silbercue-chrome-linux-x64`, kein `codesign` noetig
+
+Das Skript **laesst sich** auch auf macOS ausfuehren (postject ist plattform-agnostisch), aber der Release-Flow wird **in einem Linux-GitHub-Actions-Runner** (`ubuntu-latest`) laufen — der tatsaechliche Cross-Platform-Build ist nicht in einem Dev-Agent-Run produzierbar. Der Skript-Kopfkommentar dokumentiert den erwarteten CI-Flow ausfuehrlich.
+
+`scripts/publish.ts` Phase 5.2 hat einen ergaenzten Kommentar-Block, der auf das Linux-Binary verweist. Der Upload selbst passiert in Phase 6b des `silbercuechrome-publish`-Skills, parallel zum bestehenden macOS-arm64-Binary-Upload — analog zur bestehenden Architektur.
+
+### Betroffene Dateien
+- `scripts/build-binary-linux.sh` — neues Build-Skript (ausfuehrbar, 130 Zeilen mit Kommentar-Header)
+- `scripts/publish.ts` — Phase-5.2-Kommentar-Block um FR-031-Hinweis ergaenzt
+- `scripts/publish.test.ts` — 3 neue Tests (Kommentar-Existenz, Skript-Existenz + Execute-Bit, CI/Docker-Flow-Dokumentation)
+
+### Status und offene Punkte
+- **Linux-Binary-Build selbst:** wird im naechsten Release-Cycle in CI ausgefuehrt, nicht in dieser Story. Dokumentation des Flows ist abgeschlossen.
+- **Homebrew-Formula:** bleibt macOS-only. Linux-User installieren via npm (`npm i -g silbercuechrome`) oder direktem Binary-Download vom GitHub-Release.
+- **Pro-Repo build-binary.sh:** Erweiterung um `--target linux-x64` bleibt als optionaler Follow-up. Der Free-Repo-Adapter-Pfad ist ausreichend, weil esbuild und postject bereits gegen den Free-Source-Tree bauen und das Pro-Binary ohnehin in Phase 6b separat signiert wird.
+
+**Aufwand:** Mittel — Skript + Kommentar + 3 Tests. Kein Live-Build in dieser Story.
+
+**Source:** Story 18.6 (`_bmad-output/implementation-artifacts/18-6-friction-fix-batch-fr-028-aufwaerts.md`).
+
+---
+
+## FR-032: Memory aufraemen — gefixt (Story 18.6)
+
+### Problem
+Sieben Memory-Eintraege in `MEMORY.md` waren historisch abgeschlossen und verwirrten bei zukuenftigen Sessions mehr als sie halfen:
+- `Click-Scroll-Bug` (gefixt 2026-04-04)
+- `Friction Report c987ac11` (alle 10 Frictions gefixt)
+- `Friction Report 9254a969` (alle Frictions gefixt)
+- `Ambient Context Optimierung` (ABGESCHLOSSEN)
+- `BUG-015 Screenshot Occlusion` (GEFIXT)
+- `Phase 6 Bug-Fix Playbook` (ABGESCHLOSSEN 2026-04-08)
+- `Phase 5 Live-Test Playbook` (Historisches Playbook)
+
+### Fix (Story 18.6)
+Die sieben Eintraege wurden aus dem Aktiv-Index von `MEMORY.md` in einen neuen Abschnitt `## Historisch / abgeschlossen (Story 18.6, 2026-04-11)` am Dateiende verschoben. Die referenzierten Einzel-Markdown-Dateien (`project_click-scroll-bug.md` etc.) bleiben bestehen — nur der Aktiv-Index-Eintrag wurde verschoben, damit Rollback durch manuelles Zurueckkopieren moeglich ist.
+
+Nicht entfernt wurden die aktiven Eintraege:
+- `Operator-Pivot approved` (STRATEGISCH TRAGEND)
+- `Distribution-Setup Status` (AKTIV)
+- `MQS-Framework` (festgelegt, nicht aendern)
+- `Codex-Findings ernst nehmen` (aktueller Session-Feedback-Eintrag)
+- Alle BUG-/Reference-Eintraege, die nicht als ABGESCHLOSSEN markiert sind
+
+### Betroffene Dateien
+- `/Users/silbercue/.claude/projects/-Users-silbercue-Documents-Cursor-Skills-SilbercueChrome/memory/MEMORY.md` — 7 Eintraege in Historisch-Abschnitt verschoben
+
+**Aufwand:** Minimal — reine Memory-Datei-Pflege.
+
+**Source:** Story 18.6 (`_bmad-output/implementation-artifacts/18-6-friction-fix-batch-fr-028-aufwaerts.md`).
 
 ---
 

@@ -332,8 +332,21 @@ export async function clickHandler(
     // FR-E: Check for new tabs after click
     const newTabHint = await detectNewTab(cdpClient, beforeTabIds);
 
-    // Story 13a.2: Classify clicked element for ambient context decision
-    const elementClass = params.ref ? a11yTree.classifyRef(params.ref) : "clickable";
+    // Story 13a.2: Classify clicked element for ambient context decision.
+    //
+    // Story 18.6 review-fix M2: When the caller used a CSS selector (not a
+    // ref), we do NOT know the element's a11y-tree classification — the
+    // selector may target a non-interactive span/div that happens to have
+    // a click handler. The old code pauschal assigned "clickable" which
+    // caused the FR-029 AJAX-race hint to fire on arbitrary selector
+    // clicks, including legitimate no-op clicks on static elements.
+    //
+    // New behaviour: selector-path clicks get the distinct class
+    // `"selector-click"`. The FR-029 hint trigger in `registry.ts`
+    // explicitly allow-lists `"clickable"` and `"widget-state"` only,
+    // so selector clicks never fire the hint — we have no proof that
+    // the target was interactive.
+    const elementClass = params.ref ? a11yTree.classifyRef(params.ref) : "selector-click";
 
     const elapsedMs = Math.round(performance.now() - start);
     const suffix = clickResult.method !== "cdp" ? `, fallback: ${clickResult.method}` : "";
