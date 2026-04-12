@@ -55,8 +55,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
   // -------------------------------------------------------------
   describe("inspect_element (AC #3)", () => {
     it("is NOT registered in tools/list when no registerProTools hook is set", () => {
-      const toolFn = vi.fn();
-      const mockServer = { tool: toolFn } as never;
+      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
+      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(
@@ -80,8 +80,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       // erwartet GENAU 10), als auch wenn ein Extended-Tool in der
       // FULL_TOOLS-Registrierung verloren geht (Full-Set erwartet >= 21).
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
-      const toolFn = vi.fn();
-      const mockServer = { tool: toolFn } as never;
+      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
+      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(
@@ -100,10 +100,11 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       );
       expect(registeredNames).not.toContain("inspect_element");
       // Story 19.7: Default-Set hat 2 Tools (virtual_desk + operator).
+      // Story 19.8: + 5 Fallback-Tools (click, type, read_page, wait_for, screenshot) registered but disabled.
       // evaluate ist nur im FULL_TOOLS-Modus sichtbar.
       expect(registeredNames).toContain("virtual_desk");
       expect(registeredNames).toContain("operator");
-      expect(registeredNames.length).toBe(2);
+      expect(registeredNames.length).toBe(7);
     });
 
     it("Free-Tier FULL_TOOLS-Modus registriert alle 23 Tools inkl. operator/dialog/console/network/drag", () => {
@@ -111,8 +112,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       // Default-Set hat 2 Tools (virtual_desk, operator).
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       try {
-        const toolFn = vi.fn();
-        const mockServer = { tool: toolFn } as never;
+        const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
+        const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
         const mockCdpClient = {} as never;
 
         const registry = new ToolRegistry(
@@ -235,8 +236,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
   // -------------------------------------------------------------
   describe("switch_tab / virtual_desk / dom_snapshot default gate (AC #6)", () => {
     function buildRegistryForGating() {
-      const toolFn = vi.fn();
-      const mockServer = { tool: toolFn } as never;
+      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
+      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
       const mockCdpClient = { send: vi.fn() } as unknown as CdpClient;
       const registry = new ToolRegistry(
         mockServer,

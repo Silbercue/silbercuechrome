@@ -101,6 +101,16 @@ export interface OperatorDeps {
   scrollHandler: (params: Record<string, unknown>) => Promise<ToolResponse>;
   /** Settle function — waits for page to settle */
   settle: () => Promise<boolean>;
+  /**
+   * Story 19.8 (AC-1): Switch MCP tool list to Fallback primitives.
+   * Called when scan finds no card match. No-op in FULL_TOOLS mode.
+   */
+  switchToFallbackMode: () => void;
+  /**
+   * Story 19.8 (AC-4): Switch MCP tool list back to Standard mode.
+   * Called when a re-scan finds card matches after Fallback.
+   */
+  switchToStandardMode: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +404,11 @@ async function scanFlow(
     // SCANNING → FALLBACK (ScanCompleted with hasMatch=false routes directly to FALLBACK)
     sm.transition({ type: "ScanCompleted", matchResults: scan.matchResults, hasMatch: false });
 
+    // Story 19.8 (AC-1, Subtask 3.2): Switch MCP tool list to Fallback primitives.
+    // This sends notifications/tools/list_changed to the client so the LLM
+    // sees click, type, read_page, wait_for, screenshot instead of operator.
+    deps.switchToFallbackMode();
+
     // H3 fix: Validate fallback text through Zod before returning.
     const text = FallbackTextSchema.parse(FALLBACK_NO_MATCH);
     const elapsedMs = Math.round(performance.now() - start);
@@ -411,6 +426,11 @@ async function scanFlow(
 
   // SCANNING → AWAITING_SELECTION
   sm.transition({ type: "ScanCompleted", matchResults: scan.matchResults, hasMatch: true });
+
+  // Story 19.8 (AC-4, Subtask 3.4): If we were in Fallback mode and a
+  // re-scan found cards, switch back to Standard mode before returning
+  // the offer. This restores the operator+virtual_desk tool set.
+  deps.switchToStandardMode();
 
   const pageContext = getPageContext(deps);
   const offer = buildOfferReturn(pageContext, scan.matchedAnnotations, scan.nodes);
@@ -513,6 +533,9 @@ async function executeFlow(
 
   // If the post-scan found new cards, append the offer
   if (scan.hasMatch) {
+    // Story 19.8 (AC-4, Subtask 3.5): If the post-execution scan found
+    // cards and we're in Fallback mode, switch back to Standard mode.
+    deps.switchToStandardMode();
     const offer = buildOfferReturn(pageContext, scan.matchedAnnotations, scan.nodes);
     text += "\n\n" + serializeOfferReturn(offer);
   }

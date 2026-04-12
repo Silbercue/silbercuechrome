@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CdpClient } from "./cdp/cdp-client.js";
 import type { SessionManager } from "./cdp/session-manager.js";
 import type { DialogHandler } from "./cdp/dialog-handler.js";
@@ -14,15 +14,15 @@ import { evaluateSchema, evaluateHandler } from "./tools/evaluate.js";
 import type { EvaluateParams } from "./tools/evaluate.js";
 import { navigateSchema, navigateHandler } from "./tools/navigate.js";
 import type { NavigateParams } from "./tools/navigate.js";
-import { readPageSchema, readPageHandler } from "./tools/read-page.js";
+import { readPageHandler } from "./tools/read-page.js";
 import type { ReadPageParams } from "./tools/read-page.js";
-import { screenshotSchema, screenshotHandler } from "./tools/screenshot.js";
+import { screenshotHandler } from "./tools/screenshot.js";
 import type { ScreenshotParams } from "./tools/screenshot.js";
-import { waitForSchema, waitForHandler } from "./tools/wait-for.js";
+import { waitForHandler } from "./tools/wait-for.js";
 import type { WaitForParams } from "./tools/wait-for.js";
-import { clickSchema, clickHandler } from "./tools/click.js";
+import { clickHandler } from "./tools/click.js";
 import type { ClickParams } from "./tools/click.js";
-import { typeSchema, typeHandler } from "./tools/type.js";
+import { typeHandler } from "./tools/type.js";
 import type { TypeParams } from "./tools/type.js";
 import { tabStatusHandler } from "./tools/tab-status.js";
 import type { TabStatusParams } from "./tools/tab-status.js";
@@ -71,6 +71,7 @@ import { operatorHandler, operatorZodShape } from "./operator/operator-tool.js";
 import type { OperatorDeps } from "./operator/operator-tool.js";
 import { virtualDeskOperatorZodShape } from "./operator/virtual-desk-tool.js";
 import { settle } from "./cdp/settle.js";
+import { FALLBACK_TOOL_SET, getFallbackTools } from "./fallback-registry.js";
 
 /**
  * Story 19.7 — Operator-Modus: Nur zwei Top-Level-Tools.
@@ -241,6 +242,104 @@ const FR029_AJAX_RACE_HINT =
 export class ToolRegistry implements ToolRegistryPublic {
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
   readonly planStateStore = new PlanStateStore();
+
+  /**
+   * Story 19.8: Map of MCP RegisteredTool references (returned by server.tool()).
+   * Used by switchToFallbackMode/switchToStandardMode to enable/disable tools
+   * via the SDK's native enabled-flag mechanism.
+   */
+  private _registeredMcpTools = new Map<string, RegisteredTool>();
+
+  /**
+   * Story 19.8 (AC-1, AC-4): Current tool-set mode.
+   *
+   * - "standard": 2 tools (virtual_desk + operator)
+   * - "fallback": 6 primitives (virtual_desk + click + type + read_page + wait_for + screenshot)
+   *
+   * Lives on the ToolRegistry (persists between operator calls), NOT on
+   * the per-call StateMachine. FULL_TOOLS mode ignores this entirely.
+   *
+   * Subtask 2.6: Flicker-Schutz — switchTo*Mode() checks current mode
+   * before sending sendToolListChanged(), so duplicate calls are no-ops.
+   */
+  private _currentMode: "standard" | "fallback" = "standard";
+
+  /**
+   * Story 19.8 (Subtask 2.4): Returns the current tool-set mode.
+   */
+  getCurrentMode(): "standard" | "fallback" {
+    return this._currentMode;
+  }
+
+  /**
+   * Story 19.8 (Subtask 2.2): Switch to Fallback mode.
+   *
+   * Enables the Fallback primitives and disables the Standard-only tools
+   * (operator) via the SDK's native RegisteredTool.enable/disable API,
+   * then sends `notifications/tools/list_changed` so the MCP client
+   * refreshes its tool list. No-op if already in Fallback mode
+   * (Subtask 2.6 — Flicker-Schutz).
+   *
+   * Does NOT reset session/tab references (AC-3, Subtask 2.7).
+   * Error in sendToolListChanged is logged, never thrown (Invariante 4).
+   */
+  switchToFallbackMode(): void {
+    if (this._currentMode === "fallback") return;
+    if (isFullToolsMode()) return;
+    this._currentMode = "fallback";
+    this._applyModeToRegisteredTools();
+    try {
+      this.server.sendToolListChanged();
+    } catch (err) {
+      debug(
+        "switchToFallbackMode: sendToolListChanged failed: %s",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  /**
+   * Story 19.8 (Subtask 2.3): Switch back to Standard mode.
+   *
+   * Enables the Standard tools (virtual_desk + operator) and disables
+   * the Fallback-only primitives, then sends `notifications/tools/list_changed`.
+   * No-op if already in Standard mode (Subtask 2.6 — Flicker-Schutz).
+   *
+   * Does NOT reset session/tab references (AC-3, Subtask 2.7).
+   * Error in sendToolListChanged is logged, never thrown (Invariante 4).
+   */
+  switchToStandardMode(): void {
+    if (this._currentMode === "standard") return;
+    if (isFullToolsMode()) return;
+    this._currentMode = "standard";
+    this._applyModeToRegisteredTools();
+    try {
+      this.server.sendToolListChanged();
+    } catch (err) {
+      debug(
+        "switchToStandardMode: sendToolListChanged failed: %s",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  /**
+   * Story 19.8: Apply the current mode to all registered MCP tools.
+   *
+   * In standard mode: only DEFAULT_TOOL_SET tools are enabled.
+   * In fallback mode: only FALLBACK_TOOL_SET tools are enabled.
+   * Pro-registered tools are not managed here (they stay enabled).
+   */
+  private _applyModeToRegisteredTools(): void {
+    const activeSet = this._currentMode === "fallback" ? FALLBACK_TOOL_SET : DEFAULT_TOOL_SET;
+    for (const [name, tool] of this._registeredMcpTools) {
+      if (activeSet.has(name)) {
+        tool.enable();
+      } else {
+        tool.disable();
+      }
+    }
+  }
 
   /**
    * Story 18.6 (FR-029): Per-Session-Flag fuer den AJAX-Race-Hint.
@@ -1144,6 +1243,13 @@ export class ToolRegistry implements ToolRegistryPublic {
     // `_registerProToolDelegate`-Pfad und sind von diesem Gate NICHT
     // betroffen. Das Pro-Repo hat keine eigene Vorstellung vom Default-Set
     // und wuerde sonst seine eigenen Tools verlieren.
+    //
+    // Story 19.8: In non-FULL_TOOLS mode, Fallback-Set tools (click, type,
+    // read_page, wait_for, screenshot) are ALSO registered via server.tool()
+    // but start disabled. This allows switchToFallbackMode() to enable them
+    // at runtime via the SDK's native RegisteredTool.enable/disable API.
+    // The RegisteredTool reference is stored in _registeredMcpTools so the
+    // mode-switch methods can toggle enabled state.
     const fullToolsMode = isFullToolsMode();
     const maybeRegisterFreeMCPTool = (
       name: string,
@@ -1151,11 +1257,28 @@ export class ToolRegistry implements ToolRegistryPublic {
       shape: Record<string, z.ZodTypeAny>,
       handler: (params: Record<string, unknown>) => Promise<ToolResponse>,
     ): void => {
-      if (!fullToolsMode && !DEFAULT_TOOL_SET.has(name)) {
+      const inDefaultSet = DEFAULT_TOOL_SET.has(name);
+      const inFallbackSet = FALLBACK_TOOL_SET.has(name);
+      if (!fullToolsMode && !inDefaultSet && !inFallbackSet) {
         return;
       }
-      this.server.tool(name, description, shape, handler);
+      const registered = this.server.tool(name, description, shape, handler);
+      this._registeredMcpTools.set(name, registered);
+      // In standard non-FULL_TOOLS mode, disable tools that are only in
+      // the fallback set (not in the default set). They start hidden and
+      // are enabled when switchToFallbackMode() is called.
+      if (!fullToolsMode && !inDefaultSet && inFallbackSet) {
+        registered.disable();
+      }
     };
+
+    // Story 19.8 H1/H2 fix: Build a lookup map from fallback-registry.ts so
+    // the 5 Fallback-only tools (click, type, read_page, wait_for, screenshot)
+    // use getFallbackTools() as Single Source of Truth for schemas & descriptions.
+    // This eliminates the inline drift risk that the Codex review flagged.
+    const fallbackToolMap = new Map(
+      getFallbackTools().map((t) => [t.name, t] as const),
+    );
 
     // Story 15.2: Install the registerTool delegate so the Pro-Repo can
     // register extra MCP tools from within its `registerProTools` hook.
@@ -1260,6 +1383,9 @@ export class ToolRegistry implements ToolRegistryPublic {
             return false;
           }
         },
+        // Story 19.8 (Task 4): Mode-switch closures delegating to ToolRegistry.
+        switchToFallbackMode: () => this.switchToFallbackMode(),
+        switchToStandardMode: () => this.switchToStandardMode(),
       });
 
       maybeRegisterFreeMCPTool(
@@ -1273,45 +1399,32 @@ export class ToolRegistry implements ToolRegistryPublic {
     }
 
     // --- 2. Reading ---
+    // Story 19.8 H1/H2 fix: Schema + Description from fallback-registry.ts (Single Source of Truth)
     maybeRegisterFreeMCPTool(
       "read_page",
-      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call read_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than screenshot.",
-      {
-        depth: readPageSchema.shape.depth,
-        ref: readPageSchema.shape.ref,
-        filter: readPageSchema.shape.filter,
-        max_tokens: readPageSchema.shape.max_tokens,
-      },
+      fallbackToolMap.get("read_page")!.description,
+      fallbackToolMap.get("read_page")!.schema,
       wrap(async (params) => {
         return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "read_page"),
     );
 
     // --- 3. Interaction (click/type/fill_form/press_key/scroll) ---
+    // Story 19.8 H1/H2 fix: Schema + Description from fallback-registry.ts (Single Source of Truth)
     maybeRegisterFreeMCPTool(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state. If click fails with a stale-ref error, call read_page for fresh refs and retry. Avoid evaluate(querySelector + .click()) as default recovery — it bypasses the CDP pointer chain and hides real bugs. (Legitimate exception: explicitly testing synthetic JS event plumbing.)",
-      {
-        ref: clickSchema.shape.ref,
-        selector: clickSchema.shape.selector,
-        text: clickSchema.shape.text,
-        x: clickSchema.shape.x,
-        y: clickSchema.shape.y,
-      },
+      fallbackToolMap.get("click")!.description,
+      fallbackToolMap.get("click")!.schema,
       wrap(async (params) => {
         return clickHandler(params as unknown as ClickParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "click"),
     );
 
+    // Story 19.8 H1/H2 fix: Schema + Description from fallback-registry.ts (Single Source of Truth)
     maybeRegisterFreeMCPTool(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead. On stale-ref errors, call read_page for fresh refs and retry. Avoid evaluate(element.value = ...) as default data-entry recovery — it bypasses framework listeners (React, Vue) and masks real failures. (Legitimate exception: tests explicitly targeting synthetic event plumbing.)",
-      {
-        ref: typeSchema.shape.ref,
-        selector: typeSchema.shape.selector,
-        text: typeSchema.shape.text,
-        clear: typeSchema.shape.clear,
-      },
+      fallbackToolMap.get("type")!.description,
+      fallbackToolMap.get("type")!.schema,
       wrap(async (params) => {
         return typeHandler(params as unknown as TypeParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
       }, "type"),
@@ -1466,15 +1579,11 @@ export class ToolRegistry implements ToolRegistryPublic {
     );
 
     // --- 5. Timing (wait_for/observe) ---
+    // Story 19.8 H1/H2 fix: Schema + Description from fallback-registry.ts (Single Source of Truth)
     maybeRegisterFreeMCPTool(
       "wait_for",
-      "Wait for a condition: element visible, network idle, or JS expression true",
-      {
-        condition: waitForSchema.shape.condition,
-        selector: waitForSchema.shape.selector,
-        expression: waitForSchema.shape.expression,
-        timeout: waitForSchema.shape.timeout,
-      },
+      fallbackToolMap.get("wait_for")!.description,
+      fallbackToolMap.get("wait_for")!.schema,
       wrap(async (params) => {
         return waitForHandler(params as unknown as WaitForParams, this.cdpClient, this.sessionId);
       }, "wait_for"),
@@ -1500,13 +1609,11 @@ export class ToolRegistry implements ToolRegistryPublic {
     );
 
     // --- 6. Visual (screenshot/dom_snapshot — last resort for visual tasks) ---
+    // Story 19.8 H1/H2 fix: Schema + Description from fallback-registry.ts (Single Source of Truth)
     maybeRegisterFreeMCPTool(
       "screenshot",
-      "Capture a WebP image of the page (max 800px, <100KB). You CANNOT use screenshots as input for click/type — use read_page for element refs. Only use for visual verification, canvas pages, or explicit user requests. ~10-30x more tokens than read_page.",
-      {
-        full_page: screenshotSchema.shape.full_page,
-        som: screenshotSchema.shape.som,
-      },
+      fallbackToolMap.get("screenshot")!.description,
+      fallbackToolMap.get("screenshot")!.schema,
       wrap(async (params) => {
         // Check for minimized window before taking screenshot
         const activeTarget = this._browserSession.tabStateCache.activeTargetId;

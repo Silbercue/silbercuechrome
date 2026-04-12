@@ -425,32 +425,45 @@ describe("tool-definition-overhead", () => {
     // Ensure standard mode (not FULL_TOOLS)
     delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
 
-    const toolFn = vi.fn();
-    const mockServer = { tool: toolFn } as never;
+    const toolFn = vi.fn().mockImplementation(() => {
+      const tool = { enabled: true, enable: vi.fn(() => { tool.enabled = true; }), disable: vi.fn(() => { tool.enabled = false; }), update: vi.fn(), remove: vi.fn() };
+      return tool;
+    });
+    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
     const mockCdpClient = {} as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
     // server.tool() is called with: (name, description, zodShape, handler)
+    // Story 19.8: In standard mode, fallback tools are registered but disabled.
+    // The token budget only counts ENABLED tools (what the LLM actually sees).
+    // toolFn returns a mock RegisteredTool — check the enabled state to filter.
     let totalChars = 0;
     const registeredNames: string[] = [];
+    const enabledNames: string[] = [];
 
-    for (const call of toolFn.mock.calls) {
+    for (let i = 0; i < toolFn.mock.calls.length; i++) {
+      const call = toolFn.mock.calls[i]!;
       const name = call[0] as string;
       const description = call[1] as string;
       const zodShape = call[2] as Record<string, unknown>;
+      const returned = toolFn.mock.results[i]!.value as { enabled: boolean };
 
       registeredNames.push(name);
 
-      // Accumulate: name + description + JSON-serialized schema
-      totalChars += name.length;
-      totalChars += description.length;
-      totalChars += JSON.stringify(zodShape).length;
+      // Only count enabled tools for token budget
+      if (returned.enabled) {
+        enabledNames.push(name);
+        totalChars += name.length;
+        totalChars += description.length;
+        totalChars += JSON.stringify(zodShape).length;
+      }
     }
 
-    // Standard mode should have exactly 2 tools
-    expect(registeredNames).toEqual(["virtual_desk", "operator"]);
+    // Standard mode: 2 enabled tools (virtual_desk + operator)
+    // + 5 disabled fallback tools = 7 total registered
+    expect(enabledNames).toEqual(["virtual_desk", "operator"]);
 
     const estimatedTokens = totalChars / CHARS_PER_TOKEN;
     expect(estimatedTokens).toBeLessThan(3000);
