@@ -10,29 +10,6 @@ import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 import { prefetchSlot } from "./cache/prefetch-slot.js";
 
-/**
- * Story 19.8: Helper to create a mock RegisteredTool object.
- * server.tool() now returns a RegisteredTool with enable/disable methods.
- */
-function createMockRegisteredTool() {
-  const tool = {
-    enabled: true,
-    enable: vi.fn(() => { tool.enabled = true; }),
-    disable: vi.fn(() => { tool.enabled = false; }),
-    update: vi.fn(),
-    remove: vi.fn(),
-  };
-  return tool;
-}
-
-/**
- * Story 19.8: Creates a vi.fn() mock for server.tool() that returns
- * a mock RegisteredTool on each call. Use via `const toolFn = createMockToolFn();`
- */
-function createMockToolFn() {
-  return vi.fn().mockImplementation(() => createMockRegisteredTool());
-}
-
 describe("ToolRegistry", () => {
   // Story 9.5: Reset Pro hooks between tests
   // Story 18.3: Alle bestehenden Tests in diesem describe-Block wurden in
@@ -65,8 +42,8 @@ describe("ToolRegistry", () => {
 
   it("should register evaluate, navigate, read_page, screenshot, wait_for, click, type, fill_form, virtual_desk, and run_plan tools via server.tool() in FULL_TOOLS mode", () => {
     // Story 18.3: FULL_TOOLS mode is set by the parent beforeEach.
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
     const mockCdpClient = {} as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
@@ -80,19 +57,19 @@ describe("ToolRegistry", () => {
     // Story 18.3 Review-Fix H1: `handle_dialog`, `console_logs` und
     // `network_monitor` werden seit dem H1-Fix **unbedingt** registriert
     // (Runtime-Guard im Handler statt Registration-Gate), damit der
-    // FULL_TOOLS-Export tatsaechlich alle 23 Tools enthaelt — auch im
+    // FULL_TOOLS-Export tatsaechlich alle 21 Tools enthaelt — auch im
     // Legacy-Test-Konstruktor, in dem die zugehoerigen Collectors undefined
-    // sind.
+    // sind. Zuvor waren es nur 18.
     //
-    // Zaehlung (FULL_TOOLS=true): virtual_desk, operator, read_page, click,
-    // type, fill_form, press_key, scroll, drag, navigate, switch_tab,
-    // tab_status, wait_for, observe, screenshot, dom_snapshot,
-    // handle_dialog, file_upload, console_logs, network_monitor,
-    // configure_session, run_plan, evaluate = 23 Tools.
+    // Zaehlung (FULL_TOOLS=true): virtual_desk, read_page, click, type,
+    // fill_form, press_key, scroll, drag, navigate, switch_tab, tab_status,
+    // wait_for, observe, screenshot, dom_snapshot, handle_dialog,
+    // file_upload, console_logs, network_monitor, configure_session,
+    // run_plan, evaluate = 22 Tools.
     //
-    // Story 19.7: `operator` ist sowohl im Default-Set als auch im Full-Set.
-    // Default-Set hat 2 Tools (virtual_desk, operator).
-    expect(toolFn).toHaveBeenCalledTimes(23);
+    // Story 18.6 (FR-028): `drag` ist im Full-Set, nicht im Default-Set.
+    // Default-Set bleibt stabil bei 10 (siehe DEFAULT_TOOL_NAMES).
+    expect(toolFn).toHaveBeenCalledTimes(22);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
@@ -112,10 +89,9 @@ describe("ToolRegistry", () => {
       }),
       expect.any(Function),
     );
-    // Story 19.8 H1/H2 fix: read_page description now comes from fallback-registry.ts (Single Source of Truth)
     expect(toolFn).toHaveBeenCalledWith(
       "read_page",
-      expect.stringMatching(/^PRIMARY tool for page understanding.*call read_page.*~10-30x cheaper than screenshot\./s),
+      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call read_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than screenshot.",
       expect.objectContaining({
         depth: expect.anything(),
         ref: expect.anything(),
@@ -239,8 +215,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 42 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -261,8 +237,8 @@ describe("ToolRegistry", () => {
     const mockCdpClient = {
       send: vi.fn().mockResolvedValue({}),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -281,8 +257,8 @@ describe("ToolRegistry", () => {
         result: { value: { scrollY: 300, scrollHeight: 2000, clientHeight: 800 } },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -303,8 +279,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
     registry.registerAll();
@@ -327,8 +303,8 @@ describe("ToolRegistry", () => {
         };
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
     registry.registerAll();
@@ -342,8 +318,8 @@ describe("ToolRegistry", () => {
   });
 
   it("executeTool returns error for unknown tool", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
     registry.registerAll();
@@ -360,8 +336,8 @@ describe("ToolRegistry", () => {
   });
 
   it("executeTool does not expose run_plan itself (no recursion)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
     registry.registerAll();
@@ -375,8 +351,8 @@ describe("ToolRegistry", () => {
   it("updateClient swaps cdpClient and sessionId", () => {
     const oldClient = { send: vi.fn() } as never;
     const newClient = { send: vi.fn().mockResolvedValue({ result: { type: "number", value: 99 } }) } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, oldClient, "session-old", {} as never);
 
@@ -392,8 +368,8 @@ describe("ToolRegistry", () => {
     const newClient = {
       send: vi.fn().mockResolvedValue({ result: { type: "string", value: "new" } }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, oldClient, "session-old", {} as never);
     registry.registerAll();
@@ -417,8 +393,8 @@ describe("ToolRegistry", () => {
   // to tools — BrowserSession.ensureReady() handles reconnect transparently.
   // The getter is kept as a constant "connected" for test compatibility.
   it("connectionStatus is a constant 'connected' in the lazy-launch architecture", () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Even when a legacy getConnectionStatus callback is passed, the new
     // registry ignores it — the lazy-launch gate owns reconnect semantics.
@@ -439,8 +415,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 42 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Mock DialogHandler that returns pending notifications
     const mockDialogHandler = {
@@ -489,8 +465,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 1 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Free tier license with custom limit of 2
     const license: LicenseStatus = { isPro: () => false };
@@ -544,8 +520,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 1 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Pro license — no truncation expected
     const license: LicenseStatus = { isPro: () => true };
@@ -599,8 +575,8 @@ describe("ToolRegistry", () => {
       },
     });
 
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
 
     // Import getProHooks to pass to wrapWithGate
@@ -627,8 +603,8 @@ describe("ToolRegistry", () => {
       featureGate: () => ({ allowed: true }),
     });
 
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
 
     const { getProHooks } = await import("./hooks/pro-hooks.js");
@@ -649,8 +625,8 @@ describe("ToolRegistry", () => {
 
   it("wrapWithGate passes through when no featureGate hook is registered", async () => {
     // Default empty hooks — no featureGate
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
 
     const { getProHooks } = await import("./hooks/pro-hooks.js");
@@ -674,8 +650,8 @@ describe("ToolRegistry", () => {
       featureGate: () => ({ allowed: false }),
     });
 
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
 
     const { getProHooks } = await import("./hooks/pro-hooks.js");
@@ -695,8 +671,8 @@ describe("ToolRegistry", () => {
   // --- Story 9.6: dom_snapshot Pro-Feature-Gate ---
 
   it("dom_snapshot is registered in server.tool() regardless of license tier (discoverability)", () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Free tier — dom_snapshot should still be registered
     const license: LicenseStatus = { isPro: () => false };
@@ -716,8 +692,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: dom_snapshot via MCP returns isError with warm Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -746,8 +722,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: dom_snapshot via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -766,8 +742,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Pro-Tier: dom_snapshot via executeTool is NOT blocked by feature gate", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => true };
     const registry = new ToolRegistry(
@@ -790,8 +766,8 @@ describe("ToolRegistry", () => {
   // --- Story 7.2: network_monitor registration with NetworkCollector ---
 
   it("network_monitor is registered when NetworkCollector is provided", () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Provide a mock NetworkCollector as the 11th constructor argument
     const mockNetworkCollector = {
@@ -832,8 +808,8 @@ describe("ToolRegistry", () => {
     // UNBEDINGT in `tools/list` registriert — die Collector-Existenz-Pruefung
     // wandert in den Runtime-Handler, der bei fehlendem Collector eine
     // praezise Fehlermeldung (statt "Unknown tool") zurueckgibt.
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
     registry.registerAll();
@@ -858,8 +834,8 @@ describe("ToolRegistry", () => {
     const customGate = vi.fn().mockReturnValue({ allowed: true });
     registerProHooks({ featureGate: customGate });
 
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -877,8 +853,8 @@ describe("ToolRegistry", () => {
   // --- Story 7.3 M2: wrap-Pipeline Integration Tests with SessionDefaults ---
 
   it("wrap pipeline resolves session defaults into tool params (MCP path)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Create a CdpClient mock that captures the expression it receives
     const mockCdpClient = {
@@ -932,8 +908,8 @@ describe("ToolRegistry", () => {
   });
 
   it("wrap pipeline injects suggestion into _meta after threshold calls (MCP path)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const mockCdpClient = {
       send: vi.fn().mockResolvedValue({
@@ -979,8 +955,8 @@ describe("ToolRegistry", () => {
   });
 
   it("H2: configure_session does not run through trackCall (no pollution of call history)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const sessionDefaults = new SessionDefaults({ promoteThreshold: 3 });
 
@@ -1026,8 +1002,8 @@ describe("ToolRegistry", () => {
   });
 
   it("H3: handle_dialog goes through wrap pipeline (gets defaults and suggestions)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const sessionDefaults = new SessionDefaults();
 
@@ -1087,8 +1063,8 @@ describe("ToolRegistry", () => {
         return { result: { type: "number", value: 42 } };
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
     registry.registerAll();
@@ -1114,8 +1090,8 @@ describe("ToolRegistry", () => {
         return { result: { type: "number", value: 42 } };
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
     registry.registerAll();
@@ -1143,8 +1119,8 @@ describe("ToolRegistry", () => {
         return { result: { type: "number", value: 42 } };
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "global-session", {} as never);
     registry.registerAll();
@@ -1186,8 +1162,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Pro license to bypass the feature gate
     const license: LicenseStatus = { isPro: () => true };
@@ -1221,8 +1197,8 @@ describe("ToolRegistry", () => {
       reinit: vi.fn(),
       getStatus: vi.fn().mockReturnValue({ mode: "auto", queue: [] }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(
       mockServer,
@@ -1247,8 +1223,8 @@ describe("ToolRegistry", () => {
     const mockCdpClient = {
       send: vi.fn().mockResolvedValue({}),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Story 9.9: Use Pro license so the feature gate passes and the parallel check is reached
     const license: LicenseStatus = { isPro: () => true };
@@ -1268,8 +1244,8 @@ describe("ToolRegistry", () => {
   // --- Story 9.9: Pro-Feature-Gates for switch_tab, virtual_desk, Human Touch ---
 
   it("Free-Tier: switch_tab via MCP returns isError with Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1297,8 +1273,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: virtual_desk via MCP returns isError with warm Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1326,8 +1302,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: switch_tab via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1346,8 +1322,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: virtual_desk via executeTool (run_plan path) returns isError with warm Pro-Feature message", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1366,8 +1342,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Pro-Tier: switch_tab via executeTool is NOT blocked by feature gate", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => true };
     // Mock CDP client — handler will fail due to incomplete mock, but we only
@@ -1393,8 +1369,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Pro-Tier: virtual_desk via executeTool is NOT blocked by feature gate", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => true };
     // Mock CDP client that returns enough data for virtual_desk
@@ -1422,8 +1398,8 @@ describe("ToolRegistry", () => {
   });
 
   it("switch_tab is registered in server.tool() regardless of license tier (discoverability)", () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1442,8 +1418,8 @@ describe("ToolRegistry", () => {
   });
 
   it("virtual_desk is registered in server.tool() regardless of license tier (discoverability)", () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1462,8 +1438,8 @@ describe("ToolRegistry", () => {
   });
 
   it("Free-Tier: switch_tab gate fires BEFORE parallel check (sessionIdOverride)", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1491,8 +1467,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 42 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1514,8 +1490,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 42 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1535,8 +1511,8 @@ describe("ToolRegistry", () => {
         result: { type: "number", value: 42 },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1554,8 +1530,8 @@ describe("ToolRegistry", () => {
   });
 
   it("error response (unknown tool) has response_bytes > 0", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
     registry.registerAll();
@@ -1577,8 +1553,8 @@ describe("ToolRegistry", () => {
         result: { type: "string", value: "" },
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1601,8 +1577,8 @@ describe("ToolRegistry", () => {
   });
 
   it("gate-blocked response has response_bytes in executeTool path", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const license: LicenseStatus = { isPro: () => false };
     const registry = new ToolRegistry(
@@ -1625,8 +1601,8 @@ describe("ToolRegistry", () => {
   });
 
   it("response_bytes via MCP path (server.tool callback) is injected correctly", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const mockCdpClient = {
       send: vi.fn().mockResolvedValue({
@@ -1660,8 +1636,8 @@ describe("ToolRegistry", () => {
   });
 
   it("response_bytes with image content (screenshot-like) has correct byte count via MCP path", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // Create a fake base64 image data string
     const fakeBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -1737,8 +1713,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1752,8 +1728,8 @@ describe("ToolRegistry", () => {
   });
 
   it("dom_snapshot via executeTool has estimated_tokens as positive number", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     // dom_snapshot is Pro-gated; use a Pro license
     const license: LicenseStatus = { isPro: () => true };
@@ -1812,8 +1788,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1838,8 +1814,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1872,8 +1848,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1886,8 +1862,8 @@ describe("ToolRegistry", () => {
   });
 
   it("read_page via MCP path (server.tool callback) has estimated_tokens", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const mockCdpClient = {
       send: vi.fn().mockImplementation(async (method: string) => {
@@ -1947,8 +1923,8 @@ describe("ToolRegistry", () => {
         return {};
       }),
     } as never;
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
@@ -1967,8 +1943,8 @@ describe("ToolRegistry", () => {
   });
 
   it("response_bytes via MCP path with sessionDefaults is injected correctly", async () => {
-    const toolFn = createMockToolFn();
-    const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    const toolFn = vi.fn();
+    const mockServer = { tool: toolFn } as never;
 
     const mockCdpClient = {
       send: vi.fn().mockResolvedValue({
@@ -2021,8 +1997,8 @@ describe("ToolRegistry", () => {
   // -----------------------------------------------------------------
   describe("Pro-Tool registration lifecycle (Story 15.2)", () => {
     it("calls registerProTools hook DURING registerAll()", () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registerProTools = vi.fn();
@@ -2038,8 +2014,8 @@ describe("ToolRegistry", () => {
     });
 
     it("allows registerTool() to be called from inside registerProTools and exposes the tool via server.tool()", () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const handler = vi.fn(async () => ({
@@ -2071,8 +2047,8 @@ describe("ToolRegistry", () => {
     });
 
     it("does NOT register inspect_element in tools/list when no registerProTools hook is set", () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       // Explicitly empty hooks — no Pro-Repo loaded.
@@ -2090,8 +2066,8 @@ describe("ToolRegistry", () => {
     });
 
     it("throws when registerTool() is called AFTER registerAll() (lifecycle — H2)", () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       let leakedRegistry: import("./hooks/pro-hooks.js").ToolRegistryPublic | null = null;
@@ -2159,8 +2135,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const waitForAXChange = vi.fn().mockResolvedValue(true);
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
@@ -2234,8 +2210,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockRejectedValue(new Error("boom")),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => result,
@@ -2263,8 +2239,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       // Explicitly empty hooks
       registerProHooks({});
@@ -2298,8 +2274,8 @@ describe("ToolRegistry", () => {
           return {};
         }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       // No hook registered
       registerProHooks({});
@@ -2330,8 +2306,8 @@ describe("ToolRegistry", () => {
           return {};
         }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const resetSpy = vi.spyOn(a11yTree, "reset");
       resetSpy.mockClear();
@@ -2365,8 +2341,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const waitForAXChange = vi.fn().mockResolvedValue(true);
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
@@ -2406,8 +2382,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const captured: {
         sessionId?: string;
@@ -2444,8 +2420,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "string", value: "wrapped" } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => ({
@@ -2502,8 +2478,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "string", value: "wrapped2" } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => ({
@@ -2571,8 +2547,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 7 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       // Hook returns a fresh object with a NEW _meta — this used to
       // silently detach downstream injections (response_bytes, suggestion).
@@ -2610,8 +2586,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => ({
@@ -2654,8 +2630,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => result,
@@ -2688,8 +2664,8 @@ describe("ToolRegistry", () => {
           return {};
         }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       // Hook registered — must still be bypassed due to flag
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
@@ -2726,8 +2702,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 1 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => ({
@@ -2765,8 +2741,8 @@ describe("ToolRegistry", () => {
 
     it("runAggregationHook respects the isError guard", async () => {
       const mockCdpClient = { send: vi.fn() } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const hookFn = vi.fn<NonNullable<ProHooks["onToolResult"]>>(
         async (_name, result, _ctx) => result,
@@ -2808,8 +2784,8 @@ describe("ToolRegistry", () => {
             result: { type: "number", value: 42 },
           }),
         } as never;
-        const toolFn = createMockToolFn();
-        const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+        const toolFn = vi.fn();
+        const mockServer = { tool: toolFn } as never;
 
         // Dialog-Handler with a pending notification — mirrors Story 6.1
         // registry test pattern (registry.test.ts:395).
@@ -3378,7 +3354,7 @@ describe("ToolRegistry", () => {
           registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
         }
       });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(
         mockServer,
@@ -3428,7 +3404,7 @@ describe("ToolRegistry", () => {
           registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
         }
       });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(
         mockServer,
@@ -3482,7 +3458,7 @@ describe("ToolRegistry", () => {
           registeredEvaluateHandler = handler as typeof registeredEvaluateHandler;
         }
       });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(
         mockServer,
@@ -3508,8 +3484,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 42 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(
         mockServer,
@@ -3536,8 +3512,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { type: "number", value: 7 } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(
         mockServer,
@@ -3576,27 +3552,19 @@ describe("ToolRegistry", () => {
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
     });
 
-    // Story 19.7: Default-Set hat 2 Tools (virtual_desk + operator).
-    // Story 19.8: Fallback-Set adds 5 more (click, type, read_page, wait_for,
-    // screenshot) registered but disabled — total 7 server.tool() calls.
     const DEFAULT_TOOL_NAMES_EXPECTED = [
       "virtual_desk",
-      "operator",
-    ];
-    const FALLBACK_ONLY_TOOL_NAMES = [
+      "read_page",
       "click",
       "type",
-      "read_page",
-      "wait_for",
-      "screenshot",
-    ];
-    // Default + Fallback = 7 server.tool() calls in default mode.
-    const DEFAULT_MODE_TOTAL = DEFAULT_TOOL_NAMES_EXPECTED.length + FALLBACK_ONLY_TOOL_NAMES.length;
-    const EXTENDED_TOOL_NAMES = [
       "fill_form",
       "navigate",
+      "wait_for",
+      "screenshot",
       "run_plan",
       "evaluate",
+    ];
+    const EXTENDED_TOOL_NAMES = [
       "press_key",
       "scroll",
       "switch_tab",
@@ -3610,30 +3578,24 @@ describe("ToolRegistry", () => {
       "configure_session",
     ];
 
-    it("default-Modus: server.tool() wird mit Default + Fallback-Tools aufgerufen (7 total)", () => {
+    it("default-Modus: server.tool() wird genau mit den 10 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
       // Env-Var unset → Default-Modus.
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Story 19.8: Default-Tools + Fallback-Tools sind registriert.
-      for (const name of DEFAULT_TOOL_NAMES_EXPECTED) {
-        expect(registeredNames).toContain(name);
-      }
-      for (const name of FALLBACK_ONLY_TOOL_NAMES) {
-        expect(registeredNames).toContain(name);
-      }
-      expect(toolFn).toHaveBeenCalledTimes(DEFAULT_MODE_TOTAL);
+      expect(registeredNames).toEqual(DEFAULT_TOOL_NAMES_EXPECTED);
+      expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
     });
 
     it("default-Modus: Extended-Tools sind NICHT in server.tool()-Calls", () => {
-      // Negative Assertion fuer alle Extended-Namen (excluding fallback tools).
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      // Negative Assertion fuer alle elf Extended-Namen.
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
@@ -3647,36 +3609,41 @@ describe("ToolRegistry", () => {
 
     it("default-Modus: SILBERCUE_CHROME_FULL_TOOLS='false' aktiviert NICHT den Full-Set", () => {
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "false";
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
 
-      expect(toolFn).toHaveBeenCalledTimes(DEFAULT_MODE_TOTAL);
+      expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
     });
 
     it("default-Modus: andere Wahrheits-aehnliche Werte ('1', 'TRUE') aktivieren NICHT den Full-Set", () => {
       // Strenger String-Vergleich `=== "true"` — defensive gegen Drift.
       for (const value of ["1", "TRUE", "yes", "on"]) {
         process.env.SILBERCUE_CHROME_FULL_TOOLS = value;
-        const toolFn = createMockToolFn();
-        const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+        const toolFn = vi.fn();
+        const mockServer = { tool: toolFn } as never;
         const mockCdpClient = {} as never;
 
         const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
         registry.registerAll();
 
-        expect(toolFn).toHaveBeenCalledTimes(DEFAULT_MODE_TOTAL);
+        expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
       }
     });
 
-    it("FULL_TOOLS=true: server.tool() wird mit allen 23 Free-Tools aufgerufen — inkl. operator/handle_dialog/console_logs/network_monitor", () => {
-      // Story 19.7: FULL_TOOLS exponiert alle Tools inkl. operator.
+    it("FULL_TOOLS=true: server.tool() wird mit allen 21 Free-Tools aufgerufen — inkl. handle_dialog/console_logs/network_monitor", () => {
+      // Story 18.3 Review-Fix H3: Dieser Test bildet die **Produktions-
+      // Realitaet** ab. `handle_dialog`, `console_logs`, `network_monitor`
+      // werden seit dem H1-Fix unbedingt registriert — Runtime-Guards im
+      // Handler uebernehmen die Collector-Existenz-Pruefung. Der Test muss
+      // deshalb alle elf Extended-Tools und die zehn Default-Tools
+      // verifizieren, ohne irgendwelche "optional skip"-Logik.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
@@ -3684,18 +3651,32 @@ describe("ToolRegistry", () => {
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
 
-      // Beide Default-Tools muessen drin sein.
+      // Alle zehn Default-Tools muessen drin sein.
       for (const name of DEFAULT_TOOL_NAMES_EXPECTED) {
         expect(registeredNames).toContain(name);
       }
 
-      // Alle Extended-Tools muessen ebenfalls drin sein (FULL mode).
-      for (const name of EXTENDED_TOOL_NAMES) {
+      // Alle elf Extended-Tools — ohne Ausnahme, inklusive der drei, die
+      // vorher an Collector-Gates hingen.
+      const allExtended = [
+        "press_key",
+        "scroll",
+        "switch_tab",
+        "tab_status",
+        "observe",
+        "dom_snapshot",
+        "handle_dialog",
+        "file_upload",
+        "console_logs",
+        "network_monitor",
+        "configure_session",
+      ];
+      for (const name of allExtended) {
         expect(registeredNames).toContain(name);
       }
 
-      // Insgesamt 2 Default + 20 Extended + drag (Story 18.6) = 23 Tools.
-      expect(toolFn).toHaveBeenCalledTimes(23);
+      // Insgesamt 10 Default + 11 Extended + drag (Story 18.6) = 22 Tools.
+      expect(toolFn).toHaveBeenCalledTimes(22);
     });
 
     it("FULL_TOOLS=true: _handlers-Map enthaelt alle Entries — inkl. handle_dialog/console_logs/network_monitor/drag", () => {
@@ -3703,8 +3684,8 @@ describe("ToolRegistry", () => {
       // unbedingt befuellt, damit `run_plan`-Dispatch alle Tools erreichen
       // kann, auch wenn die Collectors (noch) nicht initialisiert sind.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
@@ -3752,8 +3733,8 @@ describe("ToolRegistry", () => {
       // `Unknown tool`, jetzt findet er den Handler und gibt eine
       // praezise Diagnose-Meldung zurueck.
       const mockCdpClient = { send: vi.fn().mockResolvedValue({}) } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3769,8 +3750,8 @@ describe("ToolRegistry", () => {
 
     it("default-Modus: executeTool('console_logs') findet einen Handler in _handlers", async () => {
       const mockCdpClient = { send: vi.fn().mockResolvedValue({}) } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3785,8 +3766,8 @@ describe("ToolRegistry", () => {
 
     it("default-Modus: executeTool('network_monitor') findet einen Handler in _handlers", async () => {
       const mockCdpClient = { send: vi.fn().mockResolvedValue({}) } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3805,8 +3786,8 @@ describe("ToolRegistry", () => {
       // `tools/list`-Registrierung als auch der Runtime-Dispatch der
       // drei Collector-Tools die echte Produktions-Realitaet abbilden.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = { send: vi.fn().mockResolvedValue({}) } as never;
 
       // Minimale Mock-Collectors — nur die Methoden, die von den Handlern
@@ -3845,8 +3826,8 @@ describe("ToolRegistry", () => {
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Exakt 23 Tools: 2 Default + 20 Extended + drag (Story 18.6 FR-028).
-      expect(toolFn).toHaveBeenCalledTimes(23);
+      // Exakt 22 Tools: 10 Default + 11 Extended + drag (Story 18.6 FR-028).
+      expect(toolFn).toHaveBeenCalledTimes(22);
       expect(registeredNames).toContain("handle_dialog");
       expect(registeredNames).toContain("console_logs");
       expect(registeredNames).toContain("network_monitor");
@@ -3863,8 +3844,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({}),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3882,8 +3863,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({ result: { value: null } }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3909,8 +3890,8 @@ describe("ToolRegistry", () => {
           result: { value: { scrollY: 300, scrollHeight: 2000, clientHeight: 800 } },
         }),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
@@ -3928,8 +3909,8 @@ describe("ToolRegistry", () => {
       const mockCdpClient = {
         send: vi.fn().mockResolvedValue({}),
       } as never;
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const license: LicenseStatus = { isPro: () => false };
       const registry = new ToolRegistry(
@@ -3949,8 +3930,8 @@ describe("ToolRegistry", () => {
     });
 
     it("default-Modus: executeTool('unknown_tool') liefert weiterhin den Standard-Unknown-tool-Error", async () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
 
       const registry = new ToolRegistry(mockServer, {} as never, "session-1", {} as never);
       registry.registerAll();
@@ -3961,9 +3942,9 @@ describe("ToolRegistry", () => {
       expect(result.content[0]).toHaveProperty("text", "Unknown tool: definitely_not_a_real_tool");
     });
 
-    it("default-Modus: Reihenfolge im Default-Set bleibt Positional-Bias-konform — virtual_desk zuerst, operator zweites", () => {
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+    it("default-Modus: Reihenfolge im Default-Set bleibt Positional-Bias-konform — virtual_desk zuerst, evaluate zuletzt", () => {
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
@@ -3971,201 +3952,7 @@ describe("ToolRegistry", () => {
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
       expect(registeredNames[0]).toBe("virtual_desk");
-      // Story 19.7: Operator is the second tool.
-      expect(registeredNames[1]).toBe("operator");
-      // Story 19.8: Fallback tools follow (disabled initially), total = 7.
-      expect(registeredNames.length).toBe(DEFAULT_MODE_TOTAL);
-    });
-  });
-
-  // -----------------------------------------------------------------
-  // Story 19.8, Task 6: Mode-Transition Tests
-  // -----------------------------------------------------------------
-  describe("ToolRegistry — Mode-Transition (Story 19.8)", () => {
-    beforeEach(() => {
-      delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
-    });
-    afterEach(() => {
-      delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
-    });
-
-    // Subtask 6.1: switchToFallbackMode changes mode and calls sendToolListChanged
-    it("switchToFallbackMode() changes mode to 'fallback' and calls sendToolListChanged()", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      expect(registry.getCurrentMode()).toBe("standard");
-      registry.switchToFallbackMode();
-      expect(registry.getCurrentMode()).toBe("fallback");
-      expect(sendToolListChanged).toHaveBeenCalledTimes(1);
-    });
-
-    // Subtask 6.2: switchToStandardMode changes mode and calls sendToolListChanged
-    it("switchToStandardMode() changes mode to 'standard' and calls sendToolListChanged()", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      // First switch to fallback
-      registry.switchToFallbackMode();
-      sendToolListChanged.mockClear();
-
-      registry.switchToStandardMode();
-      expect(registry.getCurrentMode()).toBe("standard");
-      expect(sendToolListChanged).toHaveBeenCalledTimes(1);
-    });
-
-    // Subtask 6.3: Double switchToFallbackMode triggers only one sendToolListChanged (Flicker-Schutz)
-    it("double switchToFallbackMode() triggers only one sendToolListChanged (Flicker-Schutz)", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      registry.switchToFallbackMode();
-      registry.switchToFallbackMode();
-      expect(sendToolListChanged).toHaveBeenCalledTimes(1);
-    });
-
-    // Subtask 6.3 (complement): Double switchToStandardMode on standard is no-op
-    it("switchToStandardMode() on already-standard mode is a no-op", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      // Already in standard mode — should be a no-op
-      registry.switchToStandardMode();
-      expect(sendToolListChanged).not.toHaveBeenCalled();
-    });
-
-    // Subtask 6.4: After mode switch, session references remain identical
-    it("mode switch preserves session references (cdpClient, sessionId)", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = { send: vi.fn().mockResolvedValue({}) } as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      const cdpBefore = registry.cdpClient;
-      const sessionIdBefore = registry.sessionId;
-
-      registry.switchToFallbackMode();
-
-      expect(registry.cdpClient).toBe(cdpBefore);
-      expect(registry.sessionId).toBe(sessionIdBefore);
-
-      registry.switchToStandardMode();
-
-      expect(registry.cdpClient).toBe(cdpBefore);
-      expect(registry.sessionId).toBe(sessionIdBefore);
-    });
-
-    // Subtask 6.5: FULL_TOOLS mode ignores mode transition
-    it("FULL_TOOLS mode ignores switchToFallbackMode() completely", () => {
-      process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      registry.switchToFallbackMode();
-      // Mode stays standard, no notification sent
-      expect(registry.getCurrentMode()).toBe("standard");
-      expect(sendToolListChanged).not.toHaveBeenCalled();
-    });
-
-    // Story 19.8 AC-1: Fallback mode enables/disables the right tools
-    it("switchToFallbackMode() enables fallback tools and disables operator", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      // Access internal _registeredMcpTools to check enabled state
-      const registeredMcpTools = (registry as unknown as { _registeredMcpTools: Map<string, { enabled: boolean }> })._registeredMcpTools;
-
-      // Before: standard tools enabled, fallback-only tools disabled
-      expect(registeredMcpTools.get("virtual_desk")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("operator")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("click")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("type")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("read_page")!.enabled).toBe(false);
-
-      registry.switchToFallbackMode();
-
-      // After: fallback tools enabled, operator disabled
-      expect(registeredMcpTools.get("virtual_desk")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("operator")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("click")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("type")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("read_page")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("wait_for")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("screenshot")!.enabled).toBe(true);
-    });
-
-    // Story 19.8 AC-4: switchToStandardMode re-enables operator and disables fallback-only tools
-    it("switchToStandardMode() re-enables operator and disables fallback-only tools", () => {
-      const sendToolListChanged = vi.fn();
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      const registeredMcpTools = (registry as unknown as { _registeredMcpTools: Map<string, { enabled: boolean }> })._registeredMcpTools;
-
-      // Switch to fallback, then back to standard
-      registry.switchToFallbackMode();
-      registry.switchToStandardMode();
-
-      // Standard mode restored
-      expect(registeredMcpTools.get("virtual_desk")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("operator")!.enabled).toBe(true);
-      expect(registeredMcpTools.get("click")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("type")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("read_page")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("wait_for")!.enabled).toBe(false);
-      expect(registeredMcpTools.get("screenshot")!.enabled).toBe(false);
-    });
-
-    // Story 19.8: sendToolListChanged error is caught and logged, not thrown
-    it("sendToolListChanged error is caught and logged, not thrown", () => {
-      const sendToolListChanged = vi.fn(() => { throw new Error("transport broken"); });
-      const toolFn = createMockToolFn();
-      const mockServer = { tool: toolFn, sendToolListChanged } as never;
-      const mockCdpClient = {} as never;
-
-      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
-      registry.registerAll();
-
-      // Should not throw
-      expect(() => registry.switchToFallbackMode()).not.toThrow();
-      expect(registry.getCurrentMode()).toBe("fallback");
+      expect(registeredNames[registeredNames.length - 1]).toBe("evaluate");
     });
   });
 });

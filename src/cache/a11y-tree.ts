@@ -737,21 +737,6 @@ export class A11yTreeProcessor {
   }
 
   /**
-   * Returns the raw cached AXNode[] from the precomputed cache, or null
-   * if no valid cache exists for the given session.
-   *
-   * Story 19.7 C1 fix: The operator scan-flow needs raw AXNodes for
-   * signal extraction. Using the cache avoids a redundant CDP call
-   * when prefetching has already primed the cache.
-   */
-  getPrecomputedNodes(sessionId: string): AXNode[] | null {
-    if (this._precomputedNodes && this._precomputedSessionId === sessionId) {
-      return this._precomputedNodes;
-    }
-    return null;
-  }
-
-  /**
    * H1: Remove all node references for a detached OOPIF session.
    * Called when an OOPIF frame navigates away or is destroyed.
    */

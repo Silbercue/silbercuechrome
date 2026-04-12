@@ -2,16 +2,16 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/Silbercue/silbercuechrome)](https://github.com/Silbercue/silbercuechrome/releases)
 [![npm version](https://img.shields.io/npm/v/@silbercue%2Fchrome)](https://www.npmjs.com/package/@silbercue/chrome)
-[![Free — 2 tools + fallback](https://img.shields.io/badge/Free-2_tools_+_fallback-brightgreen)](https://github.com/Silbercue/silbercuechrome#free-vs-pro)
-[![Pro — 2 tools + fallback](https://img.shields.io/badge/Pro-2_tools_+_fallback-blueviolet)](https://polar.sh/silbercueswift/silbercuechrome-pro)
+[![Free — 18 tools](https://img.shields.io/badge/Free-18_tools-brightgreen)](https://github.com/Silbercue/silbercuechrome#free-vs-pro)
+[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercueswift/silbercuechrome-pro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
-The most token-efficient MCP server for Chrome browser automation. Two top-level tools (`operator` + `virtual_desk`) replace 20+ primitives — the LLM picks from annotated action cards instead of raw tool lists. Direct CDP, a11y-tree refs, multi-tab ready. **30/31 on the hardest 35-test benchmark (97% pass rate) — `read_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`, and our P95 tool response is 3.5× smaller.**
+The most token-efficient MCP server for Chrome browser automation. Direct CDP, a11y-tree refs, multi-tab ready. **30/31 on the hardest 35-test benchmark (97% pass rate) with Ambient Context — `read_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`, and our P95 tool response is 3.5× smaller.**
 
 Built for [Claude Code](https://claude.ai/claude-code), [Cursor](https://cursor.sh), and any MCP-compatible client.
 
-> **Looking for an alternative to Playwright MCP, Browser MCP, or claude-in-chrome?** SilbercueChrome talks to Chrome directly via the DevTools Protocol — no Playwright dependency, no Chrome extension bridge, no single-tab limit. One command to install, zero config, and the best benchmark score in the category. The Operator mode means the LLM sees two tools instead of twenty, picks from matched action cards, and falls back to direct primitives when no card fits. [See comparison below](#benchmarks).
+> **Looking for an alternative to Playwright MCP, Browser MCP, or claude-in-chrome?** SilbercueChrome talks to Chrome directly via the DevTools Protocol — no Playwright dependency, no Chrome extension bridge, no single-tab limit. One command to install, zero config, and the best benchmark score in the category. [See comparison below](#benchmarks).
 
 ## Why SilbercueChrome?
 
@@ -33,8 +33,7 @@ SilbercueChrome fixes this. It talks directly to Chrome via CDP (same protocol P
 | Shadow DOM + iframe | Yes | Yes | Partial | No | **Yes (with OOPIF session support)** |
 | Keyboard shortcuts | Yes | Yes | Partial | No | **Yes (`press_key` with real CDP keyboard events)** |
 | localStorage/cookies | Yes | No | Partial | No | **Yes (via `evaluate`)** |
-| Multi-step plan execution | — | — | — | — | **`operator` — card-based automation with fallback to direct primitives** |
-| LLM tool overhead | 20+ tools | 20+ tools | 10+ tools | Screenshot-driven | **2 tools (operator + virtual_desk)** |
+| Multi-step plan execution | — | — | — | — | **`run_plan` — server-side plan executor with variables, conditions, suspend/resume** |
 | Zero-config install | Yes | Yes | Built-in | Yes | **Yes (one `claude mcp add` line)** |
 
 ### Where SilbercueChrome really shines
@@ -79,8 +78,6 @@ claude mcp add --scope user silbercuechrome npx -y @silbercue/chrome@latest
 
 **Important:** after `claude mcp add` you must **fully quit and reopen Claude Code**. `/mcp reconnect` is not enough — Claude Code reads the `mcpServers` config only at session start and caches it. After the restart, the first tool call auto-launches Chrome **visible** (no headless, no port setup). Done.
 
-You now have two tools: `operator` (scans pages, matches action cards, executes tasks) and `virtual_desk` (tab management). Ask Claude to "open example.com and tell me what you see" — the operator scans the page, returns a structured reading with action cards, and you pick a card to execute. If no card matches, SilbercueChrome automatically falls back to direct primitives (`click`, `type`, `read_page`, etc.).
-
 ### Install in Cursor
 
 Add to `~/.cursor/mcp.json`:
@@ -102,7 +99,7 @@ Any client that supports stdio MCP servers: `npx -y @silbercue/chrome@latest` wi
 
 ### Install Pro via Homebrew
 
-Pro adds `switch_tab`, `dom_snapshot`, parallel tab execution, ambient context hooks, and an operator hook pipeline on top of the Free tier. Three commands, no JSON edits:
+Pro adds `virtual_desk`, `switch_tab`, `dom_snapshot`, parallel tabs in `run_plan`, ambient context hooks, and an operator hook pipeline on top of the 18 Free tools. Three commands, no JSON edits:
 
 ```bash
 brew install silbercue/silbercue/silbercuechrome
@@ -112,7 +109,7 @@ silbercuechrome activate SCC-XXXX-XXXX-XXXX-XXXX
 
 **Important — restart Claude Code completely after `claude mcp add`.** `/mcp reconnect` is *not* enough. Claude Code reads the `mcpServers` config only at session start and caches it; the old command is re-used even after `reconnect`. Fully quit Claude Code and reopen it so the new `silbercuechrome` server is picked up.
 
-After the restart, `silbercuechrome status` should print `Tier: Pro`. Get a license at [polar.sh/silbercueswift](https://polar.sh/silbercueswift/silbercuechrome-pro) — the key arrives by email and can be activated as shown above.
+After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license at [polar.sh/silbercueswift](https://polar.sh/silbercueswift/silbercuechrome-pro) — the key arrives by email and can be activated as shown above.
 
 Google Chrome must be installed on the machine — SilbercueChrome auto-launches Chrome via CDP at runtime, but it does not install Chrome for you.
 
@@ -138,16 +135,17 @@ brew uninstall silbercue/silbercue/silbercuechrome
 
 ## Free vs Pro
 
-Both Free and Pro expose two top-level tools (`operator` + `virtual_desk`) in the default Operator mode. When no action card matches, SilbercueChrome falls back to six direct primitives (`click`, `type`, `read_page`, `wait_for`, `screenshot`, `virtual_desk`). Pro adds deeper capabilities on top.
+The Free tier gives you 18 tools that cover the entire benchmark suite. Pro adds `virtual_desk`, `switch_tab`, `dom_snapshot`, parallel tabs in `run_plan`, ambient-context hooks, and an operator hook pipeline on top — 23 tools in total.
 
 | | Free | Pro |
 |---|---|---|
-| Top-level tools | `operator` + `virtual_desk` | `operator` + `virtual_desk` |
-| Fallback primitives | `click`, `type`, `read_page`, `wait_for`, `screenshot` | Same + `dom_snapshot` (spatial queries) |
-| Tab management | `virtual_desk` | + `switch_tab`, parallel tab execution |
-| Card execution | Seed-card library, automatic matching | Same + operator hook pipeline |
-| Observation | Ambient Context (DOM diffs inline) | Same + ambient page-context hooks |
-| Legacy mode | `SILBERCUE_CHROME_FULL_TOOLS=true` (20 tools) | `SILBERCUE_CHROME_FULL_TOOLS=true` (23 tools) |
+| Tools | 18 | **23** |
+| Page understanding | `read_page` | `read_page` + `dom_snapshot` (spatial queries) |
+| Tab management | `navigate`, `tab_status` | + `virtual_desk`, `switch_tab`, parallel tabs in `run_plan` |
+| Interaction | `click`, `type`, `fill_form`, `press_key`, `scroll`, `file_upload`, `handle_dialog` | Same |
+| Observation | `screenshot`, `wait_for`, `observe`, `console_logs`, `network_monitor` | Same + ambient page-context hooks |
+| Scripting | `run_plan` (sequential) | `run_plan` (sequential + parallel + operator hooks) |
+| Last resort | `evaluate` | `evaluate` + anti-pattern scanner hints |
 
 See the **[Benchmarks](#benchmarks)** section below for per-tool-call response-size numbers and head-to-head comparisons with Playwright MCP, Browser MCP, claude-in-chrome, and browser-use.
 
@@ -155,197 +153,51 @@ Pro costs €12/month. [Get a license on Polar.sh](https://polar.sh/silbercueswi
 
 ## Tools
 
-### Default mode — Operator (2 tools)
-
-In the default Operator mode, your MCP client sees exactly two tools:
+### Reading & Observation
 
 | Tool | Description |
 |---|---|
-| `operator` | The primary tool. **Two-call interface:** (1) Call without arguments to scan the current page — returns a structured page reading with matched action cards. (2) Call with `card` + `params` to execute a card — returns the result plus a fresh scan of the new page state. When no card matches, automatically switches to fallback mode. |
-| `virtual_desk` | Lists all open tabs with stable IDs, connection status, and active-tab marker. Call first in every session for orientation. |
-
-### Fallback mode (6 primitives)
-
-When the operator scan finds no matching action card, SilbercueChrome automatically switches to fallback mode — six direct primitives appear in `tools/list`:
-
-| Tool | Description |
-|---|---|
-| `virtual_desk` | Same as above — always available |
-| `click` | Real CDP mouse events. Click by ref, selector, text, or coordinates. Response includes DOM diff. |
-| `type` | Type into an input by ref/selector |
-| `read_page` | Accessibility tree with stable `e`-refs. 10-30x cheaper than screenshots. |
+| `read_page` | Accessibility tree with stable `e`-refs — primary way to understand the page. 10-30x cheaper than screenshots. Filter by `interactive` (default) or `all` (include static text). |
+| `screenshot` | WebP capture, max 800px, <100KB. Use for visual verification only — you cannot use screenshots to drive click/type, refs come from `read_page`. |
+| `console_logs` | Retrieve browser console output with level/pattern filters |
+| `network_monitor` | Start/stop/query network requests with filtering |
+| `observe` | Watch DOM changes: `collect` (buffer changes over time) or `until` (wait for condition, then auto-click) |
 | `wait_for` | Wait for element visible, network idle, or JS expression true |
-| `screenshot` | WebP capture, max 800px, <100KB. Visual verification only. |
+| `tab_status` | Active tab's cached URL/title/ready/errors — mid-workflow sanity check |
 
-When the next operator scan matches a card again, SilbercueChrome switches back to operator mode automatically. Fallback is not an error state — it is a fully supported work mode for any page.
+### Interaction
 
-### Legacy mode (20+ tools)
+| Tool | Description |
+|---|---|
+| `click` | Real CDP mouse events (mouseMoved/Pressed/Released). Click by ref, selector, text, or `x`+`y` coordinates. Response includes DOM diff (NEW/REMOVED/CHANGED). |
+| `type` | Type into an input by ref/selector |
+| `fill_form` | Fill a complete form in one call — text, `<select>`, checkbox, radio. Per-field status, partial errors don't abort. |
+| `press_key` | Real CDP keyboard events — Enter, Escape, Tab, arrows, shortcuts (Ctrl+K, etc.) |
+| `scroll` | Scroll page, element into view, or inside a specific container (sidebar, modal body) |
+| `file_upload` | Upload file(s) to an `<input type="file">` |
+| `handle_dialog` | Configure `alert`/`confirm`/`prompt` handling before triggering actions |
 
-Set `SILBERCUE_CHROME_FULL_TOOLS=true` to expose all individual tools (click, type, fill_form, read_page, navigate, screenshot, scroll, press_key, evaluate, run_plan, observe, wait_for, console_logs, network_monitor, file_upload, handle_dialog, tab_status, configure_session, and Pro tools). This is the v0.5.0-compatible mode for users who prefer direct tool access.
+### Navigation
+
+| Tool | Description |
+|---|---|
+| `navigate` | Load a URL in the active tab. Waits for settle. First call per session is auto-redirected to `virtual_desk` to prevent blindly overwriting the user's tab. |
+
+### Scripting
+
+| Tool | Description |
+|---|---|
+| `run_plan` | Execute a multi-step plan server-side. Variables (`$varName`), conditions (`if`), `saveAs`, error strategies (`abort`/`continue`/`screenshot`), suspend/resume. Parallel tabs require Pro. |
+| `configure_session` | View/set session defaults (tab, timeout) and accept auto-promote suggestions |
+| `evaluate` | Execute JS in the page context. Use for COMPUTE or side effects no tool covers — not for element discovery (use `read_page` instead). Anti-pattern scanner warns when you reach for `querySelector` or `.click()`. |
 
 ### Pro tier (additional)
 
 | Tool | Description |
 |---|---|
+| `virtual_desk` <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center"> | Lists all tabs with stable IDs. Call first in every session. |
 | `switch_tab` <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center"> | Open, switch to, or close tabs by ID from `virtual_desk` |
 | `dom_snapshot` <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center"> | Bounding boxes, computed styles, paint order, colors. For spatial questions `read_page` cannot answer. |
-
-## Migrating from v0.5.0
-
-If you have been using SilbercueChrome v0.5.0, here is what changed and what you need to do (short answer: nothing).
-
-**What changed.** SilbercueChrome moved from a toolbox model (18-23 individual tools like `click`, `type`, `read_page`, `navigate`) to a card-table model. The LLM now sees two tools — `operator` and `virtual_desk` — instead of twenty. When the operator scans a page, it matches the page structure against a library of action cards (login forms, search bars, cookie banners, multi-step wizards) and offers them as annotated choices. The LLM picks a card, passes parameters, and the operator executes the entire sequence server-side.
-
-**Why it changed.** Token efficiency and structural pattern recognition. With 20+ tools, the tool definitions alone consumed thousands of tokens in every MCP session. Worse, the LLM had to decide which primitive to call next at every step — leading to unnecessary evaluate calls, wrong tool choices, and spiral failures. The operator model cuts tool-definition overhead below 3000 tokens and replaces per-step LLM decisions with pre-validated card sequences.
-
-**What you need to do.** Nothing. If you update to the new version, your existing workflows keep working through two mechanisms:
-
-1. **Seed cards match common patterns automatically.** Login forms, search fields, cookie consent dialogs, and multi-step wizards are covered by the built-in seed-card library. The operator recognizes these and offers the right card without any configuration.
-
-2. **Fallback mode catches everything else.** When no card matches — a proprietary intranet page, a custom dashboard, a niche web app — SilbercueChrome automatically switches to fallback mode. Six direct primitives (`click`, `type`, `read_page`, `wait_for`, `screenshot`, `virtual_desk`) appear in the tool list, and you work exactly like before.
-
-**Tool mapping (old to new):**
-
-| v0.5.0 tool | Operator mode equivalent |
-|---|---|
-| `navigate` + `read_page` + `click` + `type` | `operator()` — scan, pick a card, execute |
-| `read_page` | Embedded in the operator's return (structured page reading with refs) |
-| `click`, `type`, `fill_form` | Card execution (operator handles these internally) or fallback primitives |
-| `run_plan` | `operator(card, params)` in standard mode, or `run_plan` via `SILBERCUE_CHROME_FULL_TOOLS=true` (legacy mode) |
-| `screenshot`, `wait_for` | Available in fallback mode or legacy mode |
-| `evaluate` | Available in legacy mode (`SILBERCUE_CHROME_FULL_TOOLS=true`) |
-
-**Want the old tool set back?** Set `SILBERCUE_CHROME_FULL_TOOLS=true` as an environment variable. This exposes all 20+ tools exactly like v0.5.0. No other changes needed.
-
-## Walkthroughs
-
-### Migration: Marek upgrades from v0.5.0
-
-Marek has been using SilbercueChrome v0.5.0 for three months. He has workflows that automate login flows and data extraction using individual tool calls.
-
-**Before (v0.5.0) — individual tool calls:**
-
-```
-1. navigate({ url: "https://app.example.com/login" })
-2. read_page({ filter: "interactive" })
-3. type({ ref: "e5", text: "marek@example.com" })
-4. type({ ref: "e7", text: "my-password" })
-5. click({ ref: "e9" })           // Submit button
-6. read_page({ filter: "all" })   // Check result
-```
-
-Six tool calls, six LLM decisions, six round-trips.
-
-**After (Operator mode) — two calls:**
-
-```
-1. operator()
-   → Returns: page reading + matched card "login-form"
-     with slots: username, password, submit
-
-2. operator({ card: "login-form", params: { username: "marek@example.com", password: "my-password" } })
-   → Executes: fill username → fill password → click submit
-   → Returns: new page state after login
-```
-
-Two tool calls, one LLM decision. The operator fills the form and clicks submit server-side.
-
-**Fallback for unmatched pages:**
-
-Marek opens a custom internal dashboard that has no matching card. The operator scan returns:
-
-```
-operator()
-→ "No card matched the current page structure — switching to direct-primitive mode"
-→ tools/list now shows: virtual_desk, click, type, read_page, wait_for, screenshot
-```
-
-Marek's LLM uses the familiar primitives — `read_page`, `click`, `type` — exactly like v0.5.0. When he navigates to a page with a matching card, SilbercueChrome switches back to operator mode automatically.
-
-Your existing workflows keep working. The operator just makes them faster when a card matches.
-
-### First Contact: Annika's first ten minutes
-
-Annika has never used SilbercueChrome. She wants to automate a browser task from Claude Code.
-
-**Step 1 — Install** (one command, takes 30 seconds):
-
-```bash
-claude mcp add --scope user silbercuechrome -- npx -y @silbercue/chrome@latest
-```
-
-Then fully quit and reopen Claude Code. That is the entire setup.
-
-**Step 2 — Start:** Chrome launches automatically when Claude Code makes the first tool call. No port setup, no flags, no manual browser start.
-
-**Step 3 — First scan:** Annika asks Claude: "Log me into my account on example.com."
-
-```
-Claude calls: virtual_desk({ navigate: "https://example.com/login" })
-→ Chrome opens the login page
-
-Claude calls: operator()
-→ Operator scans the page, returns:
-  - Page reading: "Login page — email field, password field, submit button"
-  - Matched card: "login-form" (confidence: 0.91)
-    Slots: username, password
-```
-
-**Step 4 — Card execution:** The operator matched a login-form card. Annika's LLM calls it with parameters:
-
-```
-Claude calls: operator({ card: "login-form", params: { username: "annika@example.com", password: "my-password" } })
-→ Executes: fill email → fill password → click submit
-→ Returns: new page state after login — "Dashboard — welcome, Annika"
-```
-
-Annika sees the result in Claude Code — logged in, dashboard visible. Total time: under 10 minutes from install to first successful browser task.
-
-### Fallback: Jamal navigates an unknown site
-
-Jamal is an experienced SilbercueChrome user. He opens a proprietary intranet page that no seed card covers.
-
-**Operator scan — no match:**
-
-```
-operator()
-→ Page reading: "Internal HR Portal — employee search, leave requests, payroll links"
-→ Matched cards: (none)
-→ "No card matched the current page structure — switching to direct-primitive mode"
-```
-
-This is not an error. The `tools/list` now shows six primitives.
-
-**Working with fallback primitives:**
-
-```
-read_page()
-→ e3: textbox "Employee search"
-→ e5: button "Search"
-→ e8: link "Leave requests"
-→ e12: link "Payroll"
-
-type({ ref: "e3", text: "Smith" })
-click({ ref: "e5" })
-→ Search results appear, DOM diff shows new elements
-```
-
-Jamal works exactly like he would with v0.5.0 — ref-based clicks and types, DOM diffs in responses.
-
-**Automatic return to operator mode:**
-
-Jamal clicks a link that leads to the company's standard login page. The operator detects the login-form pattern:
-
-```
-operator()
-→ Page reading: "Company SSO Login"
-→ Matched card: "login-form" (confidence: 0.92)
-→ tools/list switches back to: operator, virtual_desk
-```
-
-Jamal picks the login card, passes credentials, and the operator handles the rest.
-
-Fallback is not an error state — it is a fully supported work mode that covers any page.
 
 ## Benchmarks
 
@@ -395,18 +247,11 @@ SilbercueChrome (Node.js MCP server, @silbercue/chrome)
 │   ├── WebSocket transport (existing Chrome on :9222)
 │   └── Pipe transport (auto-launched Chrome with --remote-debugging-pipe)
 ├── Auto-Launch: Chrome + optimal flags, visible by default
-├── Operator Pipeline
-│   ├── Signal Extractor (a11y-tree → page signals)
-│   ├── Aggregator + Matcher (signals → card matches)
-│   ├── Seed-Card Library (YAML action cards)
-│   ├── State Machine (IDLE → SCANNING → AWAITING_SELECTION → EXECUTING)
-│   └── Fallback Registry (automatic mode switch to 6 primitives)
 ├── A11y-tree cache + Selector cache
 ├── Session Manager (OOPIF support for iframes and Shadow DOM)
 ├── Tab State Cache (URL/title/ready across tabs)
-└── 2 top-level tools (operator + virtual_desk)
-    + 6 fallback primitives (click, type, read_page, wait_for, screenshot, virtual_desk)
-    + legacy mode: 20+ tools via SILBERCUE_CHROME_FULL_TOOLS=true
+└── 18 Free-tier tools + 3+ Pro-tier tools
+    Reading · Interaction · Navigation · Scripting · Observation
 ```
 
 Connection priority:
@@ -425,15 +270,15 @@ Connection priority:
 | `SILBERCUE_CHROME_AUTO_LAUNCH` | `true` / `false` | `true` | Auto-launch Chrome if no running instance found |
 | `SILBERCUE_CHROME_HEADLESS` | `true` / `false` | `false` | Opt-in headless mode for CI/server environments |
 | `SILBERCUE_CHROME_PROFILE` | path | — | Chrome user profile directory (auto-launch only) |
-| `SILBERCUE_CHROME_FULL_TOOLS` | `true` / `false` | `false` | Legacy mode: expose all 20+ individual tools instead of the 2-tool operator mode |
+| `SILBERCUE_CHROME_FULL_TOOLS` | `true` / `false` | `false` | Expose the full tool set (21 tools) instead of the leaner default set (10 tools) in tools/list |
 | `CHROME_PATH` | path | — | Path to Chrome binary (overrides auto-detection) |
 | `SILBERCUECHROME_LICENSE_KEY` | license key | — | Pro license key (e.g. `SC-PRO-...`) |
 
 ## License
 
-The core server, the operator pipeline, the seed-card library, and all fallback primitives are **MIT licensed** — see [LICENSE](LICENSE). Use them however you want, commercially or otherwise.
+The core server and all 18 Free-tier tools are **MIT licensed** — see [LICENSE](LICENSE). Use them however you want, commercially or otherwise.
 
-Pro features (switch_tab, dom_snapshot, parallel tab execution, ambient context hooks, operator hook pipeline) require a [paid license](https://polar.sh/silbercueswift/silbercuechrome-pro). The license validation code is in the separate private Pro repository.
+Pro tools (3+ gated tools, parallel tab execution, ambient context, operator hooks, faster internals) require a [paid license](https://polar.sh/silbercueswift/silbercuechrome-pro). The license validation code is in the separate private Pro repository.
 
 ## Contributing
 

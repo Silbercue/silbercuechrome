@@ -37,20 +37,15 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
     "benchmark": "node test-hardest/benchmark-full.mjs",
-    "check-gate": "tsx scripts/check-gate.ts",
-    "checkpoint": "npm run benchmark -- --operator-mode && tsx scripts/check-gate.ts --checkpoint tag-20",
-    "validate-card": "tsx scripts/validate-card.ts",
     "publish:release": "tsx scripts/publish.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "js-yaml": "^4",
     "pixelmatch": "^7.1.0",
     "pngjs": "^7.0.0",
     "zod": "^3"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4",
     "@types/node": "^22",
     "eslint": "^9",
     "prettier": "^3",

@@ -55,8 +55,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
   // -------------------------------------------------------------
   describe("inspect_element (AC #3)", () => {
     it("is NOT registered in tools/list when no registerProTools hook is set", () => {
-      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(
@@ -80,8 +80,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       // erwartet GENAU 10), als auch wenn ein Extended-Tool in der
       // FULL_TOOLS-Registrierung verloren geht (Full-Set erwartet >= 21).
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
-      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
 
       const registry = new ToolRegistry(
@@ -99,21 +99,25 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
         (call: unknown[]) => call[0] as string,
       );
       expect(registeredNames).not.toContain("inspect_element");
-      // Story 19.7: Default-Set hat 2 Tools (virtual_desk + operator).
-      // Story 19.8: + 5 Fallback-Tools (click, type, read_page, wait_for, screenshot) registered but disabled.
-      // evaluate ist nur im FULL_TOOLS-Modus sichtbar.
-      expect(registeredNames).toContain("virtual_desk");
-      expect(registeredNames).toContain("operator");
-      expect(registeredNames.length).toBe(7);
+      expect(registeredNames).toContain("evaluate");
+      // Story 18.3 Review-Fix M2: Default-Set exakt 10 Tools — schlaegt an,
+      // wenn genau ein Default-Tool verschwindet oder (noch schlimmer) ein
+      // Extended-Tool versehentlich in den Default-Modus rutscht.
+      expect(registeredNames.length).toBe(10);
     });
 
-    it("Free-Tier FULL_TOOLS-Modus registriert alle 23 Tools inkl. operator/dialog/console/network/drag", () => {
-      // Story 19.7: operator ist das 23. Tool im Full-Set.
-      // Default-Set hat 2 Tools (virtual_desk, operator).
+    it("Free-Tier FULL_TOOLS-Modus registriert alle 22 Tools inkl. dialog/console/network/drag", () => {
+      // Story 18.3 Review-Fix M2: Zweite Assertion — fuer den FULL_TOOLS-
+      // Modus muss der Guard auch H1-Regressions abfangen (handle_dialog /
+      // console_logs / network_monitor unconditional registriert).
+      //
+      // Story 18.6 (FR-028): `drag` ist das 22. Tool im Full-Set — NICHT
+      // im Default-Set. Der Count steigt von 21 auf 22, das Default-Set
+      // bleibt stabil bei 10.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       try {
-        const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
-        const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+        const toolFn = vi.fn();
+        const mockServer = { tool: toolFn } as never;
         const mockCdpClient = {} as never;
 
         const registry = new ToolRegistry(
@@ -128,8 +132,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
           (call: unknown[]) => call[0] as string,
         );
         expect(registeredNames).not.toContain("inspect_element");
-        // Full-Set exakt 23 Tools (2 Default + 20 Extended + drag).
-        expect(registeredNames.length).toBe(23);
+        // Full-Set exakt 22 Tools (10 Default + 11 Extended + drag aus Story 18.6).
+        expect(registeredNames.length).toBe(22);
         // Explizit die drei Collector-gated Tools — die Regression-Gefahr
         // lebt hier, siehe Story 18.3 Review H1/H2.
         expect(registeredNames).toContain("handle_dialog");
@@ -236,8 +240,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
   // -------------------------------------------------------------
   describe("switch_tab / virtual_desk / dom_snapshot default gate (AC #6)", () => {
     function buildRegistryForGating() {
-      const toolFn = vi.fn().mockImplementation(() => { const t = { enabled: true, enable: vi.fn(() => { t.enabled = true; }), disable: vi.fn(() => { t.enabled = false; }), update: vi.fn(), remove: vi.fn() }; return t; });
-      const mockServer = { tool: toolFn, sendToolListChanged: vi.fn() } as never;
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
       const mockCdpClient = { send: vi.fn() } as unknown as CdpClient;
       const registry = new ToolRegistry(
         mockServer,
