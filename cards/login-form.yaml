@@ -45,4 +45,7 @@ execution_sequence:
   - action: click
     target: "[type=submit], button[type=submit]"
 
-test_cases: []
+test_cases:
+  - "https://practicetestautomation.com/practice-test-login/"
+  - "https://the-internet.herokuapp.com/login"
+  - "https://demo.applitools.com/"

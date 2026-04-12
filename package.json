@@ -37,6 +37,8 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
     "benchmark": "node test-hardest/benchmark-full.mjs",
+    "check-gate": "tsx scripts/check-gate.ts",
+    "validate-card": "tsx scripts/validate-card.ts",
     "publish:release": "tsx scripts/publish.ts"
   },
   "dependencies": {

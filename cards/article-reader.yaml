@@ -27,4 +27,7 @@ execution_sequence:
   - action: scroll
     target: "[role=main], article, main"
 
-test_cases: []
+test_cases:
+  - "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Functions"
+  - "https://en.wikipedia.org/wiki/Browser_automation"
+  - "https://web.dev/articles/vitals"

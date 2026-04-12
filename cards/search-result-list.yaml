@@ -35,4 +35,7 @@ execution_sequence:
     target: "[role=search] input, [type=search], [name=q], [name=query]"
     value: Enter
 
-test_cases: []
+test_cases:
+  - "https://en.wikipedia.org/w/index.php?search=browser+automation&title=Special%3ASearch"
+  - "https://search.nixos.org/packages?query=chrome"
+  - "https://docs.python.org/3/search.html?q=subprocess"
