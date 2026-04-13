@@ -8,6 +8,14 @@ import { FreeTierLicenseStatus } from "./license/license-status.js";
 import type { LicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 import { getProHooks } from "./hooks/pro-hooks.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION: string = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf-8"),
+).version;
 
 /**
  * MCP server bootstrap — lazy-launch architecture.
@@ -59,7 +67,7 @@ export async function startServer(): Promise<void> {
   const server = new McpServer(
     {
       name: "silbercuechrome",
-      version: "0.1.0",
+      version: PKG_VERSION,
     },
     {
       instructions: [
