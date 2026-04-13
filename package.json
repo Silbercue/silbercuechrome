@@ -27,6 +27,7 @@
     "./tools/error-utils.js": "./build/tools/error-utils.js",
     "./cache/a11y-tree.js": "./build/cache/a11y-tree.js",
     "./cache/selector-cache.js": "./build/cache/selector-cache.js",
+    "./cache/deferred-diff-slot.js": "./build/cache/deferred-diff-slot.js",
     "./cdp/cdp-client.js": "./build/cdp/cdp-client.js",
     "./cdp/session-manager.js": "./build/cdp/session-manager.js"
   },

@@ -76,7 +76,7 @@ type OnToolResult = NonNullable<ProHooks["onToolResult"]>;
  *
  * Returns the formatted diff text, or null if no changes were detected.
  */
-async function computeDiff(
+export async function computeDiff(
   before: SnapshotMap,
   context: {
     a11yTree: A11yTreePublic;

@@ -369,6 +369,11 @@ Niedrige Priorität. Canvas ist inherent opak (Pixel, keine DOM-Nodes). Ein obse
 | 22 | FR-033 Ambient Context pro Step in run_plan | Mittel | registry.ts, plan-executor.ts, run-plan.ts | gefixt |
 | 23 | FR-034 Step-Response-Aggregation in run_plan verbose | Mittel | plan-executor.ts | gefixt |
 | 24 | FR-035 Tool-Definition-Overhead zu gross (20 → 10) | Hoch | registry.ts | gefixt |
+| 25 | FR-036 Geister-Refs hinter Modal-Overlays | Hoch | a11y-tree.ts | gefixt |
+| 26 | FR-037 LLM-Denkzeit-Luecke nach navigate/click | Gross | registry.ts, a11y-tree.ts | gefixt |
+| 27 | FR-038 Tool-Rename view_page/capture_image | Niedrig | registry.ts, Tools | gefixt |
+| 28 | FR-039 Click-Diff priorisiert StaticText | Minimal | a11y-tree.ts | wontfix |
+| 29 | FR-040 Pro-Hook ignoriert type/fill_form Diff | Mittel | ambient-context.ts (Pro), default-on-tool-result.ts | gefixt |
 
 ---
 
@@ -1297,5 +1302,105 @@ Load nicht mehr staendig gesehen.
 - run_plan Schema und plan-executor ErrorStrategy/SuspendConfig angepasst.
 
 **Aufwand:** Niedrig — ~50 String-Ersetzungen in Source, ~100 in Tests.
+
+---
+
+## FR-039: Click-Diff priorisiert StaticText ueber interaktive Elemente (P3 — wontfix)
+
+### Problem
+`formatDomDiff()` schneidet bei 30 Eintraegen ab (`maxLines = 30` in
+`src/cache/a11y-tree.ts:3449`). Innerhalb der Change-Typen (added/changed/
+removed) werden Elemente in DOM-Reihenfolge ausgegeben — StaticText-Eintraege
+ohne Ref (z.B. `"|"`, `"Betrag"`, `"-"`) verbrauchen Slots die fuer
+interaktive Elemente mit Ref gebraucht wuerden.
+
+**Beobachtete Auswirkung (Session 6121335d, Steuer4):**
+Click auf "Umsaetze anzeigen" erzeugte 60 DOM-Aenderungen. Die ersten 30
+enthielten ~10 StaticText-Eintraege ohne Ref. Das Suchfeld `[e145] textbox
+"Name, Beschreibung oder Kommentar suchen"` landete in den versteckten 30
+Aenderungen. Das LLM brauchte ein extra `view_page` (7.158 Chars, ~1.789
+Tokens) um das Suchfeld zu finden.
+
+### Root Cause
+`formatDomDiff()` sortiert nach Change-Typ (alerts → added → changed →
+removed), aber innerhalb jedes Typs gibt es keine Priorisierung von
+interaktiven Elementen ueber nicht-interaktive.
+
+### Betroffene Dateien
+`src/cache/a11y-tree.ts` — `formatDomDiff()`, Zeile ~3437 (Sortier-Logik).
+
+### Fix-Vorschlag
+Innerhalb jedes Change-Typs interaktive Elemente (die mit Ref) vor
+StaticText (ohne Ref) sortieren. Einzeiler-Aenderung in der `priority()`-
+Funktion: `if (!INTERACTIVE_ROLES.has(c.role) && !CONTEXT_ROLES.has(c.role)) p += 5;`
+
+### Warum wontfix
+1. **v0.7.3 DOM-Diff auf type/fill_form** adressiert den Hauptimpact: Nach
+   dem Tippen in ein Suchfeld bekommt das LLM jetzt den DOM-Diff mit den
+   Suchergebnissen — das extra `view_page` nach `type` entfaellt.
+2. **Marginaler Gewinn:** Spart ~1 Call bei Seiten mit 30+ DOM-Aenderungen
+   auf Click. Auf den meisten Seiten hat Click <30 Aenderungen.
+3. **LLM-Verhalten:** Selbst wenn e145 im Diff sichtbar waere, koennte das
+   LLM trotzdem ein `view_page` machen um den vollen Seiten-Kontext zu sehen.
+
+**Aufwand:** Minimal
+**Session:** 6121335d-67ff-4c12-9133-4ec8e60f4064
+**Hinweis:** finden des Umsatzes
+
+---
+
+## FR-040: Pro-Server onToolResult Hook ignoriert type/fill_form — Deferred DOM-Diff toter Code (P2)
+
+### Problem
+Die v0.7.3 Erweiterung des deferred DOM-Diff auf type und fill_form
+(`src/hooks/default-on-tool-result.ts`) ist **toter Code** wenn der
+Pro-Server aktiv ist. Der Pro-Server registriert seinen eigenen
+`onToolResult`-Hook (`silbercuechrome-pro/src/visual/ambient-context.ts`),
+der den Free-Default-Hook ersetzt. Der Pro-Hook hat als Scope-Gate
+`if (toolName !== "click") return result;` (Zeile 47) — type und fill_form
+werden komplett ignoriert.
+
+**Auswirkung:** Nach type in ein Suchfeld bekommt das LLM nur
+`Typed "X" into textbox...` (69 Chars) ohne DOM-Diff. Es braucht ein
+zusaetzliches view_page um die gefilterten Ergebnisse zu sehen — genau
+die Friction die v0.7.3 fixen sollte.
+
+### Root Cause
+`src/registry.ts:1008-1012` installiert den Free-Default-Hook NUR wenn
+kein Pro-Hook gesetzt ist:
+```typescript
+if (!hooksAfterFeatureGate.onToolResult) {
+  registerProHooks({ ...hooksAfterFeatureGate, onToolResult: createDefaultOnToolResult() });
+}
+```
+Der Pro-Server ruft `registerProHooks()` VOR `registerAll()` auf, sodass
+`hooksAfterFeatureGate.onToolResult` gesetzt ist und der Default nie
+installiert wird.
+
+### Session-Evidenz
+Testlauf 2026-04-13: MCP reconnect mit v0.7.3 Build, type "10132" in
+Steuer4-Suchfeld, view_page danach zeigte KEINEN piggybacked Diff.
+Click-Diff funktionierte (55 changes inline) — beweist dass der
+Pro-Hook aktiv ist und NUR click behandelt.
+
+### Betroffene Dateien
+1. `silbercuechrome-pro/src/visual/ambient-context.ts` — Scope-Gate
+   erweitern, deferred Pfad fuer type/fill_form hinzufuegen
+2. `src/hooks/default-on-tool-result.ts` — `computeDiff` exportieren
+   damit der Pro-Hook ihn wiederverwenden kann (kein Code-Duplikat)
+
+### Fix-Vorschlag
+1. In `src/hooks/default-on-tool-result.ts`: `computeDiff` als `export`
+   markieren (aktuell module-intern)
+2. In `silbercuechrome-pro/src/visual/ambient-context.ts`:
+   - Import `computeDiff` aus `@silbercue/chrome/hooks/default-on-tool-result.js`
+   - Import `deferredDiffSlot` aus `@silbercue/chrome/cache/deferred-diff-slot.js`
+   - Scope-Gate erweitern: `const DIFF_TOOLS = new Set(["click","type","fill_form"]); if (!DIFF_TOOLS.has(toolName)) return result;`
+   - Click-Pfad bleibt synchron (Zeile 51-92 unveraendert)
+   - Neuer Pfad fuer type/fill_form: Before-Snapshot + `deferredDiffSlot.schedule(async (signal) => computeDiff(before, context, 350, 500, signal))` + return result unchanged
+
+**Aufwand:** Mittel — zwei Repos, Import-Pfade pruefen, Tests
+**Session:** 6121335d-67ff-4c12-9133-4ec8e60f4064
+**Hinweis:** finden des Umsatzes
 
 **Source:** Story 20.2.
