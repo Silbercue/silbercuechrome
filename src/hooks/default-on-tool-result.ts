@@ -16,14 +16,19 @@
  *
  * Story 20.1: Async DOM-Diff — Click antwortet sofort, Diff piggybacks.
  *
+ * v0.7.3: Extended to type and fill_form — without post-action state
+ * feedback the LLM is blind after input actions and falls back to
+ * capture_image every time. See inline comment at the scope gate for
+ * the full rationale and benchmark trade-off analysis.
+ *
  * The hook now has TWO paths:
  *  - **Synchronous path** (`_meta.syncDiff === true` or called from
  *    `runAggregationHook`): identical to the pre-20.1 behaviour — waits
  *    for the diff and appends it to the response.
- *  - **Deferred path** (default for click): schedules a background diff
- *    job via `DeferredDiffSlot`. The click response returns immediately
- *    without the diff. The diff piggybacks on the next tool response
- *    via `drainPendingDiff()`.
+ *  - **Deferred path** (default for click/type/fill_form): schedules a
+ *    background diff job via `DeferredDiffSlot`. The tool response returns
+ *    immediately without the diff. The diff piggybacks on the next tool
+ *    response via `drainPendingDiff()`.
  *
  * Improvements over the original Pro-Repo implementation:
  *
@@ -155,13 +160,52 @@ export function createDefaultOnToolResult(): OnToolResult {
 
   return async (toolName, result, context) => {
     try {
-      // Scope: only `click`, and only when the resolved element was actually
-      // clickable.
-      if (toolName !== "click") return result;
-      const cls = (
-        result as ToolResponse & { _meta?: { elementClass?: string } }
-      )._meta?.elementClass;
-      if (cls !== "clickable" && cls !== "widget-state") return result;
+      // --- Scope gate: which tools get a DOM diff? ---
+      //
+      // click:     Yes, when elementClass is "clickable" or "widget-state".
+      //            This has been the case since Story 13a.1 / FR-022.
+      //
+      // type:      Yes (added v0.7.3). Without a diff, the LLM is blind after
+      //            typing into a search/filter field — it gets only "Typed X
+      //            into Y" and has NO information about whether the filter
+      //            produced results. This forces the LLM to call capture_image
+      //            or view_page as a follow-up, which is the #1 cause of
+      //            unnecessary capture_image calls in production sessions.
+      //            Session d4ce6dd5 (Steuer4, 2026-04-12): 7 of 7 capture_image
+      //            calls happened immediately after type — every single one
+      //            was compensating for missing post-type state feedback.
+      //
+      // fill_form: Yes (added v0.7.3). Same reasoning as type — multi-field
+      //            form submissions often trigger AJAX updates (filter tables,
+      //            validation messages, totals) that the LLM needs to see.
+      //
+      // Trade-off: This increases avg response size for type/fill_form by
+      //            ~500-2000 chars (the diff text). Benchmark metrics like
+      //            "avg response chars" will go up. That is intentional — the
+      //            alternative is the LLM burning a full capture_image call
+      //            (image payload + LLM vision inference) or view_page call
+      //            (extra round-trip) to get the same information. Net token
+      //            cost goes DOWN because one richer response replaces two
+      //            calls. But per-tool averages go up, which will show in
+      //            head-to-head comparisons with MCPs that don't do this.
+      //
+      // navigate:  No — navigate resets the a11y cache entirely (a11yTree.reset()
+      //            in registry.ts) because the page is completely new. A diff
+      //            against the previous page is meaningless. Navigate uses
+      //            speculative prefetch instead (Story 18.5) to warm the cache
+      //            for the next view_page call.
+
+      const DIFF_TOOLS = new Set(["click", "type", "fill_form"]);
+      if (!DIFF_TOOLS.has(toolName)) return result;
+
+      // For click: only diff when the element was actually interactive.
+      // type/fill_form always target input elements, so no class check needed.
+      if (toolName === "click") {
+        const cls = (
+          result as ToolResponse & { _meta?: { elementClass?: string } }
+        )._meta?.elementClass;
+        if (cls !== "clickable" && cls !== "widget-state") return result;
+      }
 
       // Story 20.1: Check for synchronous diff request.
       // `_meta.syncDiff === true` means either:
