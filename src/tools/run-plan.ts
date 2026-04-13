@@ -14,7 +14,7 @@ import { DEFAULT_FREE_TIER_CONFIG } from "../license/free-tier-config.js";
 
 const suspendSchema = z.object({
   question: z.string().optional().describe("Question to ask the agent when suspending"),
-  context: z.enum(["screenshot"]).optional().describe("Context to include: 'screenshot' captures the page"),
+  context: z.enum(["capture_image"]).optional().describe("Context to include: 'capture_image' captures the page"),
   condition: z.string().optional().describe("Condition expression — suspend AFTER step if true. Uses $varName syntax."),
 });
 
@@ -51,10 +51,10 @@ export const runPlanSchema = z.object({
     .optional()
     .describe("Initial variables for the plan. Accessible via $varName in step params and conditions."),
   errorStrategy: z
-    .enum(["abort", "continue", "screenshot"])
+    .enum(["abort", "continue", "capture_image"])
     .optional()
     .default("abort")
-    .describe("Error handling: 'abort' (default) stops on first error, 'continue' runs all steps, 'screenshot' captures page on error then aborts."),
+    .describe("Error handling: 'abort' (default) stops on first error, 'continue' runs all steps, 'capture_image' captures page on error then aborts."),
   use_operator: z.boolean().optional().default(false).describe(
     "Pro-Feature: Operator mode (rule engine + Micro-LLM). Returns pro-feature error in Free tier."
   ),

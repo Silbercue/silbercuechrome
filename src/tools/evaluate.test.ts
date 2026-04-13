@@ -671,14 +671,14 @@ describe("detectEvaluateAntiPattern", () => {
       "Array.from(document.querySelectorAll('button')).map(b => b.outerHTML)",
     );
     expect(hint).not.toBeNull();
-    expect(hint).toMatch(/read_page/);
+    expect(hint).toMatch(/view_page/);
     expect(hint).toMatch(/stable refs/);
   });
 
   it("hints on getElementById for interactive elements", () => {
     const hint = detectEvaluateAntiPattern("document.getElementById('t1-3-name').value");
     expect(hint).not.toBeNull();
-    expect(hint).toMatch(/read_page|click|fill_form/);
+    expect(hint).toMatch(/view_page|click|fill_form/);
   });
 
   it("hints on .innerText read without DOM query", () => {
@@ -690,13 +690,13 @@ describe("detectEvaluateAntiPattern", () => {
   it("hints on .textContent read", () => {
     const hint = detectEvaluateAntiPattern("el.textContent");
     expect(hint).not.toBeNull();
-    expect(hint).toMatch(/read_page/);
+    expect(hint).toMatch(/view_page/);
   });
 
   it("hints on Tests.foo.toString() introspection", () => {
     const hint = detectEvaluateAntiPattern("Tests.t1_1.toString()");
     expect(hint).not.toBeNull();
-    expect(hint).toMatch(/task description|read_page/);
+    expect(hint).toMatch(/task description|view_page/);
   });
 
   it("hints on .scrollIntoView() calls", () => {
@@ -789,7 +789,7 @@ describe("evaluateHandler anti-pattern hint integration", () => {
     const text = response.content[0].text as string;
     expect(text).toMatch(/button1/);
     expect(text).toMatch(/Tip:/);
-    expect(text).toMatch(/read_page/);
+    expect(text).toMatch(/view_page/);
   });
 
   it("does NOT append a hint for clean value computation", async () => {

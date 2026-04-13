@@ -26,7 +26,7 @@ export async function readPageHandler(
   sessionManager?: SessionManager,
 ): Promise<ToolResponse> {
   const start = performance.now();
-  const method = "read_page";
+  const method = "view_page";
 
   try {
     const result = await a11yTree.getTree(cdpClient, sessionId!, {
@@ -45,7 +45,7 @@ export async function readPageHandler(
       const isLeaf = /^(\[e\d+\]\s+)?(StaticText|img|separator|none)\b/.test(trimmed) ||
         trimmed.split("\n").length <= 2;
       if (isLeaf) {
-        responseText += `\n\n⚠ This ref points to a single leaf node — the DOM may have changed since read_page was last called. Consider calling read_page without ref for a fresh view.`;
+        responseText += `\n\n⚠ This ref points to a single leaf node — the DOM may have changed since view_page was last called. Consider calling view_page without ref for a fresh view.`;
       }
     }
 
@@ -61,7 +61,7 @@ export async function readPageHandler(
     // — research shows that pushes the LLM toward the next defensive
     // fallback instead of the useful action).
     if (result.downsampled && params.max_tokens) {
-      responseText += `\n⚠ Truncated to ~${params.max_tokens} tokens. Remaining content collapsed into \`[eXX role, N items]\` summary lines. Call read_page(ref:'eXX', filter:'all') on a summary ref to expand that subtree.`;
+      responseText += `\n⚠ Truncated to ~${params.max_tokens} tokens. Remaining content collapsed into \`[eXX role, N items]\` summary lines. Call view_page(ref:'eXX', filter:'all') on a summary ref to expand that subtree.`;
     }
 
     // FR-H6: Detect hidden interactive elements — hint when page has hidden sections
@@ -87,7 +87,7 @@ export async function readPageHandler(
     // FR-022: Hint that visible text content (table cells, codes, labels) is filtered out by 'interactive'.
     // Prevents the LLM from reaching for evaluate/querySelector to read visible text.
     if (params.filter === "interactive" && (result.hiddenContentCount ?? 0) >= 5) {
-      responseText += `\n\nNote: ${result.hiddenContentCount} text/content nodes (table cells, paragraphs, static text) are not shown by filter:"interactive". If you need to read visible text content, call read_page(ref: "eN", filter: "all") on the subtree — don't fall back to evaluate/querySelector.`;
+      responseText += `\n\nNote: ${result.hiddenContentCount} text/content nodes (table cells, paragraphs, static text) are not shown by filter:"interactive". If you need to read visible text content, call view_page(ref: "eN", filter: "all") on the subtree — don't fall back to evaluate/querySelector.`;
     }
 
     const elapsedMs = Math.round(performance.now() - start);
@@ -95,7 +95,7 @@ export async function readPageHandler(
     // BUG-018: Anti-Spiral telemetry — successful read_page resets the
     // evaluate-streak counter (per session) so a healthy workflow
     // (evaluate → oops → read_page → click) never triggers the nudge.
-    toolSequence.record("read_page", undefined, sessionId);
+    toolSequence.record("view_page", undefined, sessionId);
 
     return {
       content: [{ type: "text", text: responseText }],
@@ -126,7 +126,7 @@ export async function readPageHandler(
     }
 
     return {
-      content: [{ type: "text", text: wrapCdpError(err, "read_page") }],
+      content: [{ type: "text", text: wrapCdpError(err, "view_page") }],
       isError: true,
       _meta: { elapsedMs, method },
     };

@@ -309,7 +309,7 @@ describe("buildRefNotFoundError", () => {
     const error = buildRefNotFoundError("e1");
     expect(error).toContain("e1 not found");
     expect(error).toContain("possibly stale");
-    expect(error).toContain("read_page");
+    expect(error).toContain("view_page");
     expect(error).not.toContain("Did you mean");
   });
 

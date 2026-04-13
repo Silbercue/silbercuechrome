@@ -183,7 +183,7 @@ const PRO_FEATURE_MESSAGES: Record<string, string> = {
   ].join("\n\n"),
   dom_snapshot: [
     "dom_snapshot (Pro) — full DOM tree snapshot with every attribute and computed style for deep page inspection.",
-    "Free: use read_page (accessibility tree, ~10-30x cheaper) — it covers most use cases.",
+    "Free: use view_page (accessibility tree, ~10-30x cheaper) — it covers most use cases.",
     "Upgrade: silbercuechrome license activate <key>",
   ].join("\n\n"),
   observe: [

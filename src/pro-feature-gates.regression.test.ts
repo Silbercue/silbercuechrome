@@ -263,7 +263,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
 
       expect(result.isError).toBe(true);
       expect(textOf(result)).toContain("dom_snapshot (Pro)");
-      expect(textOf(result)).toContain("read_page"); // Free alternative
+      expect(textOf(result)).toContain("view_page"); // Free alternative
       expect(textOf(result)).toContain("silbercuechrome license activate");
     });
 

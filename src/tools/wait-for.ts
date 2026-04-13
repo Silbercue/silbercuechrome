@@ -230,7 +230,7 @@ async function elementTimeoutDiagnostic(
     // the ref belongs to a frame that was detached.
     const full = a11yTree.resolveRefFull(selector);
     if (full === undefined) {
-      return "\nDebug: Ref not found in cache — page may have changed. Call read_page to get fresh refs.";
+      return "\nDebug: Ref not found in cache — page may have changed. Call view_page to get fresh refs.";
     }
     return "\nDebug: Ref exists in cache but element has zero size (hidden or not rendered).";
   }

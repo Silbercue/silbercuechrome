@@ -486,13 +486,20 @@ export class BrowserSession implements IBrowserSession {
   /**
    * Called by the switch_tab handler after a successful tab attach — the
    * new target has a different CDP session ID and the registry needs the
-   * subsequent tool calls to use it. Matches the previous
-   * `ToolRegistry.updateSession(newSessionId)` behaviour: just the ID is
-   * updated, the collectors keep running on the old wiring (that was the
-   * legacy contract and tests depend on it).
+   * subsequent tool calls to use it.
+   *
+   * Re-wires the DialogHandler so it listens for Page.javascriptDialogOpening
+   * on the NEW session — otherwise alerts on the new tab are never caught
+   * and block all CDP calls until manual user intervention (BUG-019).
    */
   applyTabSwitch(newSessionId: string): void {
     this._sessionId = newSessionId;
+
+    // BUG-019: DialogHandler must follow the active session, otherwise
+    // alerts on a switched-to tab are never auto-dismissed.
+    if (this._dialogHandler && this._cdpClient) {
+      this._dialogHandler.reinit(this._cdpClient, newSessionId);
+    }
   }
 
   // ── Teardown ────────────────────────────────────────────────────────

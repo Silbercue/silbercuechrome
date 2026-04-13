@@ -5,13 +5,13 @@ import { substituteVars, extractResultValue } from "./plan-variables.js";
 import { evaluateCondition } from "./plan-conditions.js";
 import type { PlanStateStore } from "./plan-state-store.js";
 
-export type ErrorStrategy = "abort" | "continue" | "screenshot";
+export type ErrorStrategy = "abort" | "continue" | "capture_image";
 
 export interface SuspendConfig {
   /** Frage an den Agent */
   question?: string;
-  /** Context-Typ: "screenshot" erzeugt automatisch einen Screenshot */
-  context?: "screenshot";
+  /** Context-Typ: "capture_image" erzeugt automatisch einen Screenshot */
+  context?: "capture_image";
   /** Bedingung: Plan pausiert NACH Step-Ausfuehrung wenn Bedingung true */
   condition?: string;
 }
@@ -125,9 +125,9 @@ export async function executePlan(
       } else {
         const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
         let screenshot: string | undefined;
-        if (step.suspend.context === "screenshot") {
+        if (step.suspend.context === "capture_image") {
           try {
-            const ssResult = await registry.executeTool("screenshot", {});
+            const ssResult = await registry.executeTool("capture_image", {});
             if (!ssResult.isError) {
               for (const block of ssResult.content) {
                 if (block.type === "image") {
@@ -210,9 +210,9 @@ export async function executePlan(
         } else {
           const question = step.suspend.question ?? DEFAULT_SUSPEND_QUESTION;
           let screenshot: string | undefined;
-          if (step.suspend.context === "screenshot") {
+          if (step.suspend.context === "capture_image") {
             try {
-              const ssResult = await registry.executeTool("screenshot", {});
+              const ssResult = await registry.executeTool("capture_image", {});
               if (!ssResult.isError) {
                 for (const block of ssResult.content) {
                   if (block.type === "image") {
@@ -254,10 +254,10 @@ export async function executePlan(
         return buildPlanResponse(results, steps.length, start, true, errorStrategy);
       }
 
-      if (errorStrategy === "screenshot") {
+      if (errorStrategy === "capture_image") {
         // Take screenshot and append to the failed step
         try {
-          const screenshotResult = await registry.executeTool("screenshot", {});
+          const screenshotResult = await registry.executeTool("capture_image", {});
           // Append screenshot content to the failed step's result
           const lastResult = results[results.length - 1];
           if (!screenshotResult.isError) {
@@ -292,7 +292,7 @@ export async function executePlan(
   // die `elementClass` setzen, sind `click` (src/tools/click.ts:359) und
   // `type` (src/tools/type.ts:310) — exakt die Tools, deren `classifyRef`
   // Ergebnis "clickable" oder "widget-state" ist. Fuer `wait_for`,
-  // `read_page`, `screenshot`, `evaluate` oder `navigate` feuert der Hook
+  // `view_page`, `capture_image`, `evaluate` oder `navigate` feuert der Hook
   // NICHT, weil dort kein Transition-DOM-Diff noetig ist und der Pro-Repo-
   // Hook nur zusaetzliche Tokens produzieren wuerde.
   //
@@ -374,10 +374,10 @@ export async function executePlan(
  * **OK-Steps:** `[i/N] OK tool (Xms): ref=eK` ODER `[i/N] OK tool (Xms):
  * <kurztext>` (max. STEP_LINE_COMPACT_MAX_CHARS Zeichen, erste Zeile). Image-
  * Bloecke aus erfolgreichen Steps werden NICHT in den Plan-Response uebernommen
- * — sie sind der Token-Killer in Plaenen mit `screenshot` als Zwischen-Step.
+ * — sie sind der Token-Killer in Plaenen mit `capture_image` als Zwischen-Step.
  *
  * **FAIL-Steps:** behalten die Vollform — alle text-Bloecke joined mit `\n`,
- * plus Image-Bloecke (z.B. vom `errorStrategy: "screenshot"`-Pfad). Die
+ * plus Image-Bloecke (z.B. vom `errorStrategy: "capture_image"`-Pfad). Die
  * Vollform ist Pflicht, weil der LLM den ganzen Fehler-Kontext braucht, um zu
  * entscheiden, was zu tun ist.
  *
@@ -430,7 +430,7 @@ function buildPlanResponse(
     // Story 18.2: image-Bloecke aus erfolgreichen Steps werden NICHT mehr
     // propagiert. Wer ein Screenshot-Image im Plan-Response braucht, muss
     // entweder den Screenshot ausserhalb des Plans aufrufen oder den
-    // `errorStrategy: "screenshot"`-Pfad nutzen (Image bleibt am Fehler-
+    // `errorStrategy: "capture_image"`-Pfad nutzen (Image bleibt am Fehler-
     // Step erhalten via `appendErrorContext`).
   }
 
@@ -460,7 +460,7 @@ function buildPlanResponse(
   }
 
   // Determine isError:
-  // - abort/screenshot: aborted flag
+  // - abort/capture_image: aborted flag
   // - continue: only if ALL executed (non-skipped) steps failed
   const executedCount = okCount + failCount;
   const isError =
@@ -589,7 +589,7 @@ function formatStepLine(stepResult: StepResult, stepsTotal: number): string {
 /**
  * Story 18.2: Fehler-Steps behalten die Vollform — alle text-Bloecke werden
  * in eine Zeile mit `\n`-Separator gequetscht (wie heute), und alle
- * Non-Text-Bloecke (z.B. Screenshot-Image vom `errorStrategy: "screenshot"`-
+ * Non-Text-Bloecke (z.B. Screenshot-Image vom `errorStrategy: "capture_image"`-
  * Pfad) werden separat angehaengt. Begruendung: AC-4 — der LLM braucht den
  * vollen Fehler-Kontext, um zu entscheiden, was zu tun ist.
  */

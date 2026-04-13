@@ -693,7 +693,7 @@ describe("clickHandler", () => {
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("outside page bounds");
-    expect(text).toContain("read_page");
+    expect(text).toContain("view_page");
     expect(result._meta?.autoScrolled).toBe(true);
 
     // Should NOT have dispatched any mouse events

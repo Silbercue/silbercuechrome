@@ -91,13 +91,13 @@ import { debug } from "./cdp/debug.js";
  */
 export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "virtual_desk",
-  "read_page",
+  "view_page",
   "click",
   "type",
   "fill_form",
   "navigate",
   "wait_for",
-  "screenshot",
+  "capture_image",
   "run_plan",
   "evaluate",
 ] as const;
@@ -244,7 +244,7 @@ function jsonSchemaPropToZod(prop: Record<string, unknown>): z.ZodTypeAny {
  * @see docs/research/llm-tool-steering.md#Anti-Spiral Patterns
  */
 const FR029_AJAX_RACE_HINT =
-  "No visible changes yet — the page may still be loading (AJAX/SPA). Use wait_for(condition: 'network_idle') or call read_page again to check.";
+  "No visible changes yet — the page may still be loading (AJAX/SPA). Use wait_for(condition: 'network_idle') or call view_page again to check.";
 
 export class ToolRegistry implements ToolRegistryPublic {
   private _handlers = new Map<string, (params: Record<string, unknown>, sessionIdOverride?: string) => Promise<ToolResponse>>();
@@ -410,7 +410,13 @@ export class ToolRegistry implements ToolRegistryPublic {
         ensureReady: async () => { /* legacy: no-op */ },
         consumeRelaunchNotice: () => null,
         waitForAXChange: waitForAXChange ?? (async () => false),
-        applyTabSwitch: (newSessionId: string) => { legacyState.sessionId = newSessionId; },
+        applyTabSwitch: (newSessionId: string) => {
+          legacyState.sessionId = newSessionId;
+          // BUG-019: DialogHandler must follow the active session
+          if (dialogHandler) {
+            dialogHandler.reinit(legacyState.cdpClient, newSessionId);
+          }
+        },
         shutdown: async () => { /* legacy: no-op */ },
       };
       this._browserSession = session;
@@ -585,7 +591,7 @@ export class ToolRegistry implements ToolRegistryPublic {
       result._meta.response_bytes = responseBytes;
       // Story 12.2: Inject estimated_tokens for text-heavy tools
       const method = result._meta.method;
-      if (method === "read_page" || method === "dom_snapshot") {
+      if (method === "view_page" || method === "dom_snapshot") {
         result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
       }
     }
@@ -1046,7 +1052,7 @@ export class ToolRegistry implements ToolRegistryPublic {
         const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
         result._meta.response_bytes = responseBytes;
         const method = result._meta.method;
-        if (method === "read_page" || method === "dom_snapshot") {
+        if (method === "view_page" || method === "dom_snapshot") {
           result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
         }
       }
@@ -1149,7 +1155,7 @@ export class ToolRegistry implements ToolRegistryPublic {
             const responseBytes = Buffer.byteLength(JSON.stringify(result.content ?? []), 'utf8');
             result._meta.response_bytes = responseBytes;
             const method = result._meta.method;
-            if (method === "read_page" || method === "dom_snapshot") {
+            if (method === "view_page" || method === "dom_snapshot") {
               result._meta.estimated_tokens = Math.ceil(responseBytes / 4);
             }
           }
@@ -1248,8 +1254,8 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     // --- 2. Reading ---
     maybeRegisterFreeMCPTool(
-      "read_page",
-      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call read_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than screenshot.",
+      "view_page",
+      "PRIMARY tool for seeing what's on the page — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call view_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call view_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than capture_image.",
       {
         depth: readPageSchema.shape.depth,
         ref: readPageSchema.shape.ref,
@@ -1258,13 +1264,13 @@ export class ToolRegistry implements ToolRegistryPublic {
       },
       wrap(async (params) => {
         return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
-      }, "read_page"),
+      }, "view_page"),
     );
 
     // --- 3. Interaction (click/type/fill_form/press_key/scroll) ---
     maybeRegisterFreeMCPTool(
       "click",
-      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state. If click fails with a stale-ref error, call read_page for fresh refs and retry. Avoid evaluate(querySelector + .click()) as default recovery — it bypasses the CDP pointer chain and hides real bugs. (Legitimate exception: explicitly testing synthetic JS event plumbing.)",
+      "Click an element by ref, CSS selector, or viewport coordinates. Dispatches real CDP mouse events (mouseMoved/mousePressed/mouseReleased). For canvas or pixel-precise targets, use x+y coordinates instead of ref. If the click opens a new tab, the response reports it automatically. The response already includes the DOM diff (NEW/REMOVED/CHANGED lines) — inspect those changes for success/failure signals instead of following up with evaluate to re-check state. If click fails with a stale-ref error, call view_page for fresh refs and retry. Avoid evaluate(querySelector + .click()) as default recovery — it bypasses the CDP pointer chain and hides real bugs. (Legitimate exception: explicitly testing synthetic JS event plumbing.)",
       {
         ref: clickSchema.shape.ref,
         selector: clickSchema.shape.selector,
@@ -1280,7 +1286,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     maybeRegisterFreeMCPTool(
       "type",
-      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead. On stale-ref errors, call read_page for fresh refs and retry. Avoid evaluate(element.value = ...) as default data-entry recovery — it bypasses framework listeners (React, Vue) and masks real failures. (Legitimate exception: tests explicitly targeting synthetic event plumbing.)",
+      "Type text into an input field identified by ref or CSS selector. For multiple fields in the same form, prefer fill_form — it handles text inputs, <select>, checkbox, and radio in one round-trip and is more reliable than N separate type calls. For special keys (Enter, Escape, Tab, arrows) or shortcuts (Ctrl+K), use press_key instead. On stale-ref errors, call view_page for fresh refs and retry. Avoid evaluate(element.value = ...) as default data-entry recovery — it bypasses framework listeners (React, Vue) and masks real failures. (Legitimate exception: tests explicitly targeting synthetic event plumbing.)",
       {
         ref: typeSchema.shape.ref,
         selector: typeSchema.shape.selector,
@@ -1295,7 +1301,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // Story 6.3: fill_form — fill complete forms with one call
     maybeRegisterFreeMCPTool(
       "fill_form",
-      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status. On per-field errors, call read_page and retry the failing fields — DO NOT escape to evaluate(querySelector) to patch individual fields; it bypasses framework state management (React, Vue) and hides real bugs.",
+      "Fill a complete form with one call — the preferred way to submit any form with 2+ fields. Each field needs ref or CSS selector plus value. Supports text inputs, <select> (by value or visible label), checkboxes (boolean), and radio buttons. Use this INSTEAD of multiple type calls or evaluate-setting select.value: one round-trip, partial errors do not abort, each field reports its own status. On per-field errors, call view_page and retry the failing fields — DO NOT escape to evaluate(querySelector) to patch individual fields; it bypasses framework state management (React, Vue) and hides real bugs.",
       {
         fields: fillFormSchema.shape.fields,
       },
@@ -1404,7 +1410,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     maybeRegisterFreeMCPTool(
       "switch_tab",
-      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab. After switching, refs from the previous tab are invalid — call read_page FIRST to get fresh refs before click/type/fill_form. DO NOT try to reuse old refs via evaluate(querySelector) as a shortcut.",
+      "Open a new tab, switch to an existing tab by ID (from virtual_desk), or close a tab. Prefer 'open' over navigate when you don't want to touch the user's active tab. After switching, refs from the previous tab are invalid — call view_page FIRST to get fresh refs before click/type/fill_form. DO NOT try to reuse old refs via evaluate(querySelector) as a shortcut.",
       {
         action: switchTabSchema.shape.action,
         url: switchTabSchema.shape.url,
@@ -1426,7 +1432,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     maybeRegisterFreeMCPTool(
       "tab_status",
-      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use read_page.",
+      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use view_page.",
       {},
       wrap(async (params) => {
         this._contextChecked = true;
@@ -1474,10 +1480,10 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "observe"),
     );
 
-    // --- 6. Visual (screenshot/dom_snapshot — last resort for visual tasks) ---
+    // --- 6. Visual (capture_image/dom_snapshot — last resort for visual tasks) ---
     maybeRegisterFreeMCPTool(
-      "screenshot",
-      "Capture a WebP image of the page (max 800px, <100KB). You CANNOT use screenshots as input for click/type — use read_page for element refs. Only use for visual verification, canvas pages, or explicit user requests. ~10-30x more tokens than read_page.",
+      "capture_image",
+      "Capture a WebP image of the page (max 800px, <100KB). For reading page content (text, errors, forms, headings), use view_page — 10-30x cheaper. capture_image CANNOT drive click/type — only view_page returns usable element refs. Only use for pixel-level visual inspection, canvas pages, or explicit user requests.",
       {
         full_page: screenshotSchema.shape.full_page,
         som: screenshotSchema.shape.som,
@@ -1493,9 +1499,9 @@ export class ToolRegistry implements ToolRegistryPublic {
             );
             if (bounds.windowState === "minimized") {
               return {
-                content: [{ type: "text", text: "Warning: Window is minimized — screenshot may be empty or stale. Use switch_tab to bring the window to foreground first, or call Browser.setWindowBounds to restore it." }],
+                content: [{ type: "text", text: "Warning: Window is minimized — capture_image may be empty or stale. Use switch_tab to bring the window to foreground first, or call Browser.setWindowBounds to restore it." }],
                 isError: true,
-                _meta: { elapsedMs: 0, method: "screenshot", windowMinimized: true },
+                _meta: { elapsedMs: 0, method: "capture_image", windowMinimized: true },
               };
             }
           } catch {
@@ -1503,20 +1509,20 @@ export class ToolRegistry implements ToolRegistryPublic {
           }
         }
         const result = await screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, this.sessionId, this._browserSession.sessionManager);
-        // Preventive hint: screenshots cannot drive click/type — steer back to read_page
+        // Preventive hint: capture_image cannot drive click/type — steer back to view_page
         if (!result.isError && result.content?.length > 0) {
           const somHint = (params as unknown as ScreenshotParams).som
-            ? " SoM labels match read_page refs — pass them to click/type directly."
-            : " Add som: true to overlay numbered ref labels matching read_page.";
-          result.content.push({ type: "text", text: `Reminder: screenshots cannot be used as input for click/type — you need refs from read_page for any interaction.${somHint}` });
+            ? " SoM labels match view_page refs — pass them to click/type directly."
+            : " Add som: true to overlay numbered ref labels matching view_page.";
+          result.content.push({ type: "text", text: `Reminder: for page content use view_page — capture_image is for pixel-level inspection only.${somHint}` });
         }
         return result;
-      }, "screenshot"),
+      }, "capture_image"),
     );
 
     maybeRegisterFreeMCPTool(
       "dom_snapshot",
-      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match view_page. Use ONLY for spatial questions view_page cannot answer (is A above B? what color?). For element discovery or text: use view_page. For pure visual verification: use capture_image.",
       {
         ref: domSnapshotSchema.shape.ref,
       },
@@ -1648,7 +1654,7 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     maybeRegisterFreeMCPTool(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume. Parallel tab execution via parallel: [{ tab, steps }] is a Pro-Feature - requires Pro license.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/capture_image), suspend/resume. Parallel tab execution via parallel: [{ tab, steps }] is a Pro-Feature - requires Pro license.",
       {
         steps: runPlanSchema.shape.steps,
         parallel: runPlanSchema.shape.parallel,
@@ -1689,7 +1695,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // don't default to it for text/element tasks — Positional Bias fix) ---
     maybeRegisterFreeMCPTool(
       "evaluate",
-      "Execute JavaScript in the browser page context. Good uses: computation, style mutations (.style.X = ..., classList.add), shadow-root traversal, app-specific side effects no dedicated tool covers. Bad uses: (1) automatic recovery after a click/type/fill_form failure — call read_page for fresh refs and retry instead; (2) CSS inspection via getComputedStyle/getBoundingClientRect — use inspect_element (returns computed styles, CSS rules with source:line, cascade, AND a visual clip screenshot in one call). For element discovery (querySelector/getElementById/innerText), prefer read_page or fill_form. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
+      "Execute JavaScript in the browser page context. Good uses: computation, style mutations (.style.X = ..., classList.add), shadow-root traversal, app-specific side effects no dedicated tool covers. Bad uses: (1) automatic recovery after a click/type/fill_form failure — call view_page for fresh refs and retry instead; (2) CSS inspection via getComputedStyle/getBoundingClientRect — use inspect_element (returns computed styles, CSS rules with source:line, cascade, AND a visual clip screenshot in one call). For element discovery (querySelector/getElementById/innerText), prefer view_page or fill_form. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
       {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,
@@ -1719,10 +1725,10 @@ export class ToolRegistry implements ToolRegistryPublic {
     this._handlers.set("navigate", async (params, sessionIdOverride?) => {
       return navigateHandler(params as unknown as NavigateParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
-    this._handlers.set("read_page", async (params, sessionIdOverride?) => {
+    this._handlers.set("view_page", async (params, sessionIdOverride?) => {
       return readPageHandler(params as unknown as ReadPageParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
-    this._handlers.set("screenshot", async (params, sessionIdOverride?) => {
+    this._handlers.set("capture_image", async (params, sessionIdOverride?) => {
       return screenshotHandler(params as unknown as ScreenshotParams, this.cdpClient, sessionIdOverride ?? this.sessionId, this._browserSession.sessionManager);
     });
     this._handlers.set("wait_for", async (params, sessionIdOverride?) => {

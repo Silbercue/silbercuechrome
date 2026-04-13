@@ -338,7 +338,7 @@ describe("runPlanSchema — Suspend/Resume (Story 6.5)", () => {
         {
           tool: "click",
           params: { ref: "e5" },
-          suspend: { question: "Which element?", context: "screenshot" },
+          suspend: { question: "Which element?", context: "capture_image" },
         },
       ],
     });
@@ -400,7 +400,7 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
       steps: [
         { tool: "navigate", params: { url: "https://example.com" } },
         { tool: "click", params: { ref: "e1" } },
-        { tool: "screenshot" },
+        { tool: "capture_image" },
         { tool: "evaluate", params: { expression: "1" } },
         { tool: "type", params: { ref: "e2", text: "hi" } },
       ],
@@ -412,7 +412,7 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
     const result = await runPlanHandler(params, registry, undefined, undefined, license, config);
 
     expect(callLog).toHaveLength(3);
-    expect(callLog).toEqual(["navigate", "click", "screenshot"]);
+    expect(callLog).toEqual(["navigate", "click", "capture_image"]);
     expect(result._meta).toBeDefined();
     expect(result._meta!.truncated).toBe(true);
     expect(result._meta!.limit).toBe(3);
@@ -444,7 +444,7 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
       steps: [
         { tool: "navigate" },
         { tool: "click" },
-        { tool: "screenshot" },
+        { tool: "capture_image" },
         { tool: "evaluate" },
         { tool: "type" },
       ],
@@ -475,11 +475,11 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
       steps: [
         { tool: "navigate" },
         { tool: "click" },
-        { tool: "screenshot" },
+        { tool: "capture_image" },
         { tool: "evaluate" },
         { tool: "type" },
         { tool: "wait_for" },
-        { tool: "read_page" },
+        { tool: "view_page" },
         { tool: "dom_snapshot" },
       ],
     };
@@ -511,7 +511,7 @@ describe("runPlanHandler — Free-Tier Step-Limit (Story 9.1)", () => {
       steps: [
         { tool: "navigate" },
         { tool: "click" },
-        { tool: "screenshot" },
+        { tool: "capture_image" },
         { tool: "evaluate" },
         { tool: "type" },
       ],

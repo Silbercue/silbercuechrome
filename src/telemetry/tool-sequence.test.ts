@@ -32,7 +32,7 @@ describe("ToolSequenceTracker", () => {
       const qs = new Set([FLAG_QUERY_SELECTOR]);
       tracker.record("evaluate", qs);
       tracker.record("evaluate", qs);
-      tracker.record("read_page");
+      tracker.record("view_page");
       tracker.record("evaluate", qs);
       // Only the most recent evaluate counts — the read_page broke the streak.
       expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(1);
@@ -103,7 +103,7 @@ describe("ToolSequenceTracker", () => {
       const hint = tracker.maybeEvaluateStreakHint();
       expect(hint).toContain("Warning:");
       expect(hint).toContain("consecutive querySelector-based evaluate");
-      expect(hint).toContain("read_page");
+      expect(hint).toContain("view_page");
       expect(hint).toMatch(/last resort/);
     });
 
@@ -114,7 +114,7 @@ describe("ToolSequenceTracker", () => {
       }
       expect(tracker.maybeEvaluateStreakHint()).not.toBe("");
 
-      tracker.record("read_page");
+      tracker.record("view_page");
       expect(tracker.maybeEvaluateStreakHint()).toBe("");
 
       // A new streak must still be counted correctly after a reset.
@@ -176,7 +176,7 @@ describe("hasQuerySelectorPattern", () => {
 
 describe("isResetTool", () => {
   it("includes the expected happy-path tools", () => {
-    expect(isResetTool("read_page")).toBe(true);
+    expect(isResetTool("view_page")).toBe(true);
     expect(isResetTool("click")).toBe(true);
     expect(isResetTool("type")).toBe(true);
     expect(isResetTool("fill_form")).toBe(true);
@@ -219,7 +219,7 @@ describe("ToolSequenceTracker session scoping (BUG-018)", () => {
     tracker.record("evaluate", qs, "session-a");
     tracker.record("evaluate", qs, "session-a");
     // Session B is completely clean.
-    tracker.record("read_page", undefined, "session-b");
+    tracker.record("view_page", undefined, "session-b");
 
     expect(tracker.consecutiveEvaluateWithQuerySelector("session-a")).toBe(3);
     expect(tracker.consecutiveEvaluateWithQuerySelector("session-b")).toBe(0);

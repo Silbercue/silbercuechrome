@@ -33,13 +33,13 @@ describe("wrapCdpError", () => {
   });
 
   it("passes through non-connection errors with tool name prefix", () => {
-    const result = wrapCdpError(new Error("Some other error"), "read_page");
-    expect(result).toBe("read_page failed: Some other error");
+    const result = wrapCdpError(new Error("Some other error"), "view_page");
+    expect(result).toBe("view_page failed: Some other error");
   });
 
   it("handles non-Error objects", () => {
-    const result = wrapCdpError("string error", "screenshot");
-    expect(result).toBe("screenshot failed: string error");
+    const result = wrapCdpError("string error", "capture_image");
+    expect(result).toBe("capture_image failed: string error");
   });
 
   // FR-003: invisible element errors

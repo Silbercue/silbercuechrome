@@ -145,7 +145,7 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
     const { context, a11yTree } = makeContext();
     const result = makeClickResult("clickable");
 
-    const out = await hook("read_page", result, context);
+    const out = await hook("view_page", result, context);
 
     expect(out).toBe(result);
     expect(out.content).toHaveLength(1);

@@ -61,7 +61,7 @@ describe("screenshotHandler", () => {
     const result = await screenshotHandler({ full_page: false }, cdp, "s1");
 
     expect(result._meta).toBeDefined();
-    expect(result._meta!.method).toBe("screenshot");
+    expect(result._meta!.method).toBe("capture_image");
     expect(result._meta!.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(result._meta!.bytes).toBeDefined();
   });
@@ -138,7 +138,7 @@ describe("screenshotHandler", () => {
     expect(result.content[0]).toEqual(
       expect.objectContaining({
         type: "text",
-        text: expect.stringContaining("screenshot failed"),
+        text: expect.stringContaining("capture_image failed"),
       }),
     );
     expect((result.content[0] as { text: string }).text).toContain("Session closed");

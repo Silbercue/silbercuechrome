@@ -43,7 +43,7 @@ const MAX_EVENTS = 64;
 const STREAK_WINDOW_MS = 60 * 1000;
 
 /** Tools whose successful execution resets the evaluate streak. */
-const RESET_TOOLS = new Set(["read_page", "click", "type", "fill_form", "press_key"]);
+const RESET_TOOLS = new Set(["view_page", "click", "type", "fill_form", "press_key"]);
 
 /** Flag attached to evaluate events when the expression contained a DOM-query. */
 export const FLAG_QUERY_SELECTOR = "qs";
@@ -121,7 +121,7 @@ export class ToolSequenceTracker {
     return (
       `\n\nWarning: ${streak} consecutive querySelector-based evaluate calls detected. ` +
       `This usually means a ref went stale or a tool failed silently and you fell back to evaluate. ` +
-      `Call read_page once for fresh refs, then continue with click/type/fill_form. ` +
+      `Call view_page once for fresh refs, then continue with click/type/fill_form. ` +
       `evaluate is a last resort — routing around tool errors wastes tokens and hides real bugs.`
     );
   }

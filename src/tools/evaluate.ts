@@ -124,7 +124,7 @@ export function detectEvaluateAntiPattern(expression: string): string | null {
 
   if (bulkDiscovery || querySelectorForTag || queryThenInteract) {
     hints.push(
-      "Interactive elements (buttons, links, inputs) are already surfaced as stable refs by read_page. Try click(ref: 'eN') or fill_form(fields: [...]) instead of DOM queries — refs survive layout changes, selectors don't.",
+      "Interactive elements (buttons, links, inputs) are already surfaced as stable refs by view_page. Try click(ref: 'eN') or fill_form(fields: [...]) instead of DOM queries — refs survive layout changes, selectors don't.",
     );
   }
 
@@ -133,7 +133,7 @@ export function detectEvaluateAntiPattern(expression: string): string | null {
   // Require a leading dot so that string literals mentioning the word don't trigger.
   if (/[.?]\s*(innerText|textContent)\b(?!\s*=)/.test(expression)) {
     hints.push(
-      "Reading .innerText/.textContent? The a11y tree already contains visible text. Try read_page(ref: 'eN', filter: 'all') — table cells, static codes, paragraphs all show up with stable refs.",
+      "Reading .innerText/.textContent? The a11y tree already contains visible text. Try view_page(ref: 'eN', filter: 'all') — table cells, static codes, paragraphs all show up with stable refs.",
     );
   }
 
@@ -142,7 +142,7 @@ export function detectEvaluateAntiPattern(expression: string): string | null {
   if (/\b(Tests?|Benchmark|Spec)\b[\w.]*\.toString\s*\(\s*\)/.test(expression) ||
       /\bfunction[\s\S]{0,80}\.toString\s*\(\s*\)/.test(expression)) {
     hints.push(
-      "Reading test/function source via .toString()? The visible UI usually has the task description (e.g. .test-desc text). Try read_page(ref, filter:'all') first — don't debug the test harness.",
+      "Reading test/function source via .toString()? The visible UI usually has the task description (e.g. .test-desc text). Try view_page(ref, filter:'all') first — don't debug the test harness.",
     );
   }
 

@@ -590,7 +590,7 @@ describe("waitForHandler — js timeout diagnostics", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("Debug:");
     expect(result.content[0].text).toContain("Ref not found");
-    expect(result.content[0].text).toContain("read_page");
+    expect(result.content[0].text).toContain("view_page");
   });
 
   it("should NOT add diagnostic when expression has no querySelector or getElementById", async () => {

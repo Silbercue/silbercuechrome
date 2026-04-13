@@ -89,7 +89,7 @@ export function _getOriginTabId(): string | undefined {
 }
 
 /** FR-014: Hint appended to responses where the active tab changes. */
-const STALE_REFS_HINT = "\n\nNote: Element refs from the previous tab are no longer valid. Call read_page for fresh refs.";
+const STALE_REFS_HINT = "\n\nNote: Element refs from the previous tab are no longer valid. Call view_page for fresh refs.";
 
 /**
  * Attach to a target, enable CDP domains, re-attach TabStateCache listeners,

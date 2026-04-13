@@ -17,7 +17,7 @@ export const screenshotSchema = z.object({
     .boolean()
     .optional()
     .default(false)
-    .describe("Overlay numbered labels on interactive elements matching read_page ref IDs (Set-of-Mark)"),
+    .describe("Overlay numbered labels on interactive elements matching view_page ref IDs (Set-of-Mark)"),
 });
 
 export type ScreenshotParams = z.infer<typeof screenshotSchema>;
@@ -321,7 +321,7 @@ export async function screenshotHandler(
               content: [{ type: "image", data: result.data, mimeType: "image/webp" }],
               _meta: {
                 elapsedMs,
-                method: "screenshot",
+                method: "capture_image",
                 bytes,
                 somElements,
               },
@@ -363,7 +363,7 @@ export async function screenshotHandler(
       content: [{ type: "image", data: result.data, mimeType: "image/webp" }],
       _meta: {
         elapsedMs,
-        method: "screenshot",
+        method: "capture_image",
         bytes,
         ...(somElements !== undefined ? { somElements } : {}),
         ...(somFailed ? { somFailed: true } : {}),
@@ -372,9 +372,9 @@ export async function screenshotHandler(
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
     return {
-      content: [{ type: "text", text: wrapCdpError(err, "screenshot") }],
+      content: [{ type: "text", text: wrapCdpError(err, "capture_image") }],
       isError: true,
-      _meta: { elapsedMs, method: "screenshot" },
+      _meta: { elapsedMs, method: "capture_image" },
     };
   }
 }

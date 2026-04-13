@@ -367,7 +367,9 @@ export async function showClickIndicator(cdpClient: CdpClient, sessionId: string
 const TOOL_LABELS: Record<string, string> = {
   navigate: "Navigating\u2026",
   read_page: "Reading page\u2026",
+  view_page: "Reading page\u2026",
   screenshot: "Taking screenshot\u2026",
+  capture_image: "Taking screenshot\u2026",
   click: "Clicking\u2026",
   type: "Typing\u2026",
   fill_form: "Filling form\u2026",

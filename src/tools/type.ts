@@ -13,7 +13,7 @@ export const typeSchema = z.object({
   ref: z
     .string()
     .optional()
-    .describe("Element reference from read_page (e.g. 'e12') — preferred over selector"),
+    .describe("Element reference from view_page (e.g. 'e12') — preferred over selector"),
   selector: z
     .string()
     .optional()

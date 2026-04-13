@@ -107,7 +107,7 @@ export async function resolveElement(
       // Distinguish "DOM not enabled" from actual stale refs
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("DOM agent needs to be enabled")) {
-        throw new Error(`DOM domain not enabled for session — this is a server bug, not a stale ref. Try calling read_page first or report this issue.`);
+        throw new Error(`DOM domain not enabled for session — this is a server bug, not a stale ref. Try calling view_page first or report this issue.`);
       }
       throw new RefNotFoundError(
         `Element ${target.ref} not found (stale ref — node no longer in DOM).`,
@@ -191,7 +191,7 @@ export function buildRefNotFoundError(
     (!suggestion.name && CONTAINER_ROLES.has(suggestion.role));
 
   if (isUseless) {
-    return `Element ${ref} not found (possibly stale after navigation, DOM change, or tab/frame switch). Call read_page for fresh refs and retry; avoid selector-based evaluate as default recovery.`;
+    return `Element ${ref} not found (possibly stale after navigation, DOM change, or tab/frame switch). Call view_page for fresh refs and retry; avoid selector-based evaluate as default recovery.`;
   }
 
   return `Element ${ref} not found. Did you mean ${suggestion.ref} (${suggestion.role} '${suggestion.name}')?`;

@@ -202,7 +202,7 @@ describe("readPageHandler", () => {
     expect(result.content[0].text).toContain("Page: Test");
     expect(result.content[0].text).toContain("interactive elements");
     expect(result._meta).toBeDefined();
-    expect(result._meta!.method).toBe("read_page");
+    expect(result._meta!.method).toBe("view_page");
   });
 
   // BUG-019: the wire-level CDP call never includes a depth parameter so
@@ -278,7 +278,7 @@ describe("readPageHandler", () => {
     const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("read_page failed");
+    expect(result.content[0].text).toContain("view_page failed");
     expect(result.content[0].text).toContain("Session closed");
   });
 
@@ -296,7 +296,7 @@ describe("readPageHandler", () => {
     const cdp = mockCdpClient(sampleNodes);
     const result = await readPageHandler({ depth: 3, filter: "interactive" }, cdp, "s1");
 
-    expect(result._meta!.method).toBe("read_page");
+    expect(result._meta!.method).toBe("view_page");
     expect(result._meta!.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(result._meta!.refCount).toBeGreaterThanOrEqual(0);
     expect(result._meta!.depth).toBe(3);
@@ -1033,7 +1033,7 @@ describe("readPageHandler", () => {
       const text = result.content[0].text;
       // Must include the new positive truncation hint with format and action.
       expect(text).toMatch(/\[eXX role, N items\]/);
-      expect(text).toMatch(/read_page\(ref:'eXX', filter:'all'\)/);
+      expect(text).toMatch(/view_page\(ref:'eXX', filter:'all'\)/);
     });
 
     it("does NOT mention 'screenshot' as a fallback in the truncation warning", async () => {

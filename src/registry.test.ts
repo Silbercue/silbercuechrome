@@ -91,8 +91,8 @@ describe("ToolRegistry", () => {
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(
-      "read_page",
-      "PRIMARY tool for page understanding — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call read_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call read_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than screenshot.",
+      "view_page",
+      "PRIMARY tool for seeing what's on the page — call after navigate/switch_tab before any interaction. Returns accessibility tree with stable refs (e.g. 'e5') that you pass to click/type/fill_form. Use this to read visible text too — not evaluate/querySelector. Default filter:'interactive' hides static text; for cells/paragraphs/labels call view_page(ref: 'eN', filter: 'all'). Under tight max_tokens, containers appear as `[eXX role, N items]` one-line summaries — call view_page(ref:'eXX', filter:'all') on that ref to expand the subtree. ~10-30x cheaper than capture_image.",
       expect.objectContaining({
         depth: expect.anything(),
         ref: expect.anything(),
@@ -101,8 +101,8 @@ describe("ToolRegistry", () => {
       expect.any(Function),
     );
     expect(toolFn).toHaveBeenCalledWith(
-      "screenshot",
-      "Capture a WebP image of the page (max 800px, <100KB). You CANNOT use screenshots as input for click/type — use read_page for element refs. Only use for visual verification, canvas pages, or explicit user requests. ~10-30x more tokens than read_page.",
+      "capture_image",
+      "Capture a WebP image of the page (max 800px, <100KB). For reading page content (text, errors, forms, headings), use view_page — 10-30x cheaper. capture_image CANNOT drive click/type — only view_page returns usable element refs. Only use for pixel-level visual inspection, canvas pages, or explicit user requests.",
       expect.objectContaining({
         full_page: expect.anything(),
       }),
@@ -121,7 +121,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "click",
-      expect.stringMatching(/^Click an element by ref.*stale-ref error, call read_page/s),
+      expect.stringMatching(/^Click an element by ref.*stale-ref error, call view_page/s),
       expect.objectContaining({
         ref: expect.anything(),
         selector: expect.anything(),
@@ -144,7 +144,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "tab_status",
-      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use read_page.",
+      "Active tab's cached URL/title/ready/errors for quick sanity checks mid-workflow ('did my click navigate?'). For tab discovery: use virtual_desk. For page content: use view_page.",
       {},
       expect.any(Function),
     );
@@ -166,7 +166,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "dom_snapshot",
-      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match view_page. Use ONLY for spatial questions view_page cannot answer (is A above B? what color?). For element discovery or text: use view_page. For pure visual verification: use capture_image.",
       expect.objectContaining({
         ref: expect.anything(),
       }),
@@ -184,7 +184,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "fill_form",
-      expect.stringMatching(/^Fill a complete form with one call.*On per-field errors, call read_page/s),
+      expect.stringMatching(/^Fill a complete form with one call.*On per-field errors, call view_page/s),
       expect.objectContaining({
         fields: expect.anything(),
       }),
@@ -192,7 +192,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "run_plan",
-      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/screenshot), suspend/resume. Parallel tab execution via parallel: [{ tab, steps }] is a Pro-Feature - requires Pro license.",
+      "Execute a sequential plan of tool steps server-side. Supports variables ($varName), conditions (if), saveAs, error strategies (abort/continue/capture_image), suspend/resume. Parallel tab execution via parallel: [{ tab, steps }] is a Pro-Feature - requires Pro license.",
       expect.objectContaining({
         steps: expect.anything(),
         parallel: expect.anything(),
@@ -689,7 +689,7 @@ describe("ToolRegistry", () => {
     );
     expect(domSnapshotCall).toBeDefined();
     expect(domSnapshotCall![1]).toBe(
-      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match read_page. Use ONLY for spatial questions read_page cannot answer (is A above B? what color?). For element discovery or text: use read_page. For pure visual verification: use screenshot.",
+      "Structured layout data: bounding boxes, computed styles, paint order, colors. Refs match view_page. Use ONLY for spatial questions view_page cannot answer (is A above B? what color?). For element discovery or text: use view_page. For pure visual verification: use capture_image.",
     );
   });
 
@@ -719,7 +719,7 @@ describe("ToolRegistry", () => {
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("dom_snapshot (Pro)");
-    expect(text).toContain("read_page"); // Free alternative mentioned
+    expect(text).toContain("view_page"); // Free alternative mentioned
     expect(text).toContain("silbercuechrome license activate"); // Upgrade path
   });
 
@@ -739,7 +739,7 @@ describe("ToolRegistry", () => {
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("dom_snapshot (Pro)");
-    expect(text).toContain("read_page");
+    expect(text).toContain("view_page");
     expect(text).toContain("silbercuechrome license activate");
   });
 
@@ -1670,7 +1670,7 @@ describe("ToolRegistry", () => {
 
     // Find the screenshot callback registered via server.tool()
     const screenshotCall = toolFn.mock.calls.find(
-      (call: unknown[]) => call[0] === "screenshot",
+      (call: unknown[]) => call[0] === "capture_image",
     );
     expect(screenshotCall).toBeDefined();
 
@@ -1721,7 +1721,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    const result = await registry.executeTool("read_page", {});
+    const result = await registry.executeTool("view_page", {});
 
     expect(result._meta).toBeDefined();
     expect(result._meta!.estimated_tokens).toBeDefined();
@@ -1796,7 +1796,7 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    const result = await registry.executeTool("read_page", {});
+    const result = await registry.executeTool("view_page", {});
 
     expect(result._meta).toBeDefined();
     const responseBytes = result._meta!.response_bytes as number;
@@ -1890,7 +1890,7 @@ describe("ToolRegistry", () => {
 
     // Find the read_page callback registered via server.tool()
     const readPageCall = toolFn.mock.calls.find(
-      (call: unknown[]) => call[0] === "read_page",
+      (call: unknown[]) => call[0] === "view_page",
     );
     expect(readPageCall).toBeDefined();
 
@@ -1931,13 +1931,13 @@ describe("ToolRegistry", () => {
     const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
     registry.registerAll();
 
-    const result = await registry.executeTool("read_page", {});
+    const result = await registry.executeTool("view_page", {});
 
     expect(result._meta).toBeDefined();
     // Existing fields preserved
     expect(result._meta!.elapsedMs).toBeDefined();
     expect(typeof result._meta!.elapsedMs).toBe("number");
-    expect(result._meta!.method).toBe("read_page");
+    expect(result._meta!.method).toBe("view_page");
     expect(result._meta!.response_bytes).toBeDefined();
     // New field added
     expect(result._meta!.estimated_tokens).toBeDefined();
@@ -3325,7 +3325,7 @@ describe("ToolRegistry", () => {
         registry.registerAll();
 
         // Prime the cache so classifyRef("e1") finds the button
-        await registry.executeTool("read_page", {});
+        await registry.executeTool("view_page", {});
         // Now click the same button — the default hook should detect that
         // the AX tree did not change between before/after and append
         // nothing (formatDomDiff returns null on empty changes), but
@@ -3556,13 +3556,13 @@ describe("ToolRegistry", () => {
 
     const DEFAULT_TOOL_NAMES_EXPECTED = [
       "virtual_desk",
-      "read_page",
+      "view_page",
       "click",
       "type",
       "fill_form",
       "navigate",
       "wait_for",
-      "screenshot",
+      "capture_image",
       "run_plan",
       "evaluate",
     ];
@@ -3704,8 +3704,8 @@ describe("ToolRegistry", () => {
       const expectedHandlerNames = [
         "evaluate",
         "navigate",
-        "read_page",
-        "screenshot",
+        "view_page",
+        "capture_image",
         "wait_for",
         "observe",
         "click",
@@ -4393,7 +4393,7 @@ describe("ToolRegistry — Speculative Prefetch (Story 18.5)", () => {
     registry.registerAll();
 
     // First read_page so click can resolve "e2" via the precomputed cache.
-    await registry.executeTool("read_page", {});
+    await registry.executeTool("view_page", {});
     await Promise.all(capturedPromises.splice(0));
 
     const clickResult = await registry.executeTool("click", { ref: "e2" });
@@ -4477,7 +4477,7 @@ describe("ToolRegistry — Speculative Prefetch (Story 18.5)", () => {
     // assertion is unaffected.
     await registry.executeTool("press_key", { key: "Enter" });
     await registry.executeTool("scroll", { direction: "down", amount: 100 });
-    await registry.executeTool("read_page", {});
+    await registry.executeTool("view_page", {});
 
     // Drain any leftover slot promise (none expected, but defensive).
     if (capturedPromises.length > 0) {
@@ -4532,7 +4532,7 @@ describe("ToolRegistry — Speculative Prefetch (Story 18.5)", () => {
     })._handlers;
     handlers.set("type", successHandler);
     handlers.set("fill_form", successHandler);
-    handlers.set("screenshot", successHandler);
+    handlers.set("capture_image", successHandler);
     handlers.set("wait_for", successHandler);
 
     // Execute each tool; none of them may trigger a prefetch schedule.
@@ -4540,7 +4540,7 @@ describe("ToolRegistry — Speculative Prefetch (Story 18.5)", () => {
     expect(typeResult.isError).toBeFalsy();
     const fillResult = await registry.executeTool("fill_form", { fields: [] });
     expect(fillResult.isError).toBeFalsy();
-    const screenshotResult = await registry.executeTool("screenshot", {});
+    const screenshotResult = await registry.executeTool("capture_image", {});
     expect(screenshotResult.isError).toBeFalsy();
     const waitResult = await registry.executeTool("wait_for", { selector: "body" });
     expect(waitResult.isError).toBeFalsy();

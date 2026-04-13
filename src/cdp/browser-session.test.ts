@@ -272,4 +272,22 @@ describe("BrowserSession — tab switching", () => {
     ctx.session.applyTabSwitch("new-session-after-switch");
     expect(ctx.session.sessionId).toBe("new-session-after-switch");
   });
+
+  it("BUG-019: applyTabSwitch() reinits DialogHandler on the new session", async () => {
+    const ctx = buildSession({ connectSequence: ["ok"] });
+    await ctx.session.ensureReady();
+
+    // Inject a mock DialogHandler so we can observe reinit calls
+    const reinitSpy = vi.fn();
+    const mockDialogHandler = { reinit: reinitSpy };
+    (ctx.session as unknown as { _dialogHandler: unknown })._dialogHandler = mockDialogHandler;
+
+    ctx.session.applyTabSwitch("tab-2-session");
+
+    expect(reinitSpy).toHaveBeenCalledOnce();
+    expect(reinitSpy).toHaveBeenCalledWith(
+      expect.anything(), // cdpClient
+      "tab-2-session",
+    );
+  });
 });

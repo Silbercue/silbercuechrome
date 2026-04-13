@@ -66,13 +66,13 @@ describe("executePlan", () => {
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "Navigated to https://example.com"));
     responses.set("click", okResponse("click", "Clicked element e5"));
-    responses.set("screenshot", okResponse("screenshot", "Screenshot taken"));
+    responses.set("capture_image", okResponse("capture_image", "Screenshot taken"));
 
     const registry = createMockRegistry(responses);
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://example.com" } },
       { tool: "click", params: { ref: "e5" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -83,7 +83,7 @@ describe("executePlan", () => {
     expect(textBlocks).toHaveLength(3);
     expect(textBlocks[0]).toHaveProperty("text", expect.stringContaining("navigate"));
     expect(textBlocks[1]).toHaveProperty("text", expect.stringContaining("click"));
-    expect(textBlocks[2]).toHaveProperty("text", expect.stringContaining("screenshot"));
+    expect(textBlocks[2]).toHaveProperty("text", expect.stringContaining("capture_image"));
   });
 
   // FR-022: press_key and scroll work as plan steps
@@ -150,13 +150,13 @@ describe("executePlan", () => {
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "Navigated"));
     responses.set("click", errorResponse("click", "Element not found"));
-    responses.set("screenshot", okResponse("screenshot", "Screenshot taken"));
+    responses.set("capture_image", okResponse("capture_image", "Screenshot taken"));
 
     const registry = createMockRegistry(responses);
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://test.com" } },
       { tool: "click", params: { ref: "e99" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -181,7 +181,7 @@ describe("executePlan", () => {
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://test.com" } },
       { tool: "click", params: { ref: "e1" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -300,15 +300,15 @@ describe("executePlan", () => {
 
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://example.com" } },
-      { tool: "read_page" },
+      { tool: "view_page" },
       { tool: "click", params: { ref: "e3" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
       { tool: "evaluate", params: { expression: "1+1" } },
     ];
 
     await executePlan(steps, registry);
 
-    expect(callLog).toEqual(["navigate", "read_page", "click", "screenshot", "evaluate"]);
+    expect(callLog).toEqual(["navigate", "view_page", "click", "capture_image", "evaluate"]);
   });
 
   it("catches exception from executeTool and converts to isError response", async () => {
@@ -327,7 +327,7 @@ describe("executePlan", () => {
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://example.com" } },
       { tool: "click", params: { ref: "e5" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -367,21 +367,21 @@ describe("executePlan", () => {
     // mehr in den Plan-Response uebernommen. Begruendung: ein Screenshot-Image
     // pro Zwischen-Step ist der Token-Killer (50–200 KB base64). Wer einen
     // Screenshot wirklich braucht, ruft `screenshot` ausserhalb des Plans
-    // direkt auf, oder nutzt `errorStrategy: "screenshot"` (das Image bleibt
+    // direkt auf, oder nutzt `errorStrategy: "capture_image"` (das Image bleibt
     // dann am Fehler-Step erhalten — siehe `appendErrorContext`).
     const screenshotResponse: ToolResponse = {
       content: [
         { type: "text", text: "Screenshot taken" },
         { type: "image", data: "base64data", mimeType: "image/webp" },
       ],
-      _meta: { elapsedMs: 20, method: "screenshot" },
+      _meta: { elapsedMs: 20, method: "capture_image" },
     };
 
     const responses = new Map<string, ToolResponse>();
-    responses.set("screenshot", screenshotResponse);
+    responses.set("capture_image", screenshotResponse);
 
     const registry = createMockRegistry(responses);
-    const steps: PlanStep[] = [{ tool: "screenshot" }];
+    const steps: PlanStep[] = [{ tool: "capture_image" }];
 
     const result = await executePlan(steps, registry);
 
@@ -389,7 +389,7 @@ describe("executePlan", () => {
     expect(result.content).toHaveLength(1);
     expect(result.content[0].type).toBe("text");
     const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toMatch(/\[1\/1\] OK screenshot \(20ms\):/);
+    expect(text).toMatch(/\[1\/1\] OK capture_image \(20ms\):/);
     // Image-Bloecke duerfen NICHT in der Response sein
     const imageBlocks = result.content.filter((c) => c.type === "image");
     expect(imageBlocks).toHaveLength(0);
@@ -594,13 +594,13 @@ describe("executePlan — Error Strategies (Story 6.4)", () => {
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "OK"));
     responses.set("click", errorResponse("click", "Not found"));
-    responses.set("screenshot", okResponse("screenshot", "Shot"));
+    responses.set("capture_image", okResponse("capture_image", "Shot"));
 
     const registry = createCallLogRegistry(responses);
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://test.com" } },
       { tool: "click", params: { ref: "e99" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -617,13 +617,13 @@ describe("executePlan — Error Strategies (Story 6.4)", () => {
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "OK"));
     responses.set("click", errorResponse("click", "Not found"));
-    responses.set("screenshot", okResponse("screenshot", "Shot"));
+    responses.set("capture_image", okResponse("capture_image", "Shot"));
 
     const registry = createCallLogRegistry(responses, callLog);
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://test.com" } },
       { tool: "click", params: { ref: "e99" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
     const options: PlanOptions = { errorStrategy: "continue" };
 
@@ -664,13 +664,13 @@ describe("executePlan — Error Strategies (Story 6.4)", () => {
         { type: "text", text: "Screenshot taken" },
         { type: "image", data: "base64screenshot", mimeType: "image/webp" },
       ],
-      _meta: { elapsedMs: 20, method: "screenshot" },
+      _meta: { elapsedMs: 20, method: "capture_image" },
     };
 
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", okResponse("navigate", "OK"));
     responses.set("click", errorResponse("click", "Not found"));
-    responses.set("screenshot", screenshotResponse);
+    responses.set("capture_image", screenshotResponse);
     responses.set("type", okResponse("type", "Typed")); // should not be reached
 
     const registry = createCallLogRegistry(responses, callLog);
@@ -679,13 +679,13 @@ describe("executePlan — Error Strategies (Story 6.4)", () => {
       { tool: "click", params: { ref: "e99" } },
       { tool: "type", params: { ref: "e1", text: "hello" } },
     ];
-    const options: PlanOptions = { errorStrategy: "screenshot" };
+    const options: PlanOptions = { errorStrategy: "capture_image" };
 
     const result = await executePlan(steps, registry, options);
 
     expect(result.isError).toBe(true);
     // navigate + click + screenshot = 3 calls, type not called
-    expect(callLog.map((c) => c.name)).toEqual(["navigate", "click", "screenshot"]);
+    expect(callLog.map((c) => c.name)).toEqual(["navigate", "click", "capture_image"]);
     // Should have image block in result
     const imageBlocks = result.content.filter((c) => c.type === "image");
     expect(imageBlocks).toHaveLength(1);
@@ -708,7 +708,7 @@ describe("executePlan — Error Strategies (Story 6.4)", () => {
       { tool: "navigate", params: { url: "https://test.com" } },
       { tool: "click", params: { ref: "e1" } },
     ];
-    const options: PlanOptions = { errorStrategy: "screenshot" };
+    const options: PlanOptions = { errorStrategy: "capture_image" };
 
     const result = await executePlan(steps, registry, options);
 
@@ -751,7 +751,7 @@ describe("executePlan — Combined Features (Story 6.4)", () => {
       { tool: "click", params: { ref: "e5" }, if: "$title === 'Login'" },
       { tool: "click", params: { ref: "e99" } }, // will fail
       { tool: "navigate", params: { url: "$url" }, if: "$title === 'NotLogin'" }, // will skip
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
     const options: PlanOptions = {
       vars: { url: "https://test.com" },
@@ -765,7 +765,7 @@ describe("executePlan — Combined Features (Story 6.4)", () => {
     // Step 3: click e99 (FAIL, continue)
     // Step 4: navigate (condition false, SKIP)
     // Step 5: screenshot (OK)
-    expect(callLog.map((c) => c.name)).toEqual(["evaluate", "click", "click", "screenshot"]);
+    expect(callLog.map((c) => c.name)).toEqual(["evaluate", "click", "click", "capture_image"]);
     expect(result._meta!.stepsCompleted).toBe(3); // evaluate, click e5, screenshot
     expect(result._meta!.stepsTotal).toBe(5);
 
@@ -846,15 +846,15 @@ describe("executePlan — Pre-Suspend (Story 6.5)", () => {
         { type: "text", text: "Screenshot taken" },
         { type: "image", data: "base64screenshotdata", mimeType: "image/webp" },
       ],
-      _meta: { elapsedMs: 20, method: "screenshot" },
+      _meta: { elapsedMs: 20, method: "capture_image" },
     };
-    responses.set("screenshot", screenshotResponse);
+    responses.set("capture_image", screenshotResponse);
 
     const registry = createCallLogRegistry(responses);
     const store = new PlanStateStore();
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://example.com" } },
-      { tool: "navigate", params: { url: "https://example.com/2" }, suspend: { question: "Continue?", context: "screenshot" } },
+      { tool: "navigate", params: { url: "https://example.com/2" }, suspend: { question: "Continue?", context: "capture_image" } },
     ];
 
     const result = await executePlan(steps, registry, undefined, store);
@@ -1593,17 +1593,17 @@ describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
   it("step with no text output renders as <no-output>", async () => {
     // Mock-Tool gibt content: [] zurueck → Zeile endet mit `: <no-output>`
     const responses = new Map<string, ToolResponse>();
-    responses.set("screenshot", {
+    responses.set("capture_image", {
       content: [],
-      _meta: { elapsedMs: 18, method: "screenshot" },
+      _meta: { elapsedMs: 18, method: "capture_image" },
     });
     const registry = createMockRegistry(responses);
-    const steps: PlanStep[] = [{ tool: "screenshot" }];
+    const steps: PlanStep[] = [{ tool: "capture_image" }];
 
     const result = await executePlan(steps, registry);
     expect(result.content).toHaveLength(1);
     const text = (result.content[0] as { type: "text"; text: string }).text;
-    expect(text).toBe("[1/1] OK screenshot (18ms): <no-output>");
+    expect(text).toBe("[1/1] OK capture_image (18ms): <no-output>");
   });
 
   it("image blocks from successful steps are excluded from aggregation", async () => {
@@ -1613,16 +1613,16 @@ describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
         { type: "text", text: "Screenshot taken" },
         { type: "image", data: "base64data", mimeType: "image/webp" },
       ],
-      _meta: { elapsedMs: 20, method: "screenshot" },
+      _meta: { elapsedMs: 20, method: "capture_image" },
     };
     const responses = new Map<string, ToolResponse>();
     responses.set("navigate", refResponse("navigate", "Navigated", 50));
-    responses.set("screenshot", screenshotResponse);
+    responses.set("capture_image", screenshotResponse);
 
     const registry = createMockRegistry(responses);
     const steps: PlanStep[] = [
       { tool: "navigate", params: { url: "https://example.com" } },
-      { tool: "screenshot" },
+      { tool: "capture_image" },
     ];
 
     const result = await executePlan(steps, registry);
@@ -1634,7 +1634,7 @@ describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
       (c): c is { type: "text"; text: string } => c.type === "text",
     );
     expect(textBlocks).toHaveLength(2);
-    expect(textBlocks[1].text).toBe("[2/2] OK screenshot (20ms): Screenshot taken");
+    expect(textBlocks[1].text).toBe("[2/2] OK capture_image (20ms): Screenshot taken");
   });
 
   it("skipped steps still render as one line with condition", async () => {
@@ -1711,12 +1711,12 @@ describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
       isError: true,
       _meta: { elapsedMs: 8, method: "click" },
     });
-    responses.set("screenshot", {
+    responses.set("capture_image", {
       content: [
         { type: "text", text: "Screenshot taken" },
         { type: "image", data: "base64-error-shot", mimeType: "image/webp" },
       ],
-      _meta: { elapsedMs: 20, method: "screenshot" },
+      _meta: { elapsedMs: 20, method: "capture_image" },
     });
 
     const registry = createMockRegistry(responses);
@@ -1726,7 +1726,7 @@ describe("executePlan — Step-Response-Aggregation (Story 18.2)", () => {
     ];
 
     const result = await executePlan(steps, registry, {
-      errorStrategy: "screenshot",
+      errorStrategy: "capture_image",
     });
 
     // Plan ist aborted, Image-Block muss da sein (am Fehler-Step)

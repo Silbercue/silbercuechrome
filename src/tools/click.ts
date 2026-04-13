@@ -22,7 +22,7 @@ export const clickSchema = z.object({
   text: z
     .string()
     .optional()
-    .describe("Visible text to match (e.g. 'Submit'). Finds element by name in the A11y tree — no prior read_page needed. Prefers interactive elements (buttons, links)."),
+    .describe("Visible text to match (e.g. 'Submit'). Finds element by name in the A11y tree — no prior view_page needed. Prefers interactive elements (buttons, links)."),
   x: z
     .number()
     .optional()
@@ -234,7 +234,7 @@ export async function clickHandler(
       if (autoScrolled && (viewportX < 0 || viewportY < 0 || viewportX >= vw || viewportY >= vh)) {
         const elapsedMs = Math.round(performance.now() - start);
         return {
-          content: [{ type: "text", text: `click at (${x}, ${y}) failed: coordinates are outside page bounds (page scrolled to ${sy}px but target is at ${y}px). The page may be shorter than expected — use read_page or screenshot to verify element positions.` }],
+          content: [{ type: "text", text: `click at (${x}, ${y}) failed: coordinates are outside page bounds (page scrolled to ${sy}px but target is at ${y}px). The page may be shorter than expected — use view_page or capture_image to verify element positions.` }],
           isError: true,
           _meta: { elapsedMs, method: "click", clickMethod: "coordinates" as ClickMethod, autoScrolled },
         };
@@ -293,7 +293,7 @@ export async function clickHandler(
       const elements = a11yTree.getInteractiveElements(8);
       const hint = elements.length > 0
         ? "\nAvailable interactive elements:\n  " + elements.join("\n  ")
-        : "\nNo interactive elements found — try read_page first.";
+        : "\nNo interactive elements found — try view_page first.";
       return {
         content: [{ type: "text", text: `No element found with text "${params.text}".${hint}` }],
         isError: true,

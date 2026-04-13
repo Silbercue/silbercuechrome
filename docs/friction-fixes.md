@@ -1276,3 +1276,26 @@ Fire-and-forget Trigger nach `navigate`/`click`).
 `.catch()`, M2 Race-3-Tests, L1 `expectedUrl` als aktiver URL-Guard).
 
 **Source:** Story 18.5 (`_bmad-output/implementation-artifacts/18-5-speculative-prefetch-waehrend-llm-denkzeit.md`).
+
+## FR-038: Tool-Rename read_page → view_page, screenshot → capture_image — gefixt (Story 20.2)
+
+**Problem:** LLMs greifen bei "kannst du das sehen?"-Prompts zu `screenshot`
+statt `read_page`, weil "screenshot" semantisch naeher an "sehen" liegt als
+"read_page" (= "lesen"). In realen Steuer4-Sessions war die screenshot:read_page-
+Rate konsistent hoch (30-54%), auch nach Steering-Fixes in Descriptions und
+Response-Hints.
+
+**Root Cause:** Der Tool-NAME ist das staerkste Steering-Signal. "screenshot"
+triggert den Reflex direkt, Descriptions werden nach Tool-Search/Deferred-Tools-
+Load nicht mehr staendig gesehen.
+
+**Fix:** Reines String-Rename — keine Logik-Aenderung:
+- `read_page` → `view_page`: "view" = "sehen/ansehen" — matcht den User-Trigger.
+- `screenshot` → `capture_image`: `capture_`-Praefix impliziert Aufwand/Kosten.
+- Alle Descriptions, Response-Hints, Server-Instructions und Cross-Referenzen
+  in anderen Tool-Descriptions aktualisiert.
+- run_plan Schema und plan-executor ErrorStrategy/SuspendConfig angepasst.
+
+**Aufwand:** Niedrig — ~50 String-Ersetzungen in Source, ~100 in Tests.
+
+**Source:** Story 20.2.

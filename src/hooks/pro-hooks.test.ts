@@ -293,7 +293,7 @@ describe("ProHooks", () => {
     // Must briefly describe what the Pro tool does
     expect(text).toMatch(/DOM tree snapshot/i);
     // Must mention the Free alternative so the LLM can continue
-    expect(text).toContain("read_page");
+    expect(text).toContain("view_page");
     // Must provide a clear upgrade path
     expect(text).toContain("Upgrade:");
     expect(text).toContain("silbercuechrome license activate");
