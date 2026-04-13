@@ -65,12 +65,13 @@ describe("ToolRegistry", () => {
     // Zaehlung (FULL_TOOLS=true): virtual_desk, read_page, click, type,
     // fill_form, press_key, scroll, drag, navigate, switch_tab, tab_status,
     // wait_for, observe, screenshot, dom_snapshot, handle_dialog,
-    // file_upload, console_logs, network_monitor, configure_session,
-    // run_plan, evaluate = 22 Tools.
+    // file_upload, console_logs, network_monitor, download, configure_session,
+    // run_plan, evaluate = 23 Tools.
     //
     // Story 18.6 (FR-028): `drag` ist im Full-Set, nicht im Default-Set.
+    // Story 22.2: `download` als Extended-Tool hinzugefuegt.
     // Default-Set bleibt stabil bei 10 (siehe DEFAULT_TOOL_NAMES).
-    expect(toolFn).toHaveBeenCalledTimes(22);
+    expect(toolFn).toHaveBeenCalledTimes(23);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
@@ -3799,14 +3800,15 @@ describe("ToolRegistry", () => {
         "file_upload",
         "console_logs",
         "network_monitor",
+        "download",
         "configure_session",
       ];
       for (const name of allExtended) {
         expect(registeredNames).toContain(name);
       }
 
-      // Insgesamt 10 Default + 11 Extended + drag (Story 18.6) = 22 Tools.
-      expect(toolFn).toHaveBeenCalledTimes(22);
+      // Insgesamt 10 Default + 12 Extended + drag (Story 18.6) = 23 Tools.
+      expect(toolFn).toHaveBeenCalledTimes(23);
     });
 
     it("FULL_TOOLS=true: _handlers-Map enthaelt alle Entries — inkl. handle_dialog/console_logs/network_monitor/drag", () => {
@@ -3956,11 +3958,12 @@ describe("ToolRegistry", () => {
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Exakt 22 Tools: 10 Default + 11 Extended + drag (Story 18.6 FR-028).
-      expect(toolFn).toHaveBeenCalledTimes(22);
+      // Exakt 23 Tools: 10 Default + 12 Extended + drag (Story 18.6 FR-028, Story 22.2 download).
+      expect(toolFn).toHaveBeenCalledTimes(23);
       expect(registeredNames).toContain("handle_dialog");
       expect(registeredNames).toContain("console_logs");
       expect(registeredNames).toContain("network_monitor");
+      expect(registeredNames).toContain("download");
       expect(registeredNames).toContain("drag");
 
       // Der Handler MUSS jetzt den Mock-Collector erreichen und NICHT mehr

@@ -55,6 +55,8 @@ import { observeSchema, observeHandler } from "./tools/observe.js";
 import type { ObserveParams } from "./tools/observe.js";
 import { dragSchema, dragHandler } from "./tools/drag.js";
 import type { DragParams } from "./tools/drag.js";
+import { downloadSchema, downloadHandler } from "./tools/download.js";
+import type { DownloadParams } from "./tools/download.js";
 import { updateOverlayStatus, getToolLabel, setLastElapsed, showClickIndicator } from "./overlay/session-overlay.js";
 import { PlanStateStore } from "./plan/plan-state-store.js";
 import type { LicenseStatus } from "./license/license-status.js";
@@ -1664,6 +1666,27 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "network_monitor"),
     );
 
+    // Story 22.2: download — check download status or list session downloads
+    maybeRegisterFreeMCPTool(
+      "download",
+      "Check status of file downloads or list all downloaded files in this session. Downloads happen automatically when you click download links or navigate to files (PDFs, CSVs, etc.) — you do NOT need to call this tool to trigger downloads. Use this tool to:\n- Wait for a large download to finish: download()\n- List all downloaded files: download({ action: \"list\" })",
+      {
+        action: downloadSchema.shape.action,
+        timeout: downloadSchema.shape.timeout,
+      },
+      wrap(async (params) => {
+        const collector = this._browserSession.downloadCollector;
+        if (!collector) {
+          return {
+            content: [{ type: "text", text: "download unavailable: download collector not initialized. This usually means the browser session has not been started yet — retry after any other tool call (e.g. virtual_desk) triggers the Chrome connection." }],
+            isError: true,
+            _meta: { elapsedMs: 0, method: "download" },
+          };
+        }
+        return downloadHandler(params as unknown as DownloadParams, collector);
+      }, "download"),
+    );
+
     // --- 9. Meta (configure_session/run_plan) ---
     // Story 7.3: configure_session — set session defaults and auto-promote
     if (this._browserSession.sessionDefaults) {
@@ -1906,6 +1929,18 @@ export class ToolRegistry implements ToolRegistryPublic {
         };
       }
       return networkMonitorHandler(params as unknown as NetworkMonitorParams, collector);
+    });
+    // Story 22.2: download handler for run_plan dispatcher
+    this._handlers.set("download", async (params) => {
+      const collector = this._browserSession.downloadCollector;
+      if (!collector) {
+        return {
+          content: [{ type: "text", text: "download unavailable: download collector not initialized." }],
+          isError: true,
+          _meta: { elapsedMs: 0, method: "download" },
+        };
+      }
+      return downloadHandler(params as unknown as DownloadParams, collector);
     });
     if (this._browserSession.sessionDefaults) {
       this._handlers.set("configure_session", async (params) => {

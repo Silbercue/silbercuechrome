@@ -38,6 +38,7 @@ export class DownloadCollector {
   private _cdpClient: CdpClient;
   private _pending: Map<string, PendingDownload> = new Map();
   private _completed: DownloadInfo[] = [];
+  private _history: DownloadInfo[] = [];
   private _downloadPath: string;
   private _initialized = false;
   private _willBeginCallback: ((params: unknown) => void) | null = null;
@@ -105,6 +106,7 @@ export class DownloadCollector {
     this.detach();
     this._cdpClient = cdpClient;
     this._pending = new Map();
+    this._history = [];
     await this.init();
   }
 
@@ -125,9 +127,62 @@ export class DownloadCollector {
   }
 
   /**
+   * Number of downloads currently in progress.
+   */
+  get pendingCount(): number {
+    return this._pending.size;
+  }
+
+  /**
+   * Return all completed downloads WITHOUT clearing the buffer.
+   * Used by the download tool's "list" action to show session history.
+   * Reads from `_history` which is never cleared by `consumeCompleted()`.
+   */
+  getAllDownloads(): DownloadInfo[] {
+    return [...this._history];
+  }
+
+  /**
+   * Wait for all pending downloads to complete (or timeout).
+   * Returns the newly completed downloads (does NOT clear the buffer).
+   *
+   * If no downloads are pending, resolves immediately with an empty array.
+   */
+  waitForCompletion(timeoutMs: number): Promise<DownloadInfo[]> {
+    if (this._pending.size === 0) {
+      return Promise.resolve([]);
+    }
+
+    const startLen = this._completed.length;
+    return new Promise<DownloadInfo[]>((resolve) => {
+      let resolved = false;
+
+      const settle = (result: DownloadInfo[]) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        clearInterval(interval);
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        settle(this._completed.slice(startLen));
+      }, timeoutMs);
+
+      // Poll: check every 200ms if all pending are done.
+      const interval = setInterval(() => {
+        if (this._pending.size === 0) {
+          settle(this._completed.slice(startLen));
+        }
+      }, 200);
+    });
+  }
+
+  /**
    * Delete all files in the download directory. Called on session shutdown.
    */
   cleanup(): void {
+    this._history = [];
     try {
       rmSync(this._downloadPath, { recursive: true, force: true });
       debug("DownloadCollector: cleaned up %s", this._downloadPath);
@@ -177,10 +232,11 @@ export class DownloadCollector {
       const pending = this._pending.get(guid);
       if (!pending) return;
 
-      this._pending.delete(guid);
-
       // Fire-and-forget the async stat retry — the completed entry will
       // appear in the buffer by the time the next tool call consumes it.
+      // NOTE: _pending.delete happens INSIDE _finalizeDownload, AFTER the
+      // push into _completed/_history — avoids a race window where
+      // pending.size === 0 but the download is not yet in the buffer.
       void this._finalizeDownload(guid, pending, p.totalBytes ?? 0);
     } else if (p.state === "canceled") {
       this._pending.delete(guid);
@@ -223,6 +279,8 @@ export class DownloadCollector {
     };
 
     this._completed.push(info);
+    this._history.push(info);
+    this._pending.delete(guid);
     debug("DownloadCollector: download completed guid=%s size=%d", guid, size);
   }
 }

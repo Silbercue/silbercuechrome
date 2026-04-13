@@ -132,8 +132,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
           (call: unknown[]) => call[0] as string,
         );
         expect(registeredNames).not.toContain("inspect_element");
-        // Full-Set exakt 22 Tools (10 Default + 11 Extended + drag aus Story 18.6).
-        expect(registeredNames.length).toBe(22);
+        // Full-Set exakt 23 Tools (10 Default + 12 Extended + drag aus Story 18.6, download aus Story 22.2).
+        expect(registeredNames.length).toBe(23);
         // Explizit die drei Collector-gated Tools — die Regression-Gefahr
         // lebt hier, siehe Story 18.3 Review H1/H2.
         expect(registeredNames).toContain("handle_dialog");

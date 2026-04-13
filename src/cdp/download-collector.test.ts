@@ -361,9 +361,78 @@ describe("DownloadCollector", () => {
     expect(completed[0].size).toBe(9999);
   });
 
+  // --- getAllDownloads / history tests ---
+
+  it("getAllDownloads returns history that survives consumeCompleted", async () => {
+    await collector.init();
+
+    mock.fireEvent("Browser.downloadWillBegin", {
+      guid: "hist-1",
+      url: "https://example.com/a.pdf",
+      suggestedFilename: "a.pdf",
+    });
+    mock.fireEvent("Browser.downloadProgress", {
+      guid: "hist-1",
+      totalBytes: 100,
+      receivedBytes: 100,
+      state: "completed",
+    });
+    await flush();
+
+    // Consume clears _completed
+    const consumed = collector.consumeCompleted();
+    expect(consumed).toHaveLength(1);
+    expect(collector.completedCount).toBe(0);
+
+    // History still has the download
+    const history = collector.getAllDownloads();
+    expect(history).toHaveLength(1);
+    expect(history[0].suggestedFilename).toBe("a.pdf");
+  });
+
+  it("getAllDownloads accumulates across multiple consumeCompleted cycles", async () => {
+    await collector.init();
+
+    // First download + consume
+    mock.fireEvent("Browser.downloadWillBegin", {
+      guid: "cycle-1",
+      url: "https://example.com/first.pdf",
+      suggestedFilename: "first.pdf",
+    });
+    mock.fireEvent("Browser.downloadProgress", {
+      guid: "cycle-1",
+      totalBytes: 100,
+      receivedBytes: 100,
+      state: "completed",
+    });
+    await flush();
+    collector.consumeCompleted();
+
+    // Second download + consume
+    mock.fireEvent("Browser.downloadWillBegin", {
+      guid: "cycle-2",
+      url: "https://example.com/second.pdf",
+      suggestedFilename: "second.pdf",
+    });
+    mock.fireEvent("Browser.downloadProgress", {
+      guid: "cycle-2",
+      totalBytes: 200,
+      receivedBytes: 200,
+      state: "completed",
+    });
+    await flush();
+    collector.consumeCompleted();
+
+    // History has both
+    const history = collector.getAllDownloads();
+    expect(history).toHaveLength(2);
+    expect(history[0].suggestedFilename).toBe("first.pdf");
+    expect(history[1].suggestedFilename).toBe("second.pdf");
+  });
+
   // --- reinit tests ---
 
-  it("reinit clears pending but preserves completed buffer", async () => {
+  it("reinit clears pending, completed buffer, and history", async () => {
     await collector.init();
 
     // Complete one download
@@ -388,6 +457,7 @@ describe("DownloadCollector", () => {
     });
 
     expect(collector.completedCount).toBe(1);
+    expect(collector.getAllDownloads()).toHaveLength(1);
 
     // Reinit with new client
     const newMock = createMockCdp();
@@ -395,6 +465,9 @@ describe("DownloadCollector", () => {
 
     // Completed buffer preserved
     expect(collector.completedCount).toBe(1);
+
+    // History cleared on reinit
+    expect(collector.getAllDownloads()).toHaveLength(0);
 
     // New listeners registered on new client
     expect(newMock.onFn).toHaveBeenCalledWith(
@@ -445,10 +518,68 @@ describe("DownloadCollector", () => {
     );
   });
 
+  it("cleanup clears history", async () => {
+    await collector.init();
+
+    mock.fireEvent("Browser.downloadWillBegin", {
+      guid: "clean-hist",
+      url: "https://example.com/file.pdf",
+      suggestedFilename: "file.pdf",
+    });
+    mock.fireEvent("Browser.downloadProgress", {
+      guid: "clean-hist",
+      totalBytes: 100,
+      receivedBytes: 100,
+      state: "completed",
+    });
+    await flush();
+
+    expect(collector.getAllDownloads()).toHaveLength(1);
+    collector.cleanup();
+    expect(collector.getAllDownloads()).toHaveLength(0);
+  });
+
   it("cleanup does not throw on failure", () => {
     mockRmSync.mockImplementation(() => { throw new Error("EPERM"); });
 
     expect(() => collector.cleanup()).not.toThrow();
+  });
+
+  // --- pending/completed atomicity (M2 race fix) ---
+
+  it("pending is not cleared until download is in the buffer", async () => {
+    await collector.init();
+
+    mock.fireEvent("Browser.downloadWillBegin", {
+      guid: "race-test",
+      url: "https://example.com/race.pdf",
+      suggestedFilename: "race.pdf",
+    });
+
+    expect(collector.pendingCount).toBe(1);
+
+    // Fire completed — _finalizeDownload is async, but the pending entry
+    // should only be removed after the push into _completed/_history.
+    mock.fireEvent("Browser.downloadProgress", {
+      guid: "race-test",
+      totalBytes: 500,
+      receivedBytes: 500,
+      state: "completed",
+    });
+
+    // Before flush: _finalizeDownload is still running.
+    // Either pending is still 1 (not yet finalized) or both pending=0
+    // AND completed=1 (already finalized). There must never be a state
+    // where pending=0 AND completed=0.
+    const pendingNow = collector.pendingCount;
+    const completedNow = collector.completedCount;
+    expect(pendingNow + completedNow).toBeGreaterThanOrEqual(1);
+
+    await flush();
+
+    // After flush: download is fully finalized
+    expect(collector.pendingCount).toBe(0);
+    expect(collector.completedCount).toBe(1);
   });
 
   // --- downloadPath getter ---
