@@ -26,6 +26,12 @@ Wrapper-Script das den lokalen Build startet. Damit greift MCP reconnect
 sofort — kein Claude Code Neustart noetig. `/silbercuechrome-publish`
 stellt die Original-Binary automatisch wieder her.
 
+**Wann Dev-Mode nutzen:** Bei JEDEM Code-Fix der live im Browser verifiziert
+werden muss (Frictions, Bugs, neue Features). Ohne Dev-Mode laeuft der MCP
+auf der alten Binary und Aenderungen sind unsichtbar. Workflow:
+`npm run dev` → `mcp-control reconnect` → testen → iterieren → am Ende
+`npm run dev:off` oder direkt `/silbercuechrome-publish`.
+
 ### Connection Modes
 
 SilbercueChrome verbindet sich beim Start in dieser Reihenfolge:
