@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/Silbercue/silbercuechrome)](https://github.com/Silbercue/silbercuechrome/releases)
 [![npm version](https://img.shields.io/npm/v/@silbercue%2Fchrome)](https://www.npmjs.com/package/@silbercue/chrome)
 [![Free — 18 tools](https://img.shields.io/badge/Free-18_tools-brightgreen)](https://github.com/Silbercue/silbercuechrome#free-vs-pro)
-[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercueswift/silbercuechrome-pro)
+[![Pro — 23 tools](https://img.shields.io/badge/Pro-23_tools-blueviolet)](https://polar.sh/silbercuechrome)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 
@@ -11,7 +11,7 @@ The most token-efficient MCP server for Chrome browser automation. Direct CDP, a
 
 Built for [Claude Code](https://claude.ai/claude-code), [Cursor](https://cursor.sh), and any MCP-compatible client.
 
-> **Looking for an alternative to Playwright MCP, Browser MCP, or claude-in-chrome?** SilbercueChrome talks to Chrome directly via the DevTools Protocol — no Playwright dependency, no Chrome extension bridge, no single-tab limit. One command to install, zero config, and the best benchmark score in the category. [See comparison below](#benchmarks).
+> **Looking for an alternative to Playwright MCP, Browser MCP, or claude-in-chrome?** SilbercueChrome talks to Chrome directly via the DevTools Protocol — no Playwright dependency, no Chrome extension bridge, no single-tab limit. One command to install, zero config. [See benchmark comparison below](#benchmarks).
 
 ## Why SilbercueChrome?
 
@@ -38,19 +38,19 @@ SilbercueChrome fixes this. It talks directly to Chrome via CDP (same protocol P
 
 ### Where SilbercueChrome really shines
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **Ambient Context — Claude sees DOM changes for free, no extra `view_page` needed**
+> ![key feature](https://img.shields.io/badge/key%20feature-%23FFD700?style=flat-square) **Ambient Context — Claude sees DOM changes for free, no extra `view_page` needed**
 
 After every `click`, SilbercueChrome's response includes **NEW / REMOVED / CHANGED** lines showing exactly what changed on the page. Playwright MCP's `browser_click` only returns "clicked element X" — Claude then has to call `browser_snapshot` or `browser_evaluate` to figure out what happened. Over a full benchmark run, this means Playwright needs **47 extra `browser_evaluate` calls** averaging 2.155 chars each just to reconstruct page state. SC delivers the diff inline, so the same workflow needs only **33 evaluate calls averaging 510 chars**. Result: **~30% less total response content** across the three main tools (click + read_page + evaluate: 120k vs 170k chars).
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **`view_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`**
+> ![key feature](https://img.shields.io/badge/key%20feature-%23FFD700?style=flat-square) **`view_page` is 5.4× more compact than Playwright MCP's `browser_snapshot`**
 
 Measured on the 35-test hardest benchmark (2026-04-09): SC's `view_page` averages **1.124 chars per call** vs Playwright MCP's `browser_snapshot` at **6.084 chars**. Same page, same test suite, same LLM driver. The difference is the Ambient Context pipeline + a11y-tree compression — we only send what the agent actually needs, filtered to interactive elements by default. Smaller responses mean less context pressure, more room for reasoning, and cheaper runs.
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **P95 Tool-Response is 3.5× smaller than Playwright MCP**
+> ![key feature](https://img.shields.io/badge/key%20feature-%23FFD700?style=flat-square) **P95 Tool-Response is 3.5× smaller than Playwright MCP**
 
 The worst-case tool response is what really eats context budgets. SC's 95th-percentile response is **2.328 chars** vs Playwright MCP's **8.068 chars**. Even the most expensive SC call is cheaper than Playwright's typical snapshot. This compounds over long agent runs where the biggest responses decide whether the context window survives.
 
-> ![killer feat](https://img.shields.io/badge/killer%20feat-%23FFD700?style=flat-square) **True multi-tab — `virtual_desk`, `switch_tab`, parallel tabs in `run_plan`** <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center">
+> ![key feature](https://img.shields.io/badge/key%20feature-%23FFD700?style=flat-square) **True multi-tab — `virtual_desk`, `switch_tab`, parallel tabs in `run_plan`** <img src="https://img.shields.io/badge/Pro-blueviolet?style=flat-square" align="center">
 
 Browser MCP binds to a single "connected" tab via its Chrome extension — cross-tab operations are architecturally impossible. SilbercueChrome uses CDP `Target` API to enumerate, open, close, and switch between tabs. `virtual_desk` lists every open tab with stable IDs. `switch_tab` moves between them without touching the user's active tab. `run_plan` even supports parallel tab execution.
 
@@ -93,9 +93,32 @@ Add to `~/.cursor/mcp.json`:
 }
 ```
 
+### Install in Cline
+
+Add to your `cline_mcp_settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "silbercuechrome": {
+      "command": "npx",
+      "args": ["-y", "@silbercue/chrome@latest"]
+    }
+  }
+}
+```
+
 ### Install in other MCP clients
 
 Any client that supports stdio MCP servers: `npx -y @silbercue/chrome@latest` with no arguments.
+
+### Try it — your first prompt
+
+After installing, paste this into your AI coding assistant:
+
+> Open mcp-test.second-truth.com, read the page, and fill the contact form with Name "Test User" and Email "test@example.com".
+
+This exercises three core tools in sequence: `navigate` loads the page, `view_page` reads the accessibility tree with stable element refs, and `fill_form` fills multiple fields in one call. You should see Chrome open, the page load, and the form filled — all without writing a single line of code.
 
 ### Install Pro via Homebrew
 
@@ -109,7 +132,7 @@ silbercuechrome activate SCC-XXXX-XXXX-XXXX-XXXX
 
 **Important — restart Claude Code completely after `claude mcp add`.** `/mcp reconnect` is *not* enough. Claude Code reads the `mcpServers` config only at session start and caches it; the old command is re-used even after `reconnect`. Fully quit Claude Code and reopen it so the new `silbercuechrome` server is picked up.
 
-After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license at [polar.sh/silbercueswift](https://polar.sh/silbercueswift/silbercuechrome-pro) — the key arrives by email and can be activated as shown above.
+After the restart, `silbercuechrome status` should print `Tier: Pro, Tools: 23`. Get a license at [polar.sh/silbercuechrome](https://polar.sh/silbercuechrome) — the key arrives by email and can be activated as shown above.
 
 Google Chrome must be installed on the machine — SilbercueChrome auto-launches Chrome via CDP at runtime, but it does not install Chrome for you.
 
@@ -149,9 +172,30 @@ The Free tier gives you 18 tools that cover the entire benchmark suite. Pro adds
 
 See the **[Benchmarks](#benchmarks)** section below for per-tool-call response-size numbers and head-to-head comparisons with Playwright MCP, Browser MCP, claude-in-chrome, and browser-use.
 
-Pro costs €12/month. [Get a license on Polar.sh](https://polar.sh/silbercueswift/silbercuechrome-pro), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
+Pro costs €12/month. [Get a license on Polar.sh](https://polar.sh/silbercuechrome), then follow [Install Pro via Homebrew](#install-pro-via-homebrew) above — three commands, no manual download, no env-var editing. License keys arrive by email and are activated with `silbercuechrome activate <YOUR-LICENSE-KEY>`. (The `SILBERCUECHROME_LICENSE_KEY=...` env var still works as an alternative for non-Homebrew installs.)
 
-## Tools
+## Tool Overview (16 Core Tools)
+
+| Tool | Tier | Description |
+|---|---|---|
+| `view_page` | Free | A11y-tree with stable element refs |
+| `capture_image` | Free | Compressed WebP screenshot |
+| `click` | Free | Click by ref, selector, or text |
+| `type` | Free | Type text into an input |
+| `fill_form` | Free | Fill multiple form fields in one call |
+| `scroll` | Free | Scroll page or container |
+| `wait_for` | Free | Wait for element, network idle, or JS condition |
+| `evaluate` | Free | Execute JavaScript in page context |
+| `navigate` | Free | Load a URL |
+| `run_plan` | Free (3 steps) / Pro (unlimited) | Multi-step batch execution |
+| `tab_status` | Free | Tab URL/title/ready from cache (0ms) |
+| `observe` | Free | Watch DOM changes (MutationObserver) |
+| `download` | Free | Download status and session history |
+| `switch_tab` | Pro | Open, switch, or close tabs |
+| `virtual_desk` | Pro | All open tabs at a glance |
+| `press_key` | Free | Keyboard events with target focus |
+
+## Tools (detailed)
 
 ### Reading & Observation
 
@@ -202,6 +246,17 @@ Pro costs €12/month. [Get a license on Polar.sh](https://polar.sh/silbercueswi
 ## Benchmarks
 
 Measured on `https://mcp-test.second-truth.com` — **35 tests in 5 levels** (Basics, Intermediate, Advanced, Hardest, Community Pain Points). Each run is independent, values on the benchmark page are randomized per page-load, all runs started in a fresh Claude Code session out of `/tmp` (no project context bias), and **all metrics measured post-hoc from the session JSONL** via [`test-hardest/measure-tool-calls.sh`](.claude/skills/benchmarkTest/measure-tool-calls.sh) — no self-reporting, no MCP-side instrumentation, just counting `tool_use` blocks and `tool_result` char lengths.
+
+### Head-to-Head (24-Test Suite, 2026-04-04)
+
+All four servers ran the same 24-test suite on [mcp-test.second-truth.com](https://mcp-test.second-truth.com), same LLM (Claude Opus 4.6), same test page. Raw data in `test-hardest/benchmark-*.json`.
+
+| MCP Server | Tests Passed | Duration | Tool Calls | Speed vs SC |
+|---|---:|---:|---:|---|
+| **SilbercueChrome** | **24/24** | **21s** | **116** | -- |
+| Playwright MCP | 24/24 | 570s | 138 | 27x slower |
+| claude-in-chrome | 24/24 | 772s | 193 | 37x slower |
+| browser-use | 16/24 | 1813s | 124 | 86x slower |
 
 ### Pass Rate + Duration (35-Test Suite, 2026-04-09)
 
@@ -274,11 +329,21 @@ Connection priority:
 | `CHROME_PATH` | path | — | Path to Chrome binary (overrides auto-detection) |
 | `SILBERCUECHROME_LICENSE_KEY` | license key | — | Pro license key (e.g. `SC-PRO-...`) |
 
+## Known Issues
+
+### BUG-003: WebSocket `Sec-WebSocket-Accept` Mismatch (Node 22 + Chrome 146)
+
+When connecting to an already-running Chrome via `--remote-debugging-port=9222` (WebSocket transport), Node 22's undici 6.21.1 produces a different `Sec-WebSocket-Accept` hash than Chrome 146 expects. This is a confirmed bug in Node 22's native WebSocket implementation.
+
+**Workaround:** The Accept validation is skipped — safe because the connection is to a localhost CDP endpoint. The workaround is already active in the shipped code.
+
+**Auto-Launch is NOT affected.** The default mode (auto-launch) uses `--remote-debugging-pipe` which bypasses WebSocket entirely. You only hit this if you manually start Chrome with `--remote-debugging-port` and connect via `--attach`.
+
 ## License
 
 The core server and all 18 Free-tier tools are **MIT licensed** — see [LICENSE](LICENSE). Use them however you want, commercially or otherwise.
 
-Pro tools (3+ gated tools, parallel tab execution, ambient context, operator hooks, faster internals) require a [paid license](https://polar.sh/silbercueswift/silbercuechrome-pro). The license validation code is in the separate private Pro repository.
+Pro tools (3+ gated tools, parallel tab execution, ambient context, operator hooks, faster internals) require a [paid license](https://polar.sh/silbercuechrome). The license validation code is in the separate private Pro repository.
 
 ## Contributing
 
@@ -287,3 +352,10 @@ Issues and pull requests welcome at [github.com/Silbercue/silbercuechrome](https
 ## Privacy
 
 SilbercueChrome runs entirely on your machine. All browser automation happens locally via CDP. No telemetry, no remote calls, no data sent to any third party.
+
+## Links
+
+- [GitHub Repository](https://github.com/Silbercue/silbercuechrome)
+- [npm Package](https://www.npmjs.com/package/@silbercue/chrome)
+- [Benchmark Test Site](https://mcp-test.second-truth.com)
+- [Pro License (Polar.sh)](https://polar.sh/silbercuechrome)
