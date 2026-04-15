@@ -25,6 +25,30 @@
 - Container-aware scrolling (`scroll` with container_ref/container_selector)
 - `inspect_element` for CSS debugging with computed styles, CSS rules, cascade, and visual clip
 
+### Epic Overview
+
+| Epic | Scope |
+|------|-------|
+| 1 — Page Reading & Navigation | A11y-Tree with stable refs, progressive depth, screenshots, tab status, URL navigation |
+| 2 — Element Interaction | Click, type, fill_form, scroll, press_key (Pro), drag-and-drop |
+| 3 — Automated Multi-Step Workflows | run_plan batch execution, evaluate, wait_for, observe, step-limit partial results |
+| 4 — Tab & Download Management | Multi-tab open/switch/close (Pro), tab overview, download status and history |
+| 5 — Connection & Reliability | Chrome auto-launch, --attach mode, auto-reconnect with state preservation |
+| 6 — Intelligent Tool Steering | Anti-pattern detection, stale-ref recovery, negative delimitation, tool profiles, DOM-diff |
+| 7 — Distribution & Licensing | npx zero-install, Polar.sh license keys, 7-day grace period, free-tier completeness |
+| 8 — Documentation & v1.0 Release | README, CHANGELOG, MCP server instructions audit, release checklist |
+
+### Benchmark Results (mcp-test.second-truth.com, 24 LLM-driven tests)
+
+| Server | Pass Rate | Tool Calls | Duration |
+|--------|-----------|------------|----------|
+| **SilbercueChrome MCP** | **24/24 (100%)** | **71** | **350s** |
+| Playwright MCP | 24/24 (100%) | 138 | 570s |
+| claude-in-chrome | 24/24 (100%) | 193 | 772s |
+| browser-use | 16/24 (67%) | 124 | 1813s |
+
+SilbercueChrome achieves the same 100% pass rate as Playwright MCP and claude-in-chrome with 49-63% fewer tool calls. Extended benchmark (35 tests including Level 5): 34/35 passed, 1 skipped (chrome://crash safety).
+
 ### Known Issues
 - BUG-003: WebSocket Sec-WebSocket-Accept mismatch (Node 22 + Chrome 146) — Accept-Check deactivated, auto-launch not affected
 

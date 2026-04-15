@@ -187,7 +187,7 @@ Alle 4 FRs (FR21-FR24) sind vollstaendig implementiert und getestet. FR-025 (nav
 
 Der Server fuehrt das LLM aktiv zum richtigen Tool. FR26-FR29 sind implementiert. FR25 (Anti-Pattern-Detection) ist mitigiert (BUG-018) — Story 23.1 bringt v2 mit drei neuen Patterns. FR-040 (Pro DOM-Diff Scope-Gate fuer type/fill_form) ist deferred. Hauptsaechliche neue Arbeit fuer v1.0.
 
-### Story 6.1: Evaluate Anti-Spiral v2 — Situational Tool Steering
+### Story 6.1: Evaluate Anti-Spiral v2 — Situational Tool Steering ⏳ DEFERRED post-v1.0
 
 As a LLM-Agent,
 I want korrigierende Hinweise bei fehlgeleiteten evaluate-Aufrufen auf die richtigen dedizierten Tools,
@@ -215,7 +215,7 @@ So that ich weniger Roundtrips brauche und zuverlaessiger arbeite.
 **When** der Server sie ausliefert
 **Then** erwaehnen sie die Extended Tools mit Use-Case-Hinweisen
 
-### Story 6.2: Pro DOM-Diff fuer type und fill_form
+### Story 6.2: Pro DOM-Diff fuer type und fill_form ⏳ DEFERRED post-v1.0
 
 As a LLM-Agent,
 I want nach type/fill_form-Aufrufen im Pro-Modus einen DOM-Diff erhalten (wie bei click),
@@ -263,7 +263,7 @@ So that ich in unter 2 Minuten loslegen kann.
 **When** der Developer die README liest
 **Then** findet er eine Vergleichstabelle (SilbercueChrome vs Playwright MCP vs browser-use) mit Quellenangabe
 
-### Story 8.2: v1.0 Release-Checkliste und Version-Bump
+### Story 8.2: v1.0 Release-Checkliste und Version-Bump ✅ DONE
 
 As a Maintainer,
 I want eine geprueft Release-Checkliste abarbeiten,
