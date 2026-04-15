@@ -1466,3 +1466,133 @@ In `navigate`/`view_page` nach `-32001` automatisch `Target.attachToTarget({ tar
 **Aufwand:** Niedrig (Option A) / Mittel (Option B)
 **Session:** 336cd4e1-013c-423d-8f5c-9542b73ddc5f
 **Hinweis:** Oje was denn da los?
+
+---
+
+## FR-042: navigate-Response gibt kein "call view_page"-Signal — LLM wechselt zu evaluate (P1)
+
+### Problem
+
+In Session `297995ca` (Hakuna-Matte Dev-Workflow): 18 von 19 navigate-Calls wurden von evaluate gefolgt statt view_page. Das LLM lud die Seite nach Code-Änderungen neu und prüfte dann sofort den JS-State via evaluate, weil die navigate-Response kein Signal gibt was als nächstes zu tun ist.
+
+Tool-Sequenz (exemplarisch, 18x wiederholt):
+```
+23:51:26  navigate(http://localhost:8080/hakuna-matte/) → "Navigated to ... — Hakuna Matte Analysis"
+23:51:33  evaluate (statt view_page)
+```
+
+Die navigate-Response lautet nur: `"Navigated to <url> — <title>"`. Kein Hinweis auf view_page.
+
+Die view_page Tool-Description sagt "Call this after navigate/click/switch_tab" — aber das greift nicht, weil das LLM nach navigate direkt JS-State inspizieren will und dabei evaluate statt view_page wählt.
+
+### Root Cause
+
+`buildSuccessResponse` in `src/tools/navigate.ts` (Zeile 203-205) baut nur:
+```
+"Navigated to <url> — <title>"
+```
+Kein Folge-Hinweis. Das LLM muss aus der Tool-Description schließen was als nächstes sinnvoll ist — und wählt evaluate weil es JS-State prüfen will.
+
+### Betroffene Dateien
+
+- `src/tools/navigate.ts` — `buildSuccessResponse()` (Zeilen 203-214)
+
+### Fix-Vorschlag
+
+In `buildSuccessResponse` nach dem Title-Block ergänzen:
+```typescript
+text += "\nCall view_page to see the page content and interactive elements, or evaluate() to check JavaScript state.";
+```
+
+Gilt auch für `handleBack` (gleicher Pfad → `buildSuccessResponse`).
+
+**Aufwand:** Minimal — 1 Zeile
+**Session:** 297995ca-574e-4b88-bfd5-7e683dfb7c5d
+**Hinweis:** Dev-Workflow Hakuna-Matte — 18x navigate→evaluate statt navigate→view_page
+
+---
+
+## FR-043: capture_image Description erlaubt "CSS layout" — inspect_element als Alternative fehlt (P1)
+
+### Problem
+
+In Session `297995ca` (Hakuna-Matte Dev-Workflow): 31 capture_image-Calls für visuelle Layout-Verifikation nach CSS-Änderungen. Der User beschwerte sich explizit: "Was machst du gerade 12 Mal Screenshot?"
+
+Das LLM handelte korrekt gemäß der Tool-Description — die explizit sagt:
+> "The ONLY valid uses: **(1) checking CSS layout or visual rendering**..."
+
+Aber für CSS-Layout-Verifikation wäre `inspect_element` besser: liefert computed styles, CSS-Regeln mit source:line und einen visuellen Clip — ohne den Token-Overhead eines Screenshots.
+
+### Root Cause
+
+Die capture_image Description nennt "CSS layout or visual rendering" als primären Use Case. Das steers das LLM aktiv in Richtung capture_image für genau den Fall, wo inspect_element überlegen wäre.
+
+### Betroffene Dateien
+
+- `src/registry.ts` — capture_image Tool-Description (Zeile 1516) und STOP-Message (Zeile 1547)
+
+### Fix-Vorschlag
+
+Description ändern von:
+```
+"The ONLY valid uses: (1) checking CSS layout or visual rendering, (2) canvas/chart content that has no DOM, (3) the user explicitly asks for a screenshot."
+```
+zu:
+```
+"The ONLY valid uses: (1) canvas/chart content that has no DOM text, (2) pixel-level animation or rendering comparison, (3) the user explicitly asks for a screenshot. For CSS layout or element positioning: use inspect_element (returns computed styles + visual clip + source locations)."
+```
+
+STOP-Message (Zeile 1547) ergänzen:
+```
+"STOP: You just used capture_image. For CSS layout verification use inspect_element instead — it returns computed styles, source locations and a visual clip. Next time you want to see page content, call view_page."
+```
+
+**Aufwand:** Minimal — Text-Änderungen
+**Session:** 297995ca-574e-4b88-bfd5-7e683dfb7c5d
+**Hinweis:** 31 Screenshots in Dev-Workflow, User-Beschwerde "12 Mal Screenshot"
+
+---
+
+## FR-044: Kein reload-Action in navigate — LLM nutzt navigate(same_url) als Seiten-Refresh (P2)
+
+### Problem
+
+In Session `297995ca`: 18 von 26 navigate-Calls navigierten zur selben URL (`http://localhost:8080/hakuna-matte/`) — als Seiten-Reload nach Code-Änderungen. Ein dediziertes `reload`-Tool würde:
+1. Die semantische Absicht klarmachen
+2. Eine spezifische Response ermöglichen: "Reloaded. Previous refs are stale — call view_page for fresh refs, or evaluate() to check JavaScript state."
+3. Kürzer sein (`reload` statt `navigate(url)`)
+
+### Root Cause
+
+`navigate` hat nur `action: "goto" | "back"`. Kein `reload`. Das LLM muss navigate(same_url) nutzen, weil es keinen besseren Weg gibt — und die navigate-Response ist identisch zu einer echten Navigation.
+
+### Betroffene Dateien
+
+- `src/tools/navigate.ts` — Schema und Handler
+- `src/registry.ts` — navigate Tool-Description
+
+### Fix-Vorschlag
+
+`navigateSchema` erweitern:
+```typescript
+action: z.enum(["goto", "back", "reload"]).optional().default("goto")
+  .describe("Navigation action: goto (default), back, or reload (refreshes current page)")
+```
+
+Handler-Zweig für reload:
+```typescript
+if (params.action === "reload") {
+  await cdpClient.send("Page.reload", {}, sessionId);
+  await settle({ cdpClient, sessionId: sessionId!, ... });
+  return { content: [{ text: "Reloaded. Previous element refs are stale — call view_page for fresh refs, or evaluate() to check JavaScript state." }], ... };
+}
+```
+
+navigate Tool-Description ergänzen:
+```
+"...or action:'reload' to refresh the current page (all element refs become stale)."
+```
+
+**Aufwand:** Niedrig
+**Session:** 297995ca-574e-4b88-bfd5-7e683dfb7c5d
+**Hinweis:** 18 navigate(same_url) = reload in Dev-Workflow

@@ -83,7 +83,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "navigate",
-      "Navigate the ACTIVE tab to a URL (or action:'back'). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
+      "Navigate the ACTIVE tab to a URL (or action:'back' to go back, action:'reload' to refresh current page — all element refs become stale after reload). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
       expect.objectContaining({
         url: expect.anything(),
         action: expect.anything(),
@@ -103,7 +103,7 @@ describe("ToolRegistry", () => {
     );
     expect(toolFn).toHaveBeenCalledWith(
       "capture_image",
-      "Pixel-level visual screenshot (WebP, max 800px, <100KB). Do NOT call this to see what is on the page — call view_page instead (10-30x cheaper, returns text + refs you can click). capture_image cannot drive click/type and cannot read text. The ONLY valid uses: (1) checking CSS layout or visual rendering, (2) canvas/chart content that has no DOM, (3) the user explicitly asks for a screenshot. If you are unsure, use view_page.",
+      "Pixel-level visual screenshot (WebP, max 800px, <100KB). Do NOT call this to see what is on the page — call view_page instead (10-30x cheaper, returns text + refs you can click). capture_image cannot drive click/type and cannot read text. The ONLY valid uses: (1) canvas/chart content that has no DOM text, (2) pixel-level animation or rendering comparison, (3) the user explicitly asks for a screenshot. For CSS layout or element positioning: use inspect_element (returns computed styles, source locations, and a visual clip). If you are unsure, use view_page.",
       expect.objectContaining({
         full_page: expect.anything(),
       }),
@@ -930,7 +930,7 @@ describe("ToolRegistry", () => {
     );
     expect(networkMonitorCall).toBeDefined();
     expect(networkMonitorCall![1]).toBe(
-      "Monitor network requests: start recording, retrieve recorded requests (with optional filter/pattern), or stop and return all collected data.",
+      "Monitor network requests via CDP. Workflow: start → trigger action → get(pattern: 'api'). Use INSTEAD of evaluate-based fetch interceptors (window.fetch = ..., XMLHttpRequest.prototype.open = ...) — network_monitor captures all requests including those initiated by the page itself.",
     );
   });
 

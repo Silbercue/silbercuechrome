@@ -8,10 +8,10 @@ import { wrapCdpError } from "./error-utils.js";
 export const navigateSchema = z.object({
   url: z.string().optional().describe("URL to navigate to (required for goto action)"),
   action: z
-    .enum(["goto", "back"])
+    .enum(["goto", "back", "reload"])
     .optional()
     .default("goto")
-    .describe("Navigation action: goto (default) or back"),
+    .describe("Navigation action: goto (default), back, or reload"),
   settle_ms: z
     .number()
     .optional()
@@ -57,6 +57,9 @@ export async function navigateHandler(
     if (params.action === "back") {
       return await handleBack(cdpClient, sessionId, params.settle_ms, start, method);
     }
+    if (params.action === "reload") {
+      return await handleReload(cdpClient, sessionId, params.settle_ms, start, method);
+    }
     return await handleGoto(cdpClient, sessionId, params.url, params.settle_ms, start, method);
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
@@ -66,6 +69,55 @@ export async function navigateHandler(
       _meta: { elapsedMs, method },
     };
   }
+}
+
+async function handleReload(
+  cdpClient: CdpClient,
+  sessionId: string | undefined,
+  settleMs: number | undefined,
+  start: number,
+  method: string,
+): Promise<ToolResponse> {
+  // 1. Get current URL before reload
+  let currentUrl = "unknown";
+  try {
+    const urlResult = await cdpClient.send<EvalResult>(
+      "Runtime.evaluate",
+      { expression: "document.URL", returnByValue: true },
+      sessionId,
+    );
+    currentUrl = urlResult.result.value;
+  } catch {
+    // URL retrieval failed — continue with "unknown"
+  }
+
+  // 2. Trigger reload
+  await cdpClient.send("Page.reload", {}, sessionId);
+
+  // 3. Get frameId for settle
+  const frameTree = await cdpClient.send<FrameTree>("Page.getFrameTree", {}, sessionId);
+  const mainFrameId = frameTree.frameTree.frame.id;
+
+  // 4. Settle — no loaderId available upfront, same pattern as handleBack
+  const settleResult = await settle({
+    cdpClient,
+    sessionId: sessionId!,
+    frameId: mainFrameId,
+    settleMs,
+  });
+
+  const elapsedMs = Math.round(performance.now() - start);
+
+  let text = `Reloaded ${currentUrl}`;
+  if (!settleResult.settled) {
+    text += " (page not fully settled)";
+  }
+  text += "\nPrevious element refs are stale — call view_page for fresh refs, or evaluate() to check JavaScript state.";
+
+  return {
+    content: [{ type: "text", text }],
+    _meta: { elapsedMs, method, settled: settleResult.settled, settleSignal: settleResult.signal },
+  };
 }
 
 async function handleGoto(
@@ -207,6 +259,8 @@ async function buildSuccessResponse(
   if (!settleResult.settled) {
     text += " (page not fully settled)";
   }
+
+  text += "\nNext: call view_page to see the page content and interactive elements, or evaluate() to check JavaScript state.";
 
   return {
     content: [{ type: "text", text }],

@@ -79,6 +79,11 @@ describe("navigateSchema", () => {
     expect(result.action).toBe("back");
   });
 
+  it("should accept action reload", () => {
+    const result = navigateSchema.parse({ action: "reload" });
+    expect(result.action).toBe("reload");
+  });
+
   it("should accept settle_ms", () => {
     const result = navigateSchema.parse({ url: "https://example.com", settle_ms: 1000 });
     expect(result.settle_ms).toBe(1000);
@@ -127,7 +132,7 @@ describe("navigateHandler", () => {
 
     const result = await promise;
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toBe("Navigated to https://example.com — Example Domain");
+    expect(result.content[0].text).toContain("Navigated to https://example.com — Example Domain");
     expect(result._meta?.method).toBe("navigate");
     expect(result._meta?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(result._meta?.settled).toBe(true);
@@ -194,7 +199,7 @@ describe("navigateHandler", () => {
 
     const result = await promise;
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toBe("Navigated to https://first.com — First");
+    expect(result.content[0].text).toContain("Navigated to https://first.com — First");
   });
 
   it("should return isError when going back with no history", async () => {
@@ -328,5 +333,41 @@ describe("navigateHandler", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("CDP connection lost");
     expect(result._meta?.method).toBe("navigate");
+  });
+
+  it("should reload the current page and warn about stale refs (FR-044)", async () => {
+    const { cdpClient, emitLifecycle } = createMockCdp({});
+
+    const calledMethods: string[] = [];
+    (cdpClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+      calledMethods.push(method);
+      if (method === "Runtime.evaluate") {
+        return { result: { value: "http://localhost:8080/hakuna-matte/" } };
+      }
+      if (method === "Page.reload") return {};
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { id: "main-frame" } } };
+      }
+      return {};
+    });
+
+    const promise = navigateHandler(
+      { action: "reload" },
+      cdpClient,
+      "s1",
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    emitLifecycle({ frameId: "main-frame", loaderId: "any-loader", name: "networkIdle", timestamp: 1 });
+    await vi.advanceTimersByTimeAsync(500);
+
+    const result = await promise;
+    expect(result.isError).toBeUndefined();
+    expect(calledMethods).toContain("Page.reload");
+    expect(calledMethods).toContain("Page.getFrameTree");
+    expect(result.content[0].text).toContain("Reloaded");
+    expect(result.content[0].text).toContain("http://localhost:8080/hakuna-matte/");
+    expect(result.content[0].text).toContain("refs are stale");
+    expect(result._meta?.settled).toBe(true);
   });
 });

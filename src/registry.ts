@@ -1363,7 +1363,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // FR-F: scroll — scroll page or element into view
     maybeRegisterFreeMCPTool(
       "scroll",
-      "Scroll the page, a container, or an element into view. Use ref/selector to scroll an element into the viewport. Use container_ref/container_selector + direction to scroll inside a specific container (e.g. sidebar, modal body).",
+      "Scroll the page, a container, or an element into view. Returns position and content-growth tracking (scrollHeight grew by Npx — useful for detecting lazy-loaded content). Do NOT scroll with evaluate(window.scrollTo/scrollBy) — scroll handles position tracking and settle timing automatically. Use container_ref/container_selector + direction to scroll inside a specific container.",
       {
         ref: scrollSchema.shape.ref,
         selector: scrollSchema.shape.selector,
@@ -1410,7 +1410,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // --- 4. Tab management (navigate/switch_tab/tab_status) ---
     maybeRegisterFreeMCPTool(
       "navigate",
-      "Navigate the ACTIVE tab to a URL (or action:'back'). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
+      "Navigate the ACTIVE tab to a URL (or action:'back' to go back, action:'reload' to refresh current page — all element refs become stale after reload). Waits for settle. WARNING: overwrites the user's active tab — always call virtual_desk FIRST to check what's open; if the right tab exists, use switch_tab instead. First call per session is auto-redirected to virtual_desk.",
       {
         url: navigateSchema.shape.url,
         action: navigateSchema.shape.action,
@@ -1513,7 +1513,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // --- 6. Visual (capture_image/dom_snapshot — last resort for visual tasks) ---
     maybeRegisterFreeMCPTool(
       "capture_image",
-      "Pixel-level visual screenshot (WebP, max 800px, <100KB). Do NOT call this to see what is on the page — call view_page instead (10-30x cheaper, returns text + refs you can click). capture_image cannot drive click/type and cannot read text. The ONLY valid uses: (1) checking CSS layout or visual rendering, (2) canvas/chart content that has no DOM, (3) the user explicitly asks for a screenshot. If you are unsure, use view_page.",
+      "Pixel-level visual screenshot (WebP, max 800px, <100KB). Do NOT call this to see what is on the page — call view_page instead (10-30x cheaper, returns text + refs you can click). capture_image cannot drive click/type and cannot read text. The ONLY valid uses: (1) canvas/chart content that has no DOM text, (2) pixel-level animation or rendering comparison, (3) the user explicitly asks for a screenshot. For CSS layout or element positioning: use inspect_element (returns computed styles, source locations, and a visual clip). If you are unsure, use view_page.",
       {
         full_page: screenshotSchema.shape.full_page,
         som: screenshotSchema.shape.som,
@@ -1544,7 +1544,7 @@ export class ToolRegistry implements ToolRegistryPublic {
           const somHint = (params as unknown as ScreenshotParams).som
             ? " SoM labels match view_page refs — pass them to click/type directly."
             : " Add som: true to overlay numbered ref labels matching view_page.";
-          result.content.push({ type: "text", text: `STOP: You just used capture_image. Next time you want to see what's on the page, call view_page instead — it returns text and clickable refs, capture_image cannot.${somHint}` });
+          result.content.push({ type: "text", text: `STOP: You just used capture_image. For CSS layout or element positioning, use inspect_element instead — it returns computed styles, source locations, and a visual clip. Next time you want to see page content, call view_page.${somHint}` });
         }
         return result;
       }, "capture_image"),
@@ -1576,7 +1576,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // `docs/friction-fixes.md#FR-035` H1/H2.
     maybeRegisterFreeMCPTool(
       "handle_dialog",
-      "Configure how the browser handles JavaScript dialogs (alerts, confirms, prompts). Pre-configure before triggering actions, or check dialog status.",
+      "Configure browser dialog handling (alerts, confirms, prompts). Pre-configure BEFORE triggering actions that may show dialogs. Replaces evaluate-based workarounds (window.alert = ...) — handle_dialog uses CDP Page.javascriptDialogOpening and works even when the dialog blocks all JS.",
       {
         action: handleDialogSchema.shape.action,
         text: handleDialogSchema.shape.text,
@@ -1647,7 +1647,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // analog `console_logs`.
     maybeRegisterFreeMCPTool(
       "network_monitor",
-      "Monitor network requests: start recording, retrieve recorded requests (with optional filter/pattern), or stop and return all collected data.",
+      "Monitor network requests via CDP. Workflow: start → trigger action → get(pattern: 'api'). Use INSTEAD of evaluate-based fetch interceptors (window.fetch = ..., XMLHttpRequest.prototype.open = ...) — network_monitor captures all requests including those initiated by the page itself.",
       {
         action: networkMonitorSchema.shape.action,
         filter: networkMonitorSchema.shape.filter,
@@ -1746,7 +1746,7 @@ export class ToolRegistry implements ToolRegistryPublic {
     // don't default to it for text/element tasks — Positional Bias fix) ---
     maybeRegisterFreeMCPTool(
       "evaluate",
-      "Execute JavaScript in the browser page context. Good uses: computation, style mutations (.style.X = ..., classList.add), shadow-root traversal, app-specific side effects no dedicated tool covers. Bad uses: (1) automatic recovery after a click/type/fill_form failure — call view_page for fresh refs and retry instead; (2) CSS inspection via getComputedStyle/getBoundingClientRect — use inspect_element (returns computed styles, CSS rules with source:line, cascade, AND a visual clip screenshot in one call). For element discovery (querySelector/getElementById/innerText), prefer view_page or fill_form. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
+      "Execute JavaScript in the browser page context. Good uses: computation, style mutations (.style.X = ..., classList.add), shadow-root traversal, in-page fetch(), app-specific side effects no dedicated tool covers. Bad uses: (1) automatic recovery after a click/type/fill_form failure — call view_page for fresh refs and retry instead; (2) CSS inspection via getComputedStyle/getBoundingClientRect — use inspect_element; (3) scrolling — use scroll (returns position + content growth); (4) dialog handling — use handle_dialog (CDP event hooks, works when JS is blocked); (5) network monitoring — use network_monitor (captures all traffic, not just fetch). For element discovery (querySelector/getElementById/innerText), prefer view_page or fill_form. Scope is shared between calls — top-level const/let/class are auto-wrapped in IIFE. If/else blocks may return undefined — use ternary (a ? b : c) or explicit return.",
       {
         expression: evaluateSchema.shape.expression,
         await_promise: evaluateSchema.shape.await_promise,
