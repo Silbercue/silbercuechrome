@@ -94,6 +94,8 @@ export interface IBrowserSession {
    * Called by switch_tab(action: "close") when an MCP tab is closed.
    */
   untrackOwnedTarget(targetId: string): void;
+  /** CDP debugging port (default: 9222). Used by Script API for Escape Hatch WebSocket URLs. */
+  readonly cdpPort: number;
   shutdown(): Promise<void>;
 }
 
@@ -115,6 +117,11 @@ export interface BrowserSessionOptions {
    * owned tabs; external tabs are invisible to switch_tab, virtual_desk, etc.
    */
   scriptMode?: boolean;
+  /**
+   * CDP debugging port (default: 9222). Passed through to ChromeLauncher
+   * and exposed via `cdpPort` for the Script API Escape Hatch.
+   */
+  cdpPort?: number;
   /** Retry timings in milliseconds — exposed for tests; see class-level doc. */
   retryTimings?: {
     establishedDelays?: number[]; // delays before attempts 2..N for established sessions
@@ -133,6 +140,7 @@ export class BrowserSession implements IBrowserSession {
   private readonly _freshDelays: number[];
   private readonly _attachMode: boolean;
   private readonly _scriptMode: boolean;
+  private readonly _cdpPort: number;
 
   /**
    * Story 9.1: Set of target IDs that were created by the MCP session.
@@ -172,10 +180,12 @@ export class BrowserSession implements IBrowserSession {
     this._options = options;
     this._attachMode = options.attachMode ?? false;
     this._scriptMode = options.scriptMode ?? false;
+    this._cdpPort = options.cdpPort ?? 9222;
     this._launcher = new ChromeLauncher({
       profilePath: options.profilePath,
       headless: options.headless ?? false,
       autoLaunch: options.autoLaunch ?? true,
+      port: this._cdpPort,
       // Disable the legacy background reconnect loop — BrowserSession runs
       // its own smart-retry policy on demand inside `ensureReady()` and two
       // parallel recovery paths would race against each other.
@@ -260,6 +270,11 @@ export class BrowserSession implements IBrowserSession {
   /** Story 9.1: Whether script mode is active (external CDP clients expected). */
   get scriptMode(): boolean {
     return this._scriptMode;
+  }
+
+  /** Story 9.9: CDP debugging port for Escape Hatch WebSocket URLs. */
+  get cdpPort(): number {
+    return this._cdpPort;
   }
 
   /**

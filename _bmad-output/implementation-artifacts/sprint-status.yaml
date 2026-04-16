@@ -1,0 +1,93 @@
+# generated: 2026-04-16
+# last_updated: 2026-04-16
+# project: SilbercueChrome
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review
+
+generated: 2026-04-16
+last_updated: 2026-04-16  # Story 9.9 done
+project: SilbercueChrome
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Page Reading & Navigation — alle FRs implementiert
+  epic-1: done
+  epic-1-retrospective: optional
+
+  # Epic 2: Element Interaction — alle FRs implementiert
+  epic-2: done
+  epic-2-retrospective: optional
+
+  # Epic 3: Automated Multi-Step Workflows — alle FRs implementiert
+  epic-3: done
+  epic-3-retrospective: optional
+
+  # Epic 4: Tab & Download Management — alle FRs implementiert
+  epic-4: done
+  epic-4-retrospective: optional
+
+  # Epic 5: Connection & Reliability — alle FRs implementiert
+  epic-5: done
+  epic-5-retrospective: optional
+
+  # Epic 6: Intelligent Tool Steering — FR25 mitigiert, Stories deferred post-v1.0
+  epic-6: in-progress
+  6-1-evaluate-anti-spiral-v2-situational-tool-steering: backlog  # DEFERRED post-v1.0
+  6-2-pro-dom-diff-fuer-type-und-fill-form: backlog  # DEFERRED post-v1.0
+  epic-6-retrospective: optional
+
+  # Epic 7: Distribution & Licensing — alle FRs implementiert
+  epic-7: done
+  epic-7-retrospective: optional
+
+  # Epic 8: Documentation & v1.0 Release
+  epic-8: done
+  8-1-readme-mit-getting-started-und-tool-uebersicht: done
+  8-2-v1-0-release-checkliste-und-version-bump: done
+  8-3-mcp-server-instructions-audit: done
+  epic-8-retrospective: optional
+
+  # Epic 9: Script API (Python) — Shared Core
+  epic-9: in-progress
+  # v1 (DONE — v1.0.0 released)
+  9-1-script-cli-mode-server-seite: done
+  9-2-python-cdp-client: done
+  9-3-chrome-page-api: done
+  9-4-cdp-koexistenz-test: done
+  9-5-pip-distribution: done
+  9-6-script-api-dokumentation: done
+  # v2 (Shared Core — naechster Sprint)
+  9-7-script-api-gateway-server-seite: done
+  9-8-python-library-v2-shared-core-client: done
+  9-9-escape-hatch-cdp-direktzugriff: done
+  9-10-shared-core-integration-tests: ready-for-dev
+  9-11-script-api-v2-dokumentation: backlog
+  epic-9-retrospective: optional
