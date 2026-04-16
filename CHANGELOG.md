@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0] - 2026-04-16
+
+### Added
+- `Chrome.connect()` Auto-Start — starts the SilbercueChrome server automatically as a subprocess, no manual server or Chrome launch needed
+- Escape Hatch: `page.cdp.send()` for direct CDP access in special cases (network interception, console log subscriptions, performance tracing, cookie management)
+- Script API Gateway: HTTP server on port 9223 for Script API clients (`--script` flag)
+- Server discovery chain: running server → PATH binary → npx fallback → explicit `server_path`
+
+### Changed
+- Script API (Python): Shared Core — scripts now use the same tool implementations as the MCP server. Every improvement to click, navigate, fill_form etc. automatically benefits scripts too
+- `python/README.md` fully rewritten for Shared Core architecture, Auto-Start, and Escape Hatch documentation
+
 ## [1.0.0] - 2026-04-15
 
 ### Added

@@ -311,7 +311,8 @@ SilbercueChrome (Node.js MCP server, @silbercue/chrome)
 ├── Session Manager (OOPIF support for iframes and Shadow DOM)
 ├── Tab State Cache (URL/title/ready across tabs)
 ├── Script API (Python, pip install silbercuechrome)
-│   └── Direct CDP via WebSocket (:9222)
+│   ├── Shared Core via HTTP (:9223) — same tool handlers as MCP
+│   └── Escape Hatch via WebSocket (:9222) — direct CDP for power users
 └── 18 Free-tier tools + 3+ Pro-tier tools
     Reading · Interaction · Navigation · Scripting · Observation
 ```
@@ -322,7 +323,7 @@ Connection priority:
 
 ## Script API (Python)
 
-A third way to use SilbercueChrome — deterministic browser automation from Python, without an LLM in the loop. The MCP server handles AI-driven workflows; the Script API is for repeatable scripts you write yourself.
+A third way to use SilbercueChrome — deterministic browser automation from Python, without an LLM in the loop. Scripts use the same tool implementations as the MCP server (Shared Core) — every improvement to `click`, `navigate`, `fill_form` etc. automatically benefits your scripts too. The MCP server handles AI-driven workflows; the Script API is for repeatable scripts you write yourself.
 
 ### Installation
 
@@ -330,14 +331,50 @@ A third way to use SilbercueChrome — deterministic browser automation from Pyt
 pip install silbercuechrome
 ```
 
-Or copy the single file [`python/silbercuechrome.py`](python/silbercuechrome.py) into your project — only `websockets` is required as a dependency.
+That's it. `Chrome.connect()` auto-starts the SilbercueChrome server as a subprocess — no manual Chrome launch or port setup needed.
+
+> **Legacy single-file alternative:** For quick prototyping you can copy [`python/silbercuechrome.py`](python/silbercuechrome.py) into your project. This uses v1 direct CDP and does not benefit from server-side improvements — use `pip install` for the full Shared Core experience.
+
+### How it works
+
+```
+Python Script                        Escape Hatch (Power User)
+    │                                    │
+    ▼                                    ▼
+HTTP POST /tool/{name}              WebSocket (CDP)
+Port 9223                           Port 9222
+    │                                    │
+    ▼                                    │
+SilbercueChrome Server                   │
+    │                                    │
+    ▼                                    │
+registry.executeTool()                   │
+    │                                    │
+    ▼                                    │
+Tool Handler                             │
+(click.ts, navigate.ts, ...)             │
+    │                                    │
+    ▼                                    ▼
+Chrome ◄─────────── CDP ────────────────►
+```
+
+Your script sends HTTP requests to the SilbercueChrome server on port 9223. The server executes the exact same tool handlers that the MCP server uses — one codebase, one test suite (1600+ tests), two access paths.
+
+### Auto-Start
+
+`Chrome.connect()` finds and starts the server automatically:
+
+1. **Running server** — checks if port 9223 already responds, connects immediately
+2. **PATH binary** — finds `silbercuechrome` in PATH (e.g. via Homebrew), starts it with `--script`
+3. **npx fallback** — runs `npx -y @silbercue/chrome@latest -- --script`
+4. **Explicit path** — `Chrome.connect(server_path="/path/to/silbercuechrome")` for custom setups
 
 ### Example: Login + Data Extraction
 
 ```python
 from silbercuechrome import Chrome
 
-chrome = Chrome.connect(port=9222)
+chrome = Chrome.connect()
 
 with chrome.new_page() as page:
     page.navigate("https://competitor.example.com/login")
@@ -359,24 +396,43 @@ chrome.close()
 
 | Method | Description |
 |---|---|
-| `Chrome.connect(host, port)` | Connect to a running Chrome instance |
-| `chrome.new_page(url)` | Context manager — opens a new tab, auto-closes on exit |
+| `Chrome.connect()` | Connect to or auto-start the SilbercueChrome server |
+| `chrome.new_page()` | Context manager — opens a new tab, auto-closes on exit |
 | `page.navigate(url)` | Navigate and wait for load |
-| `page.click(selector)` | Click element by CSS selector |
+| `page.click(selector)` | Click element by CSS selector, text, or ref |
 | `page.type(selector, text)` | Type text into an input |
 | `page.fill({"sel": "val"})` | Fill multiple form fields at once |
 | `page.wait_for(condition)` | Wait for JS condition or `"text=..."` shorthand |
 | `page.evaluate(expression)` | Run JavaScript, return result |
-| `page.download(path)` | Enable downloads, return download dir |
+| `page.download()` | Enable downloads, return download dir |
 | `page.close()` | Close the tab (auto-called by context manager) |
+| `page.cdp.send(method, params)` | Escape Hatch — direct CDP access via WebSocket (see below) |
+
+### Escape Hatch: Direct CDP Access
+
+For use cases the high-level API doesn't cover — network interception, console log subscriptions, performance tracing, cookie management — you can drop down to raw CDP commands:
+
+```python
+with chrome.new_page() as page:
+    page.navigate("https://example.com")
+
+    # Enable network tracking
+    page.cdp.send("Network.enable")
+
+    # Get all cookies
+    cookies = page.cdp.send("Network.getAllCookies")
+
+    # Performance tracing
+    page.cdp.send("Tracing.start", {"categories": "-*,devtools.timeline"})
+```
+
+The Escape Hatch communicates directly with Chrome via WebSocket (port 9222), bypassing the server. It connects lazily on the first `send()` call and reuses the connection for subsequent calls. Each page gets its own WebSocket routed to the correct tab.
 
 ### MCP Coexistence
 
-Chrome must be started with the `--script` flag (or manually with `--remote-debugging-port=9222`). Each script works in its own tab — MCP tabs are never touched. See [`python/README.md`](python/README.md) for the full API reference and advanced examples.
+When the MCP server and Python scripts need to run at the same time, add `--script` to the MCP config. `Chrome.connect()` handles the rest automatically — each script works in its own tab, MCP tabs are never touched.
 
 ### Enabling `--script` in MCP Config
-
-To use the Script API while the MCP server is running, add `"--script"` to the MCP config args. The `--` separator is required so npx passes the flag through:
 
 **Claude Code:**
 ```bash
@@ -394,6 +450,8 @@ claude mcp add --scope user silbercuechrome npx -y @silbercue/chrome@latest -- -
   }
 }
 ```
+
+See [`python/README.md`](python/README.md) for the full API reference and advanced examples.
 
 ## Requirements
 
