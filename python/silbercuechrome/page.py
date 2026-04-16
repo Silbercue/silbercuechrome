@@ -292,6 +292,13 @@ def _parse_evaluate_response(response: dict[str, Any]) -> Any:
     if not text:
         return None
 
+    # The server may append steering tips after the value, separated by
+    # a blank line (e.g. "42\n\nTip: ..."). Strip those before parsing.
+    if "\n\nTip:" in text:
+        text = text[: text.index("\n\nTip:")]
+    elif "\n\nNote:" in text:
+        text = text[: text.index("\n\nNote:")]
+
     # Try JSON parse for structured values
     try:
         return json.loads(text)
