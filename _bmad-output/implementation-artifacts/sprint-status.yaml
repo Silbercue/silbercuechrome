@@ -31,7 +31,7 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-16
-last_updated: 2026-04-16  # Story 9.9 done
+last_updated: 2026-04-16  # Story 9.11 ready-for-dev
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -88,6 +88,6 @@ development_status:
   9-7-script-api-gateway-server-seite: done
   9-8-python-library-v2-shared-core-client: done
   9-9-escape-hatch-cdp-direktzugriff: done
-  9-10-shared-core-integration-tests: ready-for-dev
-  9-11-script-api-v2-dokumentation: backlog
+  9-10-shared-core-integration-tests: done
+  9-11-script-api-v2-dokumentation: ready-for-dev
   epic-9-retrospective: optional
