@@ -490,6 +490,15 @@ export class ToolRegistry implements ToolRegistryPublic {
   }
 
   /**
+   * Story 9.7: Check whether a tool handler is registered by name.
+   * Used by Script API Gateway to distinguish unknown tools (HTTP 404)
+   * from tool execution errors (HTTP 200 with isError: true).
+   */
+  hasHandler(name: string): boolean {
+    return this._handlers.has(name);
+  }
+
+  /**
    * Story 18.1: `options` ist optional und strikt opt-in. Bestehende
    * Call-Sites ohne 4. Parameter behalten das bisherige Verhalten. Wenn
    * `options.skipOnToolResultHook === true` ist, wird der Ambient-Context-

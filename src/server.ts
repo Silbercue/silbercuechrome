@@ -9,6 +9,7 @@ import type { LicenseStatus } from "./license/license-status.js";
 import { loadFreeTierConfig } from "./license/free-tier-config.js";
 import { getProHooks } from "./hooks/pro-hooks.js";
 import { VERSION } from "./version.js";
+import { ScriptApiServer } from "./transport/script-api-server.js";
 
 /**
  * MCP server bootstrap — lazy-launch architecture.
@@ -146,9 +147,35 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
   await server.connect(transport);
   console.error("SilbercueChrome MCP server running on stdio (lazy launch enabled)");
 
+  // 6b. Story 9.7: Script API Gateway — HTTP server on port 9223.
+  //     Only started when --script flag is active. Failure to bind the
+  //     port is non-fatal: MCP continues to work, only the Script API
+  //     is unavailable.
+  let scriptApiServer: ScriptApiServer | null = null;
+  if (scriptMode) {
+    scriptApiServer = new ScriptApiServer({
+      registry,
+      browserSession,
+    });
+    try {
+      await scriptApiServer.start();
+    } catch {
+      // Port-in-use or other bind error — already logged inside start().
+      scriptApiServer = null;
+    }
+  }
+
   // 7. Graceful shutdown — BrowserSession.shutdown() is idempotent and a
   //    no-op if Chrome was never launched.
   const shutdown = async () => {
+    // Story 9.7: Stop Script API server first (closes all sessions/tabs).
+    if (scriptApiServer) {
+      try {
+        await scriptApiServer.stop();
+      } catch {
+        /* best effort */
+      }
+    }
     try {
       await browserSession.shutdown();
     } catch {
