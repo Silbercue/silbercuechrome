@@ -31,7 +31,7 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-16
-last_updated: 2026-04-16  # Story 9.11 done
+last_updated: 2026-04-19  # Story 10.1 → review (POC VERLIERT, Rollback ausgefuehrt)
 project: SilbercueChrome
 project_key: NOKEY
 tracking_system: file-system
@@ -91,3 +91,8 @@ development_status:
   9-10-shared-core-integration-tests: done
   9-11-script-api-v2-dokumentation: done
   epic-9-retrospective: optional
+
+  # Epic 10: Vision-Hybrid POC — Gate vor Kategorie-A-Friction-Fixes
+  epic-10: in-progress
+  10-1-vision-hybrid-poc-amazon-szenario: review
+  epic-10-retrospective: optional

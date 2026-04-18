@@ -664,3 +664,48 @@ So that ich verstehe dass meine Scripts von Server-Verbesserungen profitieren un
 - **python/README.md:** Komplett ueberarbeiten — keine Erwaehnung von "direktem CDP", stattdessen "nutzt den SilbercueChrome-Server intern".
 - **CHANGELOG.md:** v1.1 (oder v2.0) Eintrag fuer Shared Core Umbau.
 - **Escape-Hatch:** `page.cdp.send()` in der Doku erwaehnen als Fallback fuer Power-User.
+
+## Epic 10: Vision-Hybrid POC (Gate vor Kategorie-A-Fixes)
+
+Zeitgeboxtes Spike-Epic mit genau einer Story. Pruefen, ob ein Hybrid-Vision-Ansatz (Screenshot + DOM-Refs analog SoM) die Kategorie-A-Frictions strukturell loest. Ergebnis entscheidet, ob Kategorie-A-Friction-Fixes weiter einzeln nachgejagt werden oder ob ein Hybrid-Layer ins Produkt kommt.
+**FRs covered:** Keine neuen FRs in diesem Epic — der POC nutzt bestehende Tools. Neue FRs (z.B. FR40 capture_som) folgen erst bei Erfolg in einem Folge-Epic via bmad-create-epics-and-stories.
+
+### Story 10.1: Vision-Hybrid POC auf Amazon-Szenario
+
+As a Friction-Owner,
+I want den Amazon-Steuer-Workflow aus Session ef027252 mit einem Hybrid-Vision-Ansatz (Screenshot + DOM-Refs) reproduzieren und messen,
+So that wir datengestuetzt entscheiden koennen, ob Kategorie-A-Frictions einzeln gefixt oder strukturell durch einen Vision-Layer geloest werden sollen.
+
+**Acceptance Criteria:**
+
+**Given** die Amazon-Zahlungsseite (`https://www.amazon.de/cpe/yourpayments/transactions`) im aktuellen Chrome-Tab
+**When** ein Test-Agent (Claude Opus oder vergleichbar) die Aufgabe "finde Prime-Video-Transaktion mit 6,99 € im Juli 2025 oder bestaetige dass keine existiert" mit erweitertem Tool-Satz loest
+**Then** wird der Verlauf als JSON protokolliert (alle Tool-Calls, Parameter, Responses, Wall-Clock-Zeit)
+
+**Given** der erweiterte Tool-Satz
+**When** die Tools registriert werden
+**Then** enthaelt er: alle bestehenden MCP-Tools + `capture_image` mit geoeffneter Description (keine "ONLY"-Beschraenkung) + optional Prototyp `capture_som` (Screenshot mit DOM-Ref-Overlay via DOMSnapshot-Bounds)
+
+**Given** die Ergebnis-Metriken
+**When** sie gegen Session ef027252 verglichen werden
+**Then** wird ein Bericht `docs/research/vision-poc-2026-04-18.md` erzeugt mit: MCP-Calls, evaluate-Anteil, geschaetzte Tokens, Pass/Fail, Qualitative Beobachtungen
+
+**Given** die Gewinn-Schwelle (mindestens 3 von 4 Metriken treffen, Pass gehalten)
+**When** die Auswertung abgeschlossen ist
+**Then** wird eine explizite Empfehlung formuliert: "POC gewinnt → Folge-Epic planen" oder "POC verliert → Kategorie-A-Pause aufheben"
+
+**Given** der POC-Aufwand-Guard
+**When** der Spike laeuft
+**Then** ist die Time-Box max. 1 Arbeitstag. Bei Ueberschreitung wird abgebrochen und als "POC abgebrochen wegen Aufwand" dokumentiert (zaehlt als verloren).
+
+**Nicht-Ziele dieser Story:**
+- Kein Production-Code. Der `capture_som`-Prototyp ist ein Evaluations-Skript, nicht Teil des MCP-Servers.
+- Keine Benchmark-Testseite. Die Amazon-Zahlungsseite ist der Prueftseite-Ersatz, weil die heutige Friction dort auftrat.
+- Keine Aenderung an bestehenden Tools. `capture_image` wird temporaer per Test-Override mit gelockerter Description genutzt.
+
+**Source Hints:**
+- Session-Evidenz: `_bmad-output/planning-artifacts/handover-2026-04-18-vision-poc-correct-course.md`
+- Research: `reference_browser-automation-techniques` (Memory), `docs/research/llm-tool-steering.md`
+- Friction-Evidenz: `docs/friction-fixes.md` (Kategorien A/B/C aus Handover)
+
+Status: backlog
