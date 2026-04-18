@@ -4,6 +4,7 @@ import type { ToolResponse } from "../types.js";
 import { settle } from "../cdp/settle.js";
 import type { SettleResult } from "../cdp/settle.js";
 import { wrapCdpError } from "./error-utils.js";
+import { toolSequence } from "../telemetry/tool-sequence.js";
 
 export const navigateSchema = z.object({
   url: z.string().optional().describe("URL to navigate to (required for goto action)"),
@@ -261,6 +262,8 @@ async function buildSuccessResponse(
   }
 
   text += "\nNext: call view_page to see the page content and interactive elements, or evaluate() to check JavaScript state.";
+
+  toolSequence.record("navigate", undefined, sessionId);
 
   return {
     content: [{ type: "text", text }],

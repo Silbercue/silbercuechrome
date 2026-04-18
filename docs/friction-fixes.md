@@ -1623,3 +1623,81 @@ navigate Tool-Description ergänzen:
 **Aufwand:** Niedrig
 **Session:** 297995ca-574e-4b88-bfd5-7e683dfb7c5d
 **Hinweis:** 18 navigate(same_url) = reload in Dev-Workflow
+
+---
+
+## FR-045: evaluate-Spiral-Hint wird ignoriert — Escalation fehlt (P1 — Session 74b2a8fc)
+
+### Problem
+
+In Session `74b2a8fc` (Amazon Payments, Aufgabe "finde Transaktion 26. Nov 2025, 41,22 € AMZN Mktp DE" — Transaktion lag ausserhalb des geladenen Zeitraums):
+
+- 47 MCP-Calls, 26 davon evaluate (55 %)
+- **4 evaluate-Spiralen: 4x / 5x / 5x / 8x**
+- **17 Mal** wurde der FR-020 Streak-Hint ("Warning: N consecutive querySelector-based evaluate calls detected...") in die evaluate-Response injiziert
+- **17 Mal ignoriert**, Agent evaluated weiter
+
+Der Hint funktioniert technisch (wird korrekt emittiert ab Streak 3), aber er erreicht das LLM nicht als Verhaltens-Aenderung. Das Pattern ist **Alarm-Fatigue**: identischer Text, keine Eskalation, kein Block.
+
+Dazu: Der gelieferte Hint ist zu generisch — empfiehlt nur `view_page` fuer fresh refs. Auf der Run-8-Session wurde die gesuchte Transaktion aber nicht von der aktuellen Seite angezeigt (ausserhalb Zeitfenster). Der richtige Pfad waere `navigate` zur Bestellhistorie oder `scroll` durch einen virtualisierten Container — beides nicht im Hint-Text.
+
+### Root Cause
+
+`src/telemetry/tool-sequence.ts` `maybeEvaluateStreakHint()` emittiert genau zwei statische Texte:
+1. Tier 1 (querySelector, Streak >= 3): fix-formulierter Stale-Ref-Hint — wird 17x identisch ausgespielt
+2. Tier 2 (any-evaluate, Streak >= 5): Tool-Liste als Alternativen — wird ueberschrieben von Tier 1 sobald querySelector-Flag gesetzt ist
+
+Drei Schwaechen:
+- **Keine Variation:** Exakt gleicher Text bei Streak 3, 5, 8.
+- **Kein Block:** Auch bei Streak 10+ wird der Call weiter ausgefuehrt.
+- **Zu enger Loesungsvorschlag:** Nur `view_page` empfohlen, `navigate` und `scroll(container_ref)` fehlen.
+
+### Session-Evidenz (Tool-Sequenz)
+
+```
+21:40:53-21:41:06  Spirale 1 (4x evaluate, Hint ab 3. Call)
+21:41:08  view_page                              ← Reset
+21:41:19-21:41:43  Spirale 2 (5x evaluate, 3x Hint identisch)
+21:41:48  view_page                              ← Reset
+21:41:55-21:42:11  Spirale 3 (5x evaluate, 3x Hint identisch)
+21:42:18  view_page                              ← Reset
+21:43:07-21:43:56  Spirale 4 (8x evaluate, 6x Hint identisch — Peak Alarm-Fatigue)
+```
+
+Der Hint-Text aus Spirale 1 Call 3 war exakt gleich wie in Spirale 4 Call 8 — das LLM lernt "ich darf das ignorieren".
+
+### Betroffene Dateien
+
+- `src/telemetry/tool-sequence.ts` — `maybeEvaluateStreakHint()` statische Rueckgabe (Z. 142-168)
+- `src/tools/evaluate.ts` — evaluateHandler haengt Hint an (Z. 301-315). Kein Block-Mechanismus.
+
+### Fix-Vorschlag (3-Tier-Escalation, Context7-informiert)
+
+Basiert auf Context7-Recherche 2026-04-19 (MCP-Spec 2025-11-25 + Anthropic Context-Engineering Blog). Begriffsdefinition: "Context Rot" = Phaenomen dass LLMs identische Warnungen in langen Threads kognitiv rausfiltern. Die Spec erlaubt `isError: true` explizit als "actionable feedback for self-correction" — kein Hard-Block, aber starkes Signal.
+
+**Tier 1 (Streak 3-4) — Sachlich, wie heute.**
+Fix-Text unveraendert. Niedriges Alarm-Niveau, legitimer Early-Warn.
+
+**Tier 2 (Streak 5-7) — Variierender Text mit 3 Alternativen.**
+- Statt statischem Text: rotierendes 3-aus-N-Set mit konkreten Action-Verben: `navigate(url)`, `view_page(ref, filter:"all")`, `scroll(container_ref)`.
+- Analysiert das letzte evaluate-Argument kontext-sensitiv: wenn `querySelectorAll('a')` + textContent-Filter → **navigate-Hint** ("You are filtering links with JS — navigate directly to the target URL."). Wenn `getBoundingClientRect` + scroll-Logic → **scroll-Hint** ("scroll supports ref/container, no JS needed."). Sonst: generischer Tool-Katalog.
+- Response bleibt `isError: false`, JS-Result wird ausgeliefert.
+
+**Tier 3 (Streak >= 8) — `isError: true` + Result-Preservation.**
+- Response wird mit `isError: true` gesetzt, Text-Payload: "STOP — N consecutive querySelector-evaluates. The JS returned: <result>. But this workflow pattern indicates the page does not contain the answer. Required next action: navigate(url) to a different page, or summarise findings and stop."
+- **Wichtig:** Das JS-Result wird NICHT weggeschnitten, sondern IN den Error-Text eingebettet. Der Agent bekommt alle Informationen und zusaetzlich ein eindeutiges Self-Correction-Signal. MCP-Spec-konform (Anthropic: `isError: true` ist "actionable feedback", nicht Hard-Block).
+- Silent-Reset nach einem erfolgreichen `navigate` / `click` / `fill_form` / `type` / `scroll` — der Tier-Hinweis greift nur auf zusammenhaengender Spirale.
+
+**Optional Tier 4 (Streak >= 12) — Hard-Refuse.**
+- Nur wenn der Agent auch nach Tier 3 weiter evaluated (sehr selten, aber moeglich bei Model-Regression): `isError: true`, **kein** JS-Ausfuehrung. Text: "REFUSED — 12 consecutive querySelector-evaluates. Further evaluate calls are blocked until you call navigate, view_page, or explicitly signal task abort." Defensive Guard, nicht Default-Pfad.
+
+### Allgemeingueltigkeit
+
+### Allgemeingueltigkeit
+
+Der Fix greift an `src/telemetry/tool-sequence.ts` an — einem reinen Telemetry-Modul das von jedem Tool genutzt wird. Keine Seiten-Spezifik. Escalation-Logik gilt fuer jede evaluate-Spirale unabhaengig von der Domain (Amazon, Hakuna, Benchmark, whatever).
+
+**Aufwand:** Niedrig — Progressive-Tier-Logik in `maybeEvaluateStreakHint()` erweitern + 2-3 neue Tests in `tool-sequence.test.ts`.
+
+**Session:** 74b2a8fc-097c-4568-a372-f453651a9dfa (Multi-Run Serie 2 Run 8, Vision-POC-Datenbasis 2026-04-18)
+**Hinweis:** harte Aufgabe "26. November 2025, 41,22 € AMZN Mktp DE" — Transaktion lag ausserhalb Zeitfenster, Agent blieb trotz 17 Hints auf der gleichen Seite stuck statt zu navigate-n.

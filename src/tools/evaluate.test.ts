@@ -915,3 +915,221 @@ describe("evaluateHandler anti-pattern hint integration", () => {
     expect(response.content[0].text).not.toMatch(/Tip:/);
   });
 });
+
+// FR-045: 3-Tier escalation of the evaluate-streak hint.
+// Key integration assertions:
+//  - Tier 1/2 responses stay isError: false (plain append).
+//  - Tier 3 response flips isError: true and embeds the truncated JS
+//    result inside the STOP payload.
+//  - Tier 4 response flips isError: true and drops the JS result.
+//  - Pro-Hook is bypassed on Tier 3/4 so the STOP text stays dominant.
+describe("evaluateHandler FR-045 streak escalation", () => {
+  beforeEach(() => {
+    registerProHooks({});
+    toolSequence.reset();
+  });
+
+  /** Helper: drive N successful querySelector evaluates through the handler. */
+  async function runStreak(n: number, expression: string): Promise<void> {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 7 },
+    }));
+    for (let i = 0; i < n; i++) {
+      await evaluateHandler(
+        { expression, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+  }
+
+  it("Tier 1 (streak 3) keeps isError unset and appends the Warning hint", async () => {
+    await runStreak(
+      3,
+      "document.querySelector('.order').textContent",
+    );
+    // Inspect the third (current) response directly.
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 7 },
+    }));
+    toolSequence.reset();
+    // Now prime 2 evaluates so the next one lands at streak 3.
+    await evaluateHandler(
+      { expression: "document.querySelector('.a').textContent", await_promise: true },
+      cdp,
+      "s-fr045",
+    );
+    await evaluateHandler(
+      { expression: "document.querySelector('.b').textContent", await_promise: true },
+      cdp,
+      "s-fr045",
+    );
+    const response = await evaluateHandler(
+      { expression: "document.querySelector('.c').textContent", await_promise: true },
+      cdp,
+      "s-fr045",
+    );
+    expect(response.isError).toBeUndefined();
+    const text = response.content[0].text as string;
+    expect(text).toContain("Warning:");
+    expect(text).toContain("querySelector-based evaluate");
+  });
+
+  it("Tier 2 (streak 5) keeps isError unset and uses Notice: prefix", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 1 },
+    }));
+    const expr = "Array.from(document.querySelectorAll('a')).map(a => a.href)";
+    let last;
+    for (let i = 0; i < 5; i++) {
+      last = await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    expect(last!.isError).toBeUndefined();
+    const text = last!.content[0].text as string;
+    expect(text).toContain("Notice:");
+    // Tier 2 navigate-hint signature.
+    expect(text).toContain("navigate(url)");
+  });
+
+  it("Tier 3 (streak 8) flips isError: true and embeds truncated JS result", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 42 },
+    }));
+    const expr = "document.querySelectorAll('a').length";
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    expect(last!.isError).toBe(true);
+    const text = last!.content[0].text as string;
+    expect(text).toContain("STOP");
+    // JS result was "42" — must still be visible in the payload.
+    expect(text).toContain("42");
+    // No raw placeholder must leak.
+    expect(text).not.toContain("<result>");
+    expect(text).toContain("navigate(url)");
+  });
+
+  it("Tier 3 truncates very long JS results to 500 chars + marker", async () => {
+    const longString = "x".repeat(2000);
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "string", value: longString },
+    }));
+    const expr = "document.querySelectorAll('a').map(a => a.outerHTML).join('')";
+    let last;
+    for (let i = 0; i < 8; i++) {
+      last = await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    const text = last!.content[0].text as string;
+    expect(text).toContain("... (truncated)");
+    // No raw 2000-char blob.
+    expect(text.length).toBeLessThan(2000);
+  });
+
+  it("Tier 4 (streak 12) hard-refuses without leaking the JS result", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "string", value: "SENSITIVE_API_KEY_123456" },
+    }));
+    const expr = "document.querySelector('meta[name=key]').content";
+    let last;
+    for (let i = 0; i < 12; i++) {
+      last = await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    expect(last!.isError).toBe(true);
+    const text = last!.content[0].text as string;
+    expect(text).toContain("REFUSED");
+    // Result must NOT appear in Tier-4 payload.
+    expect(text).not.toContain("SENSITIVE_API_KEY_123456");
+  });
+
+  it("navigate call resets the streak and isError clears on the next evaluate", async () => {
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 1 },
+    }));
+    const expr = "document.querySelectorAll('a').length";
+    for (let i = 0; i < 8; i++) {
+      await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    // The agent heeds the STOP and navigates away.
+    toolSequence.record("navigate", undefined, "s-fr045");
+    // Next evaluate is a fresh Tier-0.
+    const response = await evaluateHandler(
+      { expression: expr, await_promise: true },
+      cdp,
+      "s-fr045",
+    );
+    expect(response.isError).toBeUndefined();
+    const text = response.content[0].text as string;
+    expect(text).not.toContain("STOP");
+    expect(text).not.toContain("REFUSED");
+  });
+
+  it("Pro-Hook is skipped when Tier 3 flips isError (STOP text dominates)", async () => {
+    const enhanced: ToolResponse = {
+      content: [
+        { type: "text", text: "this would drown the STOP" },
+        { type: "text", text: "Visual: 100x50 -> 200x50px" },
+      ],
+      _meta: { elapsedMs: 25, method: "evaluate", visualFeedback: true },
+    };
+    const hook = vi.fn().mockResolvedValue(enhanced);
+    registerProHooks({ enhanceEvaluateResult: hook });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 7 },
+    }));
+    const expr = "document.querySelector('.t').textContent";
+    for (let i = 0; i < 8; i++) {
+      await evaluateHandler(
+        { expression: expr, await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    // Pro hook was NOT called on the Tier-3 response (i = 7, 8th call).
+    // It may have been called during Tier 0-2 steps, but on the FINAL
+    // call (when the streak hits 8) we demand the STOP payload to win.
+    // Count ≤ 7 — the 8th call must have skipped the hook.
+    expect(hook.mock.calls.length).toBeLessThanOrEqual(7);
+  });
+
+  it("Pro-Hook stays active during Tier 0/1/2 (normal enhancement flow)", async () => {
+    const passthrough = vi
+      .fn()
+      .mockImplementation(async (_expr, base) => base);
+    registerProHooks({ enhanceEvaluateResult: passthrough });
+
+    const cdp = mockCdpClient(async () => ({
+      result: { type: "number", value: 1 },
+    }));
+    // 3 calls → Tier 1. Pro-Hook should run on all three.
+    for (let i = 0; i < 3; i++) {
+      await evaluateHandler(
+        { expression: "document.querySelector('.a').textContent", await_promise: true },
+        cdp,
+        "s-fr045",
+      );
+    }
+    expect(passthrough).toHaveBeenCalledTimes(3);
+  });
+});

@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVALUATE_STREAK_HINT_THRESHOLD,
   EVALUATE_ANY_STREAK_THRESHOLD,
+  EVALUATE_STREAK_TIER2_THRESHOLD,
+  EVALUATE_STREAK_TIER3_THRESHOLD,
+  EVALUATE_STREAK_TIER4_THRESHOLD,
   FLAG_QUERY_SELECTOR,
   ToolSequenceTracker,
+  classifyExpressionForTier2,
   hasQuerySelectorPattern,
   isResetTool,
   toolSequence,
@@ -186,9 +190,15 @@ describe("isResetTool", () => {
   it("does not include evaluate", () => {
     expect(isResetTool("evaluate")).toBe(false);
   });
-  it("does not include navigation-only tools", () => {
-    expect(isResetTool("navigate")).toBe(false);
+  it("does not include passive observation tools", () => {
     expect(isResetTool("switch_tab")).toBe(false);
+  });
+  // FR-045: scroll and navigate are explicit "dedicated action" signals
+  // that a Tier 1-3 spiral is self-correcting; treat them as resets so
+  // the streak can re-arm cleanly rather than keep escalating.
+  it("includes scroll and navigate (FR-045)", () => {
+    expect(isResetTool("scroll")).toBe(true);
+    expect(isResetTool("navigate")).toBe(true);
   });
 });
 
@@ -286,18 +296,23 @@ describe("ToolSequenceTracker ANY-evaluate streak (Story 23.1)", () => {
     tracker.record("evaluate");
     tracker.record("evaluate");
     tracker.record("evaluate");
-    tracker.record("scroll"); // not in RESET_TOOLS, but still breaks evaluate streak
+    tracker.record("scroll"); // any non-evaluate call breaks evaluate streak
+
     tracker.record("evaluate");
     expect(tracker.consecutiveEvaluateCalls()).toBe(1);
   });
 
-  it("maybeEvaluateStreakHint returns generic hint at ANY threshold", () => {
+  it("maybeEvaluateStreakHint returns Tier 2 hint at ANY threshold (FR-045)", () => {
     for (let i = 0; i < EVALUATE_ANY_STREAK_THRESHOLD; i++) {
-      tracker.record("evaluate"); // no qs flag
+      tracker.record("evaluate"); // no qs flag, no expression
     }
     const hint = tracker.maybeEvaluateStreakHint();
-    expect(hint).toContain("Warning:");
+    // FR-045: Tier 2 text now uses "Notice:" prefix instead of "Warning:"
+    // so the visual distinction between Tier 1 and Tier 2+ is clear.
+    expect(hint).toContain("Notice:");
     expect(hint).toContain(`${EVALUATE_ANY_STREAK_THRESHOLD} consecutive evaluate`);
+    // Generic Tier 2 text lists the main alternative tools.
+    expect(hint).toContain("navigate(url)");
     expect(hint).toContain("scroll");
     expect(hint).toContain("handle_dialog");
     expect(hint).toContain("network_monitor");
@@ -310,16 +325,29 @@ describe("ToolSequenceTracker ANY-evaluate streak (Story 23.1)", () => {
     expect(tracker.maybeEvaluateStreakHint()).toBe("");
   });
 
-  it("querySelector hint takes priority when both thresholds met", () => {
+  it("FR-045: at streak 5 Tier 2 supersedes Tier 1 even when qs flag set", () => {
     const qs = new Set([FLAG_QUERY_SELECTOR]);
-    // 5+ evaluate calls, all with qs flag — both thresholds met
-    for (let i = 0; i < EVALUATE_ANY_STREAK_THRESHOLD; i++) {
+    // 5 consecutive evaluate+qs calls crosses the Tier-2 threshold.
+    // FR-045 design: Tier 2 escalates over the Tier-1 text regardless
+    // of flag — the anti-fatigue goal is that the user sees a DIFFERENT
+    // text once the streak gets louder.
+    for (let i = 0; i < EVALUATE_STREAK_TIER2_THRESHOLD; i++) {
       tracker.record("evaluate", qs);
     }
     const hint = tracker.maybeEvaluateStreakHint();
-    // Should show the querySelector-specific hint (tier 1), not the generic one
+    expect(hint).toContain("Notice:"); // Tier 2 marker
+    expect(hint).not.toContain("Warning:"); // no Tier 1 marker
+  });
+
+  it("Tier 1 fires at qs streak 3 (below Tier 2 threshold)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < EVALUATE_STREAK_HINT_THRESHOLD; i++) {
+      tracker.record("evaluate", qs);
+    }
+    const hint = tracker.maybeEvaluateStreakHint();
+    // qs-streak = 3 → Tier 1 path fires, sachliches Warning + view_page.
+    expect(hint).toContain("Warning:");
     expect(hint).toContain("querySelector-based evaluate");
-    expect(hint).not.toContain("handle_dialog"); // generic hint marker
   });
 
   it("generic hint fires when qs streak < 3 but total streak >= 5", () => {
@@ -331,8 +359,10 @@ describe("ToolSequenceTracker ANY-evaluate streak (Story 23.1)", () => {
     tracker.record("evaluate");
     tracker.record("evaluate");
     const hint = tracker.maybeEvaluateStreakHint();
-    expect(hint).toContain("handle_dialog"); // generic hint marker
-    expect(hint).not.toContain("querySelector-based"); // not the qs hint
+    // Tier 2 is active (streak=5), text is the generic tool catalogue.
+    expect(hint).toContain("Notice:");
+    expect(hint).toContain("handle_dialog"); // generic Tier-2 marker
+    expect(hint).not.toContain("querySelector-based"); // not the Tier-1 qs hint
   });
 
   it("session scoping works for ANY streak", () => {
@@ -341,5 +371,239 @@ describe("ToolSequenceTracker ANY-evaluate streak (Story 23.1)", () => {
     }
     expect(tracker.consecutiveEvaluateCalls("session-a")).toBe(EVALUATE_ANY_STREAK_THRESHOLD);
     expect(tracker.consecutiveEvaluateCalls("session-b")).toBe(0);
+  });
+});
+
+// --- FR-045: 3-Tier escalation of the evaluate-streak hint ---
+describe("classifyExpressionForTier2 (FR-045)", () => {
+  it("returns 'generic' for undefined or empty input", () => {
+    expect(classifyExpressionForTier2(undefined)).toBe("generic");
+    expect(classifyExpressionForTier2("")).toBe("generic");
+  });
+
+  it("returns 'navigate' for querySelectorAll + href/textContent pattern", () => {
+    expect(
+      classifyExpressionForTier2(
+        `Array.from(document.querySelectorAll('a')).map(a => a.href)`,
+      ),
+    ).toBe("navigate");
+    expect(
+      classifyExpressionForTier2(
+        `Array.from(document.querySelectorAll('li')).map(l => l.textContent)`,
+      ),
+    ).toBe("navigate");
+  });
+
+  it("returns 'scroll' for getBoundingClientRect / scrollTop / offsetTop", () => {
+    expect(classifyExpressionForTier2("el.getBoundingClientRect().top")).toBe("scroll");
+    expect(classifyExpressionForTier2("container.scrollTop")).toBe("scroll");
+    expect(classifyExpressionForTier2("el.offsetTop")).toBe("scroll");
+  });
+
+  it("returns 'generic' for a plain querySelector.click call", () => {
+    // Single-element querySelector + click — no content extraction,
+    // no layout reading, no match for navigate/scroll. Falls through.
+    expect(classifyExpressionForTier2("document.querySelector('#x').click()")).toBe(
+      "generic",
+    );
+  });
+});
+
+describe("ToolSequenceTracker FR-045 3-Tier escalation", () => {
+  let tracker: ToolSequenceTracker;
+
+  beforeEach(() => {
+    tracker = new ToolSequenceTracker();
+  });
+
+  // --- Tier boundary tests (streak → tier) ---
+
+  it("Tier 0 when streak < qs-threshold and < any-threshold", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    tracker.record("evaluate", qs); // streak 1
+    tracker.record("evaluate", qs); // streak 2
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(0);
+    expect(response.text).toBe("");
+  });
+
+  it("Tier 1 at qs streak 3 (sachlicher Stale-Ref hint)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 3; i++) tracker.record("evaluate", qs);
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(1);
+    expect(response.streak).toBe(3);
+    expect(response.text).toContain("Warning:");
+    expect(response.text).toContain("querySelector-based evaluate");
+    expect(response.text).toContain("view_page");
+  });
+
+  it("Tier 1 still applies at qs streak 4 (below Tier-2 threshold)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 4; i++) tracker.record("evaluate", qs);
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(1);
+    expect(response.streak).toBe(4);
+  });
+
+  it("Tier 2 at streak 5 with context-sensitive navigate hint", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 5; i++) {
+      tracker.record(
+        "evaluate",
+        qs,
+        undefined,
+        `Array.from(document.querySelectorAll('a')).map(a => a.href)`,
+      );
+    }
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(2);
+    expect(response.streak).toBe(5);
+    expect(response.text).toContain("Notice:");
+    // navigate-hint text signature
+    expect(response.text).toContain("navigate(url)");
+    expect(response.text).toContain("filtering DOM for content");
+  });
+
+  it("Tier 2 with scroll-context emits scroll-specific hint", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 6; i++) {
+      tracker.record(
+        "evaluate",
+        qs,
+        undefined,
+        `document.querySelector('#list').scrollTop`,
+      );
+    }
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(2);
+    expect(response.text).toContain("scroll(container_ref");
+    expect(response.text).toContain("layout/scroll state");
+  });
+
+  it("Tier 2 with generic expression emits generic tool catalogue", () => {
+    for (let i = 0; i < 7; i++) {
+      tracker.record("evaluate", undefined, undefined, "1 + 1");
+    }
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(2);
+    expect(response.text).toContain("handle_dialog");
+    expect(response.text).toContain("network_monitor");
+    expect(response.text).toContain("wait_for");
+  });
+
+  it("Tier 3 at streak 8 carries STOP + <result> placeholder + navigate hint", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 8; i++) {
+      tracker.record(
+        "evaluate",
+        qs,
+        undefined,
+        `document.querySelectorAll('a.order').length`,
+      );
+    }
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(3);
+    expect(response.streak).toBe(8);
+    // MCP-spec: isError text must be actionable self-correction feedback.
+    expect(response.text).toContain("STOP");
+    expect(response.text).toContain("<result>"); // handler substitutes
+    expect(response.text).toContain("Required next action");
+    expect(response.text).toContain("navigate(url)");
+  });
+
+  it("Tier 3 stays in force through streak 11 (one below Tier-4)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 11; i++) tracker.record("evaluate", qs);
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(3);
+    expect(response.streak).toBe(11);
+  });
+
+  it("Tier 4 at streak 12 hard-refuses (no <result> placeholder)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 12; i++) tracker.record("evaluate", qs);
+    const response = tracker.evaluateStreakResponse();
+    expect(response.tier).toBe(4);
+    expect(response.streak).toBe(12);
+    expect(response.text).toContain("REFUSED");
+    expect(response.text).not.toContain("<result>");
+  });
+
+  // --- Reset-tool coverage (FR-045 extends RESET_TOOLS) ---
+
+  it("scroll resets the streak (FR-045)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 5; i++) tracker.record("evaluate", qs);
+    expect(tracker.evaluateStreakResponse().tier).toBeGreaterThanOrEqual(2);
+
+    tracker.record("scroll");
+    expect(tracker.consecutiveEvaluateWithQuerySelector()).toBe(0);
+    expect(tracker.consecutiveEvaluateCalls()).toBe(0);
+    expect(tracker.evaluateStreakResponse().tier).toBe(0);
+  });
+
+  it("navigate resets the streak (FR-045)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 8; i++) tracker.record("evaluate", qs);
+    expect(tracker.evaluateStreakResponse().tier).toBe(3);
+
+    tracker.record("navigate");
+    expect(tracker.evaluateStreakResponse().tier).toBe(0);
+  });
+
+  it("passing expressionOverride beats the recorded expression", () => {
+    // Record 5 plain evaluates with a boring expression — generic hint.
+    for (let i = 0; i < 5; i++) {
+      tracker.record("evaluate", undefined, undefined, "1 + 1");
+    }
+    // Override with a querySelectorAll+href expression at call time.
+    const response = tracker.evaluateStreakResponse(
+      undefined,
+      "Array.from(document.querySelectorAll('a')).map(a => a.href)",
+    );
+    expect(response.tier).toBe(2);
+    expect(response.text).toContain("filtering DOM for content");
+  });
+
+  // --- Anti-fatigue: adjacent tiers must produce DIFFERENT text ---
+
+  it("Tier 1 and Tier 2 messages are not identical (anti-fatigue)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 3; i++) tracker.record("evaluate", qs);
+    const tier1 = tracker.evaluateStreakResponse().text;
+
+    // Add two more to cross Tier-2 threshold.
+    tracker.record("evaluate", qs);
+    tracker.record("evaluate", qs);
+    const tier2 = tracker.evaluateStreakResponse().text;
+
+    expect(tier1).not.toBe(tier2);
+    expect(tier1).toContain("Warning:");
+    expect(tier2).toContain("Notice:");
+  });
+
+  it("Tier 2 and Tier 3 messages are not identical (anti-fatigue)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 5; i++) tracker.record("evaluate", qs);
+    const tier2 = tracker.evaluateStreakResponse().text;
+
+    for (let i = 0; i < 3; i++) tracker.record("evaluate", qs);
+    const tier3 = tracker.evaluateStreakResponse().text;
+
+    expect(tier2).not.toBe(tier3);
+    expect(tier2).not.toContain("STOP");
+    expect(tier3).toContain("STOP");
+  });
+
+  // --- maybeEvaluateStreakHint compatibility ---
+
+  it("maybeEvaluateStreakHint returns empty string for Tier 3/4 (uses richer API)", () => {
+    const qs = new Set([FLAG_QUERY_SELECTOR]);
+    for (let i = 0; i < 8; i++) tracker.record("evaluate", qs);
+    // The legacy append API returns "" when the tier is too high
+    // for a plain append — callers must use evaluateStreakResponse().
+    expect(tracker.maybeEvaluateStreakHint()).toBe("");
+    expect(tracker.evaluateStreakResponse().tier).toBe(3);
   });
 });

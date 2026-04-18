@@ -10,6 +10,7 @@ import { TabStateCache as TabStateCacheCtor } from "./cache/tab-state-cache.js";
 import { a11yTree, A11yTreeProcessor } from "./cache/a11y-tree.js";
 import { prefetchSlot } from "./cache/prefetch-slot.js";
 import { deferredDiffSlot } from "./cache/deferred-diff-slot.js";
+import { toolSequence } from "./telemetry/tool-sequence.js";
 
 describe("ToolRegistry", () => {
   // Story 9.5: Reset Pro hooks between tests
@@ -22,8 +23,16 @@ describe("ToolRegistry", () => {
   // gruen bleibt, aktivieren wir hier den FULL-Modus. Der neue describe-
   // Block `ToolRegistry — Tool-Verschlankung (Story 18.3)` am Ende toggelt
   // explizit beide Modi.
+  //
+  // FR-045 (2026-04-19): Der toolSequence-Singleton sammelt evaluate-
+  // Streaks ueber Tests hinweg. Seit dem 3-Tier-Escalation-Patch kann
+  // Cross-Test-Streak-Kontamination Tier-2/3/Tier-4-Antworten auf
+  // spaeteren Tests ausloesen (isError: true + Plan-Abort). Reset im
+  // parent beforeEach verhindert das — analog zum Pattern in
+  // evaluate.test.ts.
   beforeEach(() => {
     registerProHooks({});
+    toolSequence.reset();
     process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
   });
   afterEach(() => {

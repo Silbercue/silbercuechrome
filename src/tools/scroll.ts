@@ -4,6 +4,7 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import type { ToolResponse } from "../types.js";
 import { resolveElement, buildRefNotFoundError, RefNotFoundError } from "./element-utils.js";
 import { wrapCdpError } from "./error-utils.js";
+import { toolSequence } from "../telemetry/tool-sequence.js";
 
 // --- Schema ---
 
@@ -59,6 +60,7 @@ export async function scrollHandler(
       );
 
       const elapsedMs = Math.round(performance.now() - start);
+      toolSequence.record("scroll", undefined, sessionId);
       return {
         content: [{ type: "text", text: `Scrolled ${params.ref ?? params.selector} into view` }],
         _meta: { elapsedMs, method: "scroll" },
@@ -173,6 +175,7 @@ export async function scrollHandler(
       const grew = pos.scrollHeight - pos.prevScrollHeight;
       const grewNote = grew > 0 ? ` (content loaded: scrollHeight grew by ${grew}px)` : "";
       const elapsedMs = Math.round(performance.now() - start);
+      toolSequence.record("scroll", undefined, sessionId);
       return {
         content: [{
           type: "text",
@@ -202,6 +205,7 @@ export async function scrollHandler(
     const grew = pos.scrollHeight - pos.prevScrollHeight;
     const grewNote = grew > 0 ? ` (content loaded: scrollHeight grew by ${grew}px)` : "";
     const elapsedMs = Math.round(performance.now() - start);
+    toolSequence.record("scroll", undefined, sessionId);
     return {
       content: [{
         type: "text",

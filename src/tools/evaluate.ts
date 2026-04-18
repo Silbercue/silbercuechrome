@@ -305,17 +305,50 @@ export async function evaluateHandler(
     // the expression contains a DOM-query pattern typical of route-around
     // workarounds after a tool failure. Session-scoped so parallel tab
     // groups (Story 7.6) don't contaminate each other.
+    //
+    // FR-045: record the raw expression alongside the flag so the
+    // tracker can do context-sensitive classification at Tier 2/3.
     const qsFlag = hasQuerySelectorPattern(params.expression)
       ? new Set([FLAG_QUERY_SELECTOR])
       : undefined;
-    toolSequence.record("evaluate", qsFlag, sessionId);
-    const streakHint = toolSequence.maybeEvaluateStreakHint(sessionId);
+    toolSequence.record("evaluate", qsFlag, sessionId, params.expression);
 
-    const textWithHint =
-      text + (antiPatternHint ?? "") + (streakHint ?? "");
+    // FR-045 — 3-Tier escalation against evaluate-streak "Context Rot".
+    //  - Tier 0: no hint.
+    //  - Tier 1 (qs streak 3-4): sachlicher Stale-Ref hint (appended).
+    //  - Tier 2 (streak 5-7): variierender context-sensitive hint (appended).
+    //  - Tier 3 (streak 8-11): isError: true, JS result embedded in hint.
+    //  - Tier 4 (streak >=12): isError: true, JS result NOT delivered.
+    const streakResponse = toolSequence.evaluateStreakResponse(
+      sessionId,
+      params.expression,
+    );
+
+    let finalText: string;
+    let isError = false;
+
+    if (streakResponse.tier >= 4) {
+      // Hard-refuse: drop the result, return only the refusal text.
+      finalText = streakResponse.text;
+      isError = true;
+    } else if (streakResponse.tier === 3) {
+      // Preserve the JS result inside the Tier-3 payload so the agent
+      // still sees what it computed, but flag the response as an error
+      // so the MCP client surfaces the self-correction signal. Truncate
+      // to 500 chars to keep the stop-hint visually dominant even for
+      // huge JSON blobs.
+      const truncatedResult =
+        text.length > 500 ? text.slice(0, 500) + "... (truncated)" : text;
+      finalText = streakResponse.text.replace("<result>", truncatedResult);
+      isError = true;
+    } else {
+      // Tier 0/1/2: normal path — append anti-pattern hint + streak text.
+      finalText = text + (antiPatternHint ?? "") + (streakResponse.text ?? "");
+    }
 
     const baseResult: ToolResponse = {
-      content: [{ type: "text", text: textWithHint }],
+      content: [{ type: "text", text: finalText }],
+      ...(isError ? { isError: true } : {}),
       _meta: {
         elapsedMs: Math.round(performance.now() - start),
         method: "evaluate",
@@ -330,8 +363,13 @@ export async function evaluateHandler(
     // Code-Review M2: The hook is defensively wrapped in try/catch. Any
     // exception (sync throw or rejected Promise) falls back to `baseResult`
     // so that a buggy Pro-Repo cannot crash the evaluate tool.
+    //
+    // FR-045: skip Pro enhancement when the Tier-3/4 streak response has
+    // flipped the result to isError. The STOP/REFUSE payload must stay
+    // visually dominant — no geometry diff or clip screenshot should be
+    // appended that could drown out the self-correction signal.
     const hooks = getProHooks();
-    if (hooks.enhanceEvaluateResult) {
+    if (hooks.enhanceEvaluateResult && !isError) {
       try {
         return await hooks.enhanceEvaluateResult(params.expression, baseResult, {
           cdpClient,
