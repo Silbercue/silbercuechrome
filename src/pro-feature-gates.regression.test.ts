@@ -73,37 +73,36 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       expect(inspectCall).toBeUndefined();
     });
 
-    it("Free-Tier tool registration excludes Pro-Tools but keeps free tools (Default-Modus)", () => {
-      // Story 18.3 Review-Fix M2: Zwei getrennte Assertions — eine fuer das
-      // Default-Set, eine fuer das Full-Set. Damit schlaegt der Guard sowohl
-      // an, wenn ein Default-Tool versehentlich verschwindet (Default-Set
-      // erwartet GENAU 10), als auch wenn ein Extended-Tool in der
-      // FULL_TOOLS-Registrierung verloren geht (Full-Set erwartet >= 21).
+    it("Free-Tier tool registration excludes Pro-Tools but keeps free tools (Minimal-Modus via MINIMAL_TOOLS=true)", () => {
+      // Story 18.3 Review-Fix M2 + FR-035 Revision 2026-04-18:
+      // Minimal-Set wird jetzt via `SILBERCUE_CHROME_MINIMAL_TOOLS=true`
+      // aktiviert (nicht mehr Default). Der Guard schlaegt an, wenn genau
+      // ein Default-Tool verschwindet oder ein Extended-Tool versehentlich
+      // in den Minimal-Modus rutscht.
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
-      const toolFn = vi.fn();
-      const mockServer = { tool: toolFn } as never;
-      const mockCdpClient = {} as never;
+      process.env.SILBERCUE_CHROME_MINIMAL_TOOLS = "true";
+      try {
+        const toolFn = vi.fn();
+        const mockServer = { tool: toolFn } as never;
+        const mockCdpClient = {} as never;
 
-      const registry = new ToolRegistry(
-        mockServer,
-        mockCdpClient,
-        "session-1",
-        {} as never,
-      );
-      registry.registerAll();
+        const registry = new ToolRegistry(
+          mockServer,
+          mockCdpClient,
+          "session-1",
+          {} as never,
+        );
+        registry.registerAll();
 
-      // M1-Fix (Code-Review 15.6): Statt fragiler Exact-Count-Assertion eine
-      // semantische Pruefung — Pro-Tools (`inspect_element`) duerfen nicht
-      // registriert sein, freie Kerntools (`evaluate`) muessen vorhanden sein.
-      const registeredNames = toolFn.mock.calls.map(
-        (call: unknown[]) => call[0] as string,
-      );
-      expect(registeredNames).not.toContain("inspect_element");
-      expect(registeredNames).toContain("evaluate");
-      // Story 18.3 Review-Fix M2: Default-Set exakt 10 Tools — schlaegt an,
-      // wenn genau ein Default-Tool verschwindet oder (noch schlimmer) ein
-      // Extended-Tool versehentlich in den Default-Modus rutscht.
-      expect(registeredNames.length).toBe(10);
+        const registeredNames = toolFn.mock.calls.map(
+          (call: unknown[]) => call[0] as string,
+        );
+        expect(registeredNames).not.toContain("inspect_element");
+        expect(registeredNames).toContain("evaluate");
+        expect(registeredNames.length).toBe(10);
+      } finally {
+        delete process.env.SILBERCUE_CHROME_MINIMAL_TOOLS;
+      }
     });
 
     it("Free-Tier FULL_TOOLS-Modus registriert alle 22 Tools inkl. dialog/console/network/drag", () => {

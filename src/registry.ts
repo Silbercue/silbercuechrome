@@ -73,9 +73,11 @@ import { deferredDiffSlot } from "./cache/deferred-diff-slot.js";
 import { debug } from "./cdp/debug.js";
 
 /**
- * Story 18.3 — Transition-Set fuer die schlanke Default-Tool-Liste.
+ * Story 18.3 — Transition-Set fuer die schlanke Minimal-Tool-Liste.
  *
- * Dieses Array enthaelt genau die zehn Tools, die im Default-Modus ueber
+ * **FR-035 Revision 2026-04-18:** Default ist jetzt der volle Tool-Satz.
+ * Dieses Array enthaelt die zehn Tools, die im **Minimal-Modus** (Opt-Out
+ * via `SILBERCUE_CHROME_MINIMAL_TOOLS=true` oder `FULL_TOOLS=false`) ueber
  * `tools/list` exponiert werden. Die Reihenfolge entspricht der
  * Positional-Bias-optimierten Reihenfolge in `ToolRegistry.registerAll()`
  * (orientation → reading → interaction → navigation → timing → visual →
@@ -86,9 +88,8 @@ import { debug } from "./cdp/debug.js";
  * `observe`, `dom_snapshot`, `handle_dialog`, `file_upload`, `console_logs`,
  * `network_monitor`, `configure_session`) bleiben im internen
  * `_handlers`-Dispatcher erreichbar, damit `run_plan` sie weiter aufrufen
- * kann — sie werden nur in `tools/list` ausgeblendet.
- *
- * Opt-in: Wer das volle Set braucht, setzt `SILBERCUE_CHROME_FULL_TOOLS=true`.
+ * kann — im Minimal-Modus nur dort, im Default-Modus zusaetzlich ueber
+ * `tools/list` sichtbar.
  *
  * @see docs/friction-fixes.md#FR-035
  */
@@ -114,16 +115,26 @@ export const DEFAULT_TOOL_SET: ReadonlySet<string> = new Set(DEFAULT_TOOL_NAMES)
 /**
  * Story 18.3 — Env-Var-Gate fuer den vollen Tool-Satz.
  *
- * Parst `SILBERCUE_CHROME_FULL_TOOLS` nach demselben Muster wie
- * `SILBERCUE_CHROME_HEADLESS` in `src/server.ts:27`: nur der exakte String
- * `"true"` aktiviert den Full-Set. `"false"`, unset oder andere Werte
- * bleiben im Default-Set.
+ * **Revision 2026-04-18:** Default ist jetzt `true` (voller Tool-Satz).
+ * Die urspruengliche Story-18.3-Reduktion auf 10 Default-Tools hat sich in
+ * der Praxis als zu restriktiv erwiesen (Tab-Switch, scroll, press_key
+ * nur via `run_plan` erreichbar, LLM vergisst das). Der prognostizierte
+ * Token-Effekt von ~2.400 Tokens wird durch Anthropic-Prompt-Caching
+ * neutralisiert. Der Positional-Bias-Effekt (BiasBusters arXiv:2510.00307)
+ * war auf unserem Parcours nicht A/B-validiert.
  *
- * @returns `true` wenn der LLM den vollen 20-Tool-Satz sehen soll, sonst
- *          `false` (Default-Set mit zehn Tools).
+ * Opt-Out fuer Legacy-Verhalten (10 Tools):
+ * - `SILBERCUE_CHROME_MINIMAL_TOOLS=true` (neu)
+ * - `SILBERCUE_CHROME_FULL_TOOLS=false` (backwards-compat)
+ *
+ * Alles andere (unset, truthy-Werte, explizit `"true"`) liefert den Full-Set.
+ *
+ * @returns `true` (voller Tool-Satz) wenn kein Opt-Out gesetzt ist.
  */
 export function isFullToolsMode(): boolean {
-  return process.env.SILBERCUE_CHROME_FULL_TOOLS === "true";
+  if (process.env.SILBERCUE_CHROME_MINIMAL_TOOLS === "true") return false;
+  if (process.env.SILBERCUE_CHROME_FULL_TOOLS === "false") return false;
+  return true;
 }
 
 /**

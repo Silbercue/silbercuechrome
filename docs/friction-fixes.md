@@ -957,9 +957,36 @@ Tests + Mess-Skript.
 
 ---
 
-## FR-035: Tool-Definition-Overhead zu gross — gefixt (Story 18.3)
+## FR-035: Tool-Definition-Overhead zu gross — gefixt (Story 18.3), REVIDIERT 2026-04-18
 
-### Problem
+### Revisions-Vermerk (2026-04-18)
+
+Der 10-Tool-Default aus Story 18.3 wurde **revidiert**: Default ist jetzt
+wieder der volle Tool-Satz. Opt-Out auf Minimal bleibt via
+`SILBERCUE_CHROME_MINIMAL_TOOLS=true` oder (backwards-compat)
+`SILBERCUE_CHROME_FULL_TOOLS=false`. Begruendung:
+
+- **Token-Effekt klein:** Die 43,8%-Reduktion (9.537 Bytes) wird durch
+  Anthropic-Prompt-Caching neutralisiert — die Tool-Liste ist Teil des
+  stabilen System-Prompts, wird einmal bezahlt und dann aus dem Cache
+  gelesen. Der theoretische "pro Turn teurer"-Effekt greift nur bei
+  Cache-Miss, nicht in der Praxis.
+- **Positional-Bias nie A/B-validiert:** Der BiasBusters-Effekt
+  (arXiv:2510.00307) wurde als theoretische Grundlage angefuehrt, aber
+  nie auf der eigenen 35-Test-Suite gemessen. Ein A/B-Benchmark
+  Default-vs-Full wurde nicht gefahren.
+- **Praxis-Kosten hoch:** Power-Tools wie `switch_tab`, `scroll`,
+  `press_key` sind nur via `run_plan`-Dispatch erreichbar — der LLM
+  vergisst das regelmaessig, was bereits zu dokumentierten Incidents
+  gefuehrt hat (Session 6d4db449, 2026-04-17: "SilbercueChrome hat
+  leider kein tabs_create Tool" — falsch, aber symptomatisch).
+- **Der `_handlers`-Dispatcher bleibt unberuehrt:** `run_plan` kann
+  weiterhin alle Extended-Tools aufrufen, in beiden Modi.
+
+Der urspruengliche Problem-Abschnitt unten bleibt als historischer
+Kontext stehen, spiegelt aber nicht mehr die aktive Policy wider.
+
+### Problem (historisch, pre-Revision)
 SilbercueChrome registrierte bislang **alle 21 Free-Tools** ueber
 `server.tool()`, also tauchten sie im `tools/list`-Export auf. Die
 Tool-Definitionen sind nicht nur Namen, sondern enthalten Beschreibungen,

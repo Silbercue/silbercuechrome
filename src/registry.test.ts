@@ -3668,19 +3668,22 @@ describe("ToolRegistry", () => {
   // Story 18.3: Tool-Verschlankung auf ein Transition-Set
   // ===========================================================================
   //
-  // Per Default exponiert `tools/list` nur die zehn Default-Tools (Transition-
-  // Set, Positional-Bias-optimiert). Mit `SILBERCUE_CHROME_FULL_TOOLS=true`
-  // werden alle Free-Tools registriert. Der interne `_handlers`-Dispatcher
+  // Per Default exponiert `tools/list` den vollen Tool-Satz (FR-035 Revision
+  // 2026-04-18). Opt-Out auf das Minimal-Set (10 Default-Tools) via
+  // `SILBERCUE_CHROME_MINIMAL_TOOLS=true` oder (backwards-compat)
+  // `SILBERCUE_CHROME_FULL_TOOLS=false`. Der interne `_handlers`-Dispatcher
   // bleibt in beiden Modi vollstaendig, damit `run_plan` Extended-Tools weiter
   // erreicht. Siehe `docs/friction-fixes.md#FR-035`.
-  describe("ToolRegistry — Tool-Verschlankung (Story 18.3)", () => {
-    // Diese Tests toggeln `SILBERCUE_CHROME_FULL_TOOLS` selbst und
-    // ueberschreiben das parent `beforeEach`, das den FULL-Modus erzwingt.
+  describe("ToolRegistry — Tool-Verschlankung (Story 18.3, revidiert 2026-04-18)", () => {
+    // Diese Tests toggeln die Opt-Out-Env-Vars selbst und ueberschreiben das
+    // parent `beforeEach`, das den FULL-Modus erzwingt.
     beforeEach(() => {
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
+      delete process.env.SILBERCUE_CHROME_MINIMAL_TOOLS;
     });
     afterEach(() => {
       delete process.env.SILBERCUE_CHROME_FULL_TOOLS;
+      delete process.env.SILBERCUE_CHROME_MINIMAL_TOOLS;
     });
 
     const DEFAULT_TOOL_NAMES_EXPECTED = [
@@ -3709,8 +3712,20 @@ describe("ToolRegistry", () => {
       "configure_session",
     ];
 
-    it("default-Modus: server.tool() wird genau mit den 10 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
-      // Env-Var unset → Default-Modus.
+    it("default-Modus (kein Opt-Out): server.tool() wird mit vollem Tool-Satz aufgerufen — FR-035 Revision", () => {
+      // Post-Revision 2026-04-18: Default ist Full-Set (23 Tools).
+      const toolFn = vi.fn();
+      const mockServer = { tool: toolFn } as never;
+      const mockCdpClient = {} as never;
+
+      const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
+      registry.registerAll();
+
+      expect(toolFn).toHaveBeenCalledTimes(23);
+    });
+
+    it("minimal-Modus via MINIMAL_TOOLS=true: server.tool() wird genau mit den 10 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
+      process.env.SILBERCUE_CHROME_MINIMAL_TOOLS = "true";
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
@@ -3723,8 +3738,8 @@ describe("ToolRegistry", () => {
       expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
     });
 
-    it("default-Modus: Extended-Tools sind NICHT in server.tool()-Calls", () => {
-      // Negative Assertion fuer alle elf Extended-Namen.
+    it("minimal-Modus: Extended-Tools sind NICHT in server.tool()-Calls", () => {
+      process.env.SILBERCUE_CHROME_MINIMAL_TOOLS = "true";
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
@@ -3738,7 +3753,7 @@ describe("ToolRegistry", () => {
       }
     });
 
-    it("default-Modus: SILBERCUE_CHROME_FULL_TOOLS='false' aktiviert NICHT den Full-Set", () => {
+    it("minimal-Modus via FULL_TOOLS=false (backwards-compat): 10 Default-Tools", () => {
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "false";
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
@@ -3750,10 +3765,11 @@ describe("ToolRegistry", () => {
       expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
     });
 
-    it("default-Modus: andere Wahrheits-aehnliche Werte ('1', 'TRUE') aktivieren NICHT den Full-Set", () => {
+    it("default-Modus: Wahrheits-aehnliche Werte fuer MINIMAL_TOOLS ('1', 'TRUE') aktivieren NICHT den Minimal-Set", () => {
       // Strenger String-Vergleich `=== "true"` — defensive gegen Drift.
+      // Post-Revision: Nur exakt "true" opted out auf Minimal.
       for (const value of ["1", "TRUE", "yes", "on"]) {
-        process.env.SILBERCUE_CHROME_FULL_TOOLS = value;
+        process.env.SILBERCUE_CHROME_MINIMAL_TOOLS = value;
         const toolFn = vi.fn();
         const mockServer = { tool: toolFn } as never;
         const mockCdpClient = {} as never;
@@ -3761,7 +3777,8 @@ describe("ToolRegistry", () => {
         const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
         registry.registerAll();
 
-        expect(toolFn).toHaveBeenCalledTimes(DEFAULT_TOOL_NAMES_EXPECTED.length);
+        // Nicht-true Werte => Full-Set bleibt aktiv.
+        expect(toolFn).toHaveBeenCalledTimes(23);
       }
     });
 
