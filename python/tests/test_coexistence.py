@@ -28,9 +28,9 @@ from unittest.mock import patch
 
 import pytest
 
-from silbercuechrome.chrome import Chrome
-from silbercuechrome.client import ScriptApiClient
-from silbercuechrome.page import Page
+from publicbrowser.chrome import Chrome
+from publicbrowser.client import ScriptApiClient
+from publicbrowser.page import Page
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ _CHROME_AVAILABLE = shutil.which("google-chrome") is not None or shutil.which(
 
 _SKIP_REASON = (
     "Integration test requires SilbercueChrome server with --script flag. "
-    "Start with: silbercuechrome --script"
+    "Start with: public-browser --script"
 )
 
 

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "silbercuechrome"
+name = "publicbrowser"
 version = "1.0.0"
 description = "Minimal CDP client for Chrome browser automation — control Chrome from Python via the DevTools Protocol."
 license = "MIT"
@@ -33,11 +33,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/silbercue/silbercuechrome"
-Documentation = "https://github.com/silbercue/silbercuechrome#script-api-python"
-Repository = "https://github.com/silbercue/silbercuechrome"
-Issues = "https://github.com/silbercue/silbercuechrome/issues"
-Changelog = "https://github.com/silbercue/silbercuechrome/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/Silbercue/public-browser"
+Documentation = "https://github.com/Silbercue/public-browser#script-api-python"
+Repository = "https://github.com/Silbercue/public-browser"
+Issues = "https://github.com/Silbercue/public-browser/issues"
+Changelog = "https://github.com/Silbercue/public-browser/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -48,11 +48,11 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["silbercuechrome"]
+packages = ["publicbrowser"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "silbercuechrome/",
+    "publicbrowser/",
     "README.md",
     "LICENSE",
 ]

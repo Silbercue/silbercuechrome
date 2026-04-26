@@ -1,13 +1,13 @@
-"""ScriptApiClient — HTTP client for the SilbercueChrome Script API.
+"""ScriptApiClient — HTTP client for the Public Browser Script API.
 
-Communicates with the SilbercueChrome server via HTTP on Port 9223.
+Communicates with the Public Browser server via HTTP on Port 9223.
 All browser automation logic (selector resolution, Shadow DOM, scroll-into-view,
 paint-order filtering, ambient context) runs server-side. This client is a thin
 HTTP wrapper that sends tool calls and parses responses.
 
 Usage::
 
-    from silbercuechrome.client import ScriptApiClient
+    from publicbrowser.client import ScriptApiClient
 
     client = ScriptApiClient("localhost", 9223)
     token, target_id = client.create_session()
@@ -38,7 +38,7 @@ _LONG_TIMEOUT_TOOLS = frozenset({"navigate", "wait_for"})
 
 
 class ScriptApiClient:
-    """HTTP client for the SilbercueChrome Script API on port 9223.
+    """HTTP client for the Public Browser Script API on port 9223.
 
     Handles server auto-start, session management, and tool calls.
     """
@@ -93,12 +93,12 @@ class ScriptApiClient:
             pass
 
     def start_server(self, server_path: str | None = None) -> None:
-        """Start the SilbercueChrome server as a subprocess.
+        """Start the Public Browser server as a subprocess.
 
         Tries in order:
         1. Explicit ``server_path`` if provided
-        2. ``silbercuechrome`` in PATH (Homebrew binary)
-        3. ``npx -y @silbercue/chrome@latest -- --script`` as fallback
+        2. ``public-browser`` in PATH (Homebrew binary)
+        3. ``npx -y public-browser@latest -- --script`` as fallback
 
         Args:
             server_path: Explicit path to the server binary.
@@ -112,21 +112,21 @@ class ScriptApiClient:
         if server_path:
             cmd = [server_path, "--script"]
         else:
-            # Try silbercuechrome in PATH
-            binary = shutil.which("silbercuechrome")
+            # Try public-browser in PATH
+            binary = shutil.which("public-browser")
             if binary:
                 cmd = [binary, "--script"]
             else:
                 # Fallback to npx
                 npx = shutil.which("npx")
                 if npx:
-                    cmd = [npx, "-y", "@silbercue/chrome@latest", "--", "--script"]
+                    cmd = [npx, "-y", "public-browser@latest", "--", "--script"]
 
         if cmd is None:
             raise FileNotFoundError(
-                "Cannot find SilbercueChrome server. Install via "
-                "'brew install silbercue/tap/silbercuechrome' or "
-                "'npm install -g @silbercue/chrome', or pass server_path= explicitly."
+                "Cannot find Public Browser server. Install via "
+                "'brew install silbercue/tap/public-browser' or "
+                "'npm install -g public-browser', or pass server_path= explicitly."
             )
 
         self._server_proc = subprocess.Popen(

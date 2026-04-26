@@ -43,8 +43,8 @@ class TestPyprojectToml:
             self.config = tomllib.load(f)
 
     def test_package_name(self) -> None:
-        """Package name is 'silbercuechrome'."""
-        assert self.config["project"]["name"] == "silbercuechrome"
+        """Package name is 'publicbrowser'."""
+        assert self.config["project"]["name"] == "publicbrowser"
 
     def test_version_is_1_0_0(self) -> None:
         """Version matches npm package version."""
@@ -107,7 +107,7 @@ class TestPyprojectToml:
     def test_hatch_wheel_packages(self) -> None:
         """Hatch wheel target includes the package directory."""
         packages = self.config["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
-        assert "silbercuechrome" in packages
+        assert "publicbrowser" in packages
 
 
 # ---------------------------------------------------------------------------
@@ -120,39 +120,39 @@ class TestPackageImports:
 
     def test_import_chrome(self) -> None:
         """Chrome class is importable from top-level."""
-        from silbercuechrome import Chrome
+        from publicbrowser import Chrome
         assert Chrome is not None
 
     def test_import_page(self) -> None:
         """Page class is importable from top-level."""
-        from silbercuechrome import Page
+        from publicbrowser import Page
         assert Page is not None
 
     def test_import_cdp_client(self) -> None:
         """CdpClient is importable from top-level."""
-        from silbercuechrome import CdpClient
+        from publicbrowser import CdpClient
         assert CdpClient is not None
 
     def test_import_cdp_error(self) -> None:
         """CdpError is importable from top-level."""
-        from silbercuechrome import CdpError
+        from publicbrowser import CdpError
         assert CdpError is not None
 
     def test_version_attribute(self) -> None:
         """__version__ is set to '1.0.0'."""
-        import silbercuechrome
-        assert hasattr(silbercuechrome, "__version__")
-        assert silbercuechrome.__version__ == "1.0.0"
+        import publicbrowser
+        assert hasattr(publicbrowser, "__version__")
+        assert publicbrowser.__version__ == "1.0.0"
 
     def test_all_exports(self) -> None:
         """__all__ lists Chrome, Page, ScriptApiClient, CdpClient, CdpError, CdpEscapeHatch."""
-        import silbercuechrome
+        import publicbrowser
         expected = {"Chrome", "Page", "ScriptApiClient", "CdpClient", "CdpError", "CdpEscapeHatch"}
-        assert set(silbercuechrome.__all__) == expected
+        assert set(publicbrowser.__all__) == expected
 
     def test_py_typed_marker_exists(self) -> None:
         """py.typed marker file exists for PEP 561 compliance."""
-        py_typed = Path(__file__).parent.parent / "silbercuechrome" / "py.typed"
+        py_typed = Path(__file__).parent.parent / "publicbrowser" / "py.typed"
         assert py_typed.exists()
 
 
@@ -202,9 +202,9 @@ class TestSingleFile:
         The single-file version is v1 (CDP-based) and does not include
         ScriptApiClient. It provides the core symbols that both v1 and v2 share.
         """
-        import silbercuechrome
+        import publicbrowser
         single_file_exports = set(self.mod.__all__)
-        package_exports = set(silbercuechrome.__all__)
+        package_exports = set(publicbrowser.__all__)
         assert single_file_exports.issubset(package_exports)
 
     def test_chrome_connect_method(self) -> None:
@@ -257,7 +257,7 @@ class TestReadme:
 
     def test_has_installation_section(self) -> None:
         """README contains installation instructions."""
-        assert "pip install silbercuechrome" in self.content
+        assert "pip install publicbrowser" in self.content
 
     def test_has_quick_start(self) -> None:
         """README contains a quick start example."""

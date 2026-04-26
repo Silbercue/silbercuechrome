@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from silbercuechrome.cdp import CdpClient, CdpError
+from publicbrowser.cdp import CdpClient, CdpError
 
 
 class CdpEscapeHatch:

@@ -1,11 +1,11 @@
-# SilbercueChrome — Python Script API
+# Public Browser — Python Script API
 
-Python client for SilbercueChrome browser automation. Scripts use the same tool implementations as the MCP server (Shared Core) — every improvement to `click`, `navigate`, `fill_form` etc. automatically benefits your scripts too. One codebase, one test suite (1600+ tests), two access paths.
+Python client for Public Browser automation. Scripts use the same tool implementations as the MCP server (Shared Core) — every improvement to `click`, `navigate`, `fill_form` etc. automatically benefits your scripts too. One codebase, one test suite (1600+ tests), two access paths.
 
 ## Installation
 
 ```bash
-pip install silbercuechrome
+pip install publicbrowser
 ```
 
 That's it. No manual Chrome launch needed — `Chrome.connect()` starts everything automatically.
@@ -15,7 +15,7 @@ Dependencies: `websockets` (for the Escape Hatch / `CdpClient` low-level access)
 ## Quick Start
 
 ```python
-from silbercuechrome import Chrome
+from publicbrowser import Chrome
 
 chrome = Chrome.connect()
 
@@ -27,7 +27,7 @@ with chrome.new_page() as page:
 chrome.close()
 ```
 
-`Chrome.connect()` auto-starts the SilbercueChrome server as a subprocess, which in turn launches Chrome. When you call `chrome.close()`, the server subprocess is terminated.
+`Chrome.connect()` auto-starts the Public Browser server as a subprocess, which in turn launches Chrome. When you call `chrome.close()`, the server subprocess is terminated.
 
 ## How it works
 
@@ -39,7 +39,7 @@ HTTP POST /tool/{name}              WebSocket (CDP)
 Port 9223                           Port 9222
     │                                    │
     ▼                                    │
-SilbercueChrome Server                   │
+Public Browser Server                    │
     │                                    │
     ▼                                    │
 registry.executeTool()                   │
@@ -52,21 +52,21 @@ Tool Handler                             │
 Chrome ◄─────────── CDP ────────────────►
 ```
 
-Your script sends HTTP requests to the SilbercueChrome server on port 9223. The server executes the exact same tool handlers that the MCP server uses — selector resolution, Shadow DOM traversal, scroll-into-view, paint-order filtering, ambient context — all server-side.
+Your script sends HTTP requests to the Public Browser server on port 9223. The server executes the exact same tool handlers that the MCP server uses — selector resolution, Shadow DOM traversal, scroll-into-view, paint-order filtering, ambient context — all server-side.
 
 ## Auto-Start
 
 `Chrome.connect()` finds and starts the server automatically:
 
 1. **Running server** — checks if port 9223 already responds, connects immediately
-2. **PATH binary** — finds `silbercuechrome` in PATH (e.g. via Homebrew), starts it with `--script`
-3. **npx fallback** — runs `npx -y @silbercue/chrome@latest -- --script`
-4. **Explicit path** — `Chrome.connect(server_path="/path/to/silbercuechrome")` for custom setups
+2. **PATH binary** — finds `public-browser` in PATH (e.g. via Homebrew), starts it with `--script`
+3. **npx fallback** — runs `npx -y public-browser@latest -- --script`
+4. **Explicit path** — `Chrome.connect(server_path="/path/to/public-browser")` for custom setups
 
 ## Login and Data Extraction
 
 ```python
-from silbercuechrome import Chrome
+from publicbrowser import Chrome
 
 chrome = Chrome.connect()
 
@@ -99,7 +99,7 @@ chrome.close()
 
 | Method | Description |
 |---|---|
-| `Chrome.connect(host="localhost", port=9223, *, server_path=None, auto_start=True)` | Connect to or auto-start the SilbercueChrome server |
+| `Chrome.connect(host="localhost", port=9223, *, server_path=None, auto_start=True)` | Connect to or auto-start the Public Browser server |
 | `chrome.new_page()` | Context manager: open a new tab, auto-closes on exit |
 | `chrome.close()` | Close the connection and terminate any auto-started server |
 
@@ -151,7 +151,7 @@ The Escape Hatch communicates directly with Chrome via WebSocket (port 9222), by
 For direct CDP access without the Shared Core server. This is the v1 code path — it works, but does not benefit from server-side improvements. Use `page.cdp.send()` instead for most Escape Hatch use cases.
 
 ```python
-from silbercuechrome import CdpClient
+from publicbrowser import CdpClient
 
 # Async API
 client = await CdpClient.connect(port=9222)
@@ -170,16 +170,16 @@ When the MCP server and Python scripts need to run at the same time, add `--scri
 
 **Claude Code:**
 ```bash
-claude mcp add --scope user silbercuechrome npx -y @silbercue/chrome@latest -- --script
+claude mcp add --scope user public-browser npx -y public-browser@latest -- --script
 ```
 
 **Cursor / Cline (`mcp.json`):**
 ```json
 {
   "mcpServers": {
-    "silbercuechrome": {
+    "public-browser": {
       "command": "npx",
-      "args": ["-y", "@silbercue/chrome@latest", "--", "--script"]
+      "args": ["-y", "public-browser@latest", "--", "--script"]
     }
   }
 }
@@ -187,7 +187,7 @@ claude mcp add --scope user silbercuechrome npx -y @silbercue/chrome@latest -- -
 
 ## Legacy: Single-File Alternative
 
-For quick prototyping, you can copy `silbercuechrome.py` into your project. This uses the v1 code path (direct CDP via WebSocket) and does **not** benefit from server-side improvements. Use `pip install silbercuechrome` for the full Shared Core experience.
+For quick prototyping, you can copy `silbercuechrome.py` into your project. This uses the v1 code path (direct CDP via WebSocket) and does **not** benefit from server-side improvements. Use `pip install publicbrowser` for the full Shared Core experience.
 
 ## License
 

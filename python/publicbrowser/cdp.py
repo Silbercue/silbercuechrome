@@ -10,7 +10,7 @@ via the DevTools Protocol. It handles:
 
 Usage (async):
     import asyncio
-    from silbercuechrome.cdp import CdpClient
+    from publicbrowser.cdp import CdpClient
 
     async def main():
         client = await CdpClient.connect("localhost", 9222)
@@ -21,7 +21,7 @@ Usage (async):
     asyncio.run(main())
 
 Usage (sync):
-    from silbercuechrome.cdp import CdpClient
+    from publicbrowser.cdp import CdpClient
 
     client = CdpClient.connect_sync("localhost", 9222)
     result = client.send_sync("Runtime.evaluate", {"expression": "1+1"})

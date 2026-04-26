@@ -31,7 +31,7 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-16
-last_updated: 2026-04-26  # Story 11.4 review
+last_updated: 2026-04-26  # Story 11.5 + 11.6 done
 project: SilbercueChrome  # wird zu PublicBrowser in Epic 11
 project_key: NOKEY
 tracking_system: file-system
@@ -105,8 +105,8 @@ development_status:
   11-2-license-system-entfernen: done
   11-3-pro-repo-archivieren: done
   11-4-rename-public-browser: done
-  11-5-npm-package-migration: backlog
-  11-6-python-package-migration: backlog
+  11-5-npm-package-migration: done
+  11-6-python-package-migration: done
   11-7-v2-0-0-release: backlog
   epic-11-retrospective: optional
 

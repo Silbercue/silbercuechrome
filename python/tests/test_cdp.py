@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from silbercuechrome.cdp import CdpClient, CdpError
+from publicbrowser.cdp import CdpClient, CdpError
 from tests.conftest import FakeWebSocket
 
 
@@ -422,7 +422,7 @@ class TestCdpClientConnect:
     async def test_connect_with_explicit_ws_url(self, fake_ws: FakeWebSocket) -> None:
         """connect() with ws_url skips discovery."""
         with patch(
-            "silbercuechrome.cdp.connect",
+            "publicbrowser.cdp.connect",
             return_value=_FakeConnectCtx(fake_ws),
         ):
             client = await CdpClient.connect(ws_url="ws://fake:9222/devtools/browser/x")
@@ -437,7 +437,7 @@ class TestCdpClientConnect:
             captured_urls.append(url)
             return _FakeConnectCtx(fake_ws)
 
-        with patch("silbercuechrome.cdp.connect", side_effect=mock_connect):
+        with patch("publicbrowser.cdp.connect", side_effect=mock_connect):
             client = await CdpClient.connect(
                 host="myhost", port=1234, target_id="ABCDEF"
             )
@@ -453,7 +453,7 @@ class TestCdpClientConnect:
                 return_value="ws://localhost:9222/devtools/browser/xyz",
             ),
             patch(
-                "silbercuechrome.cdp.connect",
+                "publicbrowser.cdp.connect",
                 return_value=_FakeConnectCtx(fake_ws),
             ),
         ):
@@ -601,7 +601,7 @@ class TestSyncApi:
                 return_value="ws://localhost:9222/devtools/browser/xyz",
             ),
             patch(
-                "silbercuechrome.cdp.connect",
+                "publicbrowser.cdp.connect",
                 return_value=_FakeConnectCtx(fake_ws),
             ),
         ):
@@ -640,7 +640,7 @@ class TestSyncApi:
                 return_value="ws://localhost:9222/devtools/browser/xyz",
             ),
             patch(
-                "silbercuechrome.cdp.connect",
+                "publicbrowser.cdp.connect",
                 return_value=_FakeConnectCtx(fake_ws),
             ),
         ):

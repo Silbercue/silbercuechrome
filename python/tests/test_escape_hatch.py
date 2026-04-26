@@ -15,8 +15,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from silbercuechrome.cdp import CdpError
-from silbercuechrome.escape_hatch import CdpEscapeHatch
+from publicbrowser.cdp import CdpError
+from publicbrowser.escape_hatch import CdpEscapeHatch
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class TestLazyConnect:
         assert hatch._client is None
         assert not hatch.connected
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_first_send_connects(self, mock_connect: MagicMock) -> None:
         """First send() call triggers WebSocket connection."""
         mock_client = _make_mock_client()
@@ -62,7 +62,7 @@ class TestLazyConnect:
             ws_url="ws://localhost:9222/devtools/page/abc"
         )
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_second_send_reuses_connection(self, mock_connect: MagicMock) -> None:
         """Subsequent send() calls reuse the existing connection."""
         mock_client = _make_mock_client()
@@ -86,7 +86,7 @@ class TestLazyConnect:
 class TestSend:
     """CdpEscapeHatch.send() delegates to CdpClient.send_sync()."""
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_returns_cdp_result(self, mock_connect: MagicMock) -> None:
         """send() returns the CDP result dict."""
         mock_client = _make_mock_client()
@@ -98,7 +98,7 @@ class TestSend:
 
         assert result == {"result": {"type": "number", "value": 42}}
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_does_not_pass_stored_session_id(self, mock_connect: MagicMock) -> None:
         """send() does NOT auto-pass stored session_id — page URL routes automatically."""
         mock_client = _make_mock_client()
@@ -117,7 +117,7 @@ class TestSend:
         # Stored session_id is still accessible
         assert hatch.stored_session_id == "cdp-session-xyz"
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_explicit_session_id(self, mock_connect: MagicMock) -> None:
         """send() passes explicit session_id when provided."""
         mock_client = _make_mock_client()
@@ -130,7 +130,7 @@ class TestSend:
             "Network.enable", None, timeout=10.0, session_id="explicit-sid"
         )
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_passes_none_session_id(self, mock_connect: MagicMock) -> None:
         """send() passes session_id=None when not specified."""
         mock_client = _make_mock_client()
@@ -143,7 +143,7 @@ class TestSend:
             "Page.enable", None, timeout=30.0, session_id=None
         )
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_passes_params(self, mock_connect: MagicMock) -> None:
         """send() passes params dict to CdpClient.send_sync()."""
         mock_client = _make_mock_client()
@@ -168,7 +168,7 @@ class TestSend:
 class TestErrorHandling:
     """CdpEscapeHatch error handling — CdpError, ConnectionError."""
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_cdp_error_propagates(self, mock_connect: MagicMock) -> None:
         """CdpError from CdpClient is propagated as-is."""
         mock_client = _make_mock_client()
@@ -182,7 +182,7 @@ class TestErrorHandling:
         with pytest.raises(CdpError, match="Method not found"):
             hatch.send("UnknownDomain.method")
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_connection_error_on_connect_failure(self, mock_connect: MagicMock) -> None:
         """ConnectionError when WebSocket connect fails."""
         mock_connect.side_effect = ConnectionError("Connection refused")
@@ -192,7 +192,7 @@ class TestErrorHandling:
         with pytest.raises(ConnectionError, match="Connection refused"):
             hatch.send("Runtime.evaluate")
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_connection_error_on_closed_websocket(self, mock_connect: MagicMock) -> None:
         """ConnectionError when WebSocket is closed (tab closed)."""
         mock_client = _make_mock_client()
@@ -215,7 +215,7 @@ class TestErrorHandling:
 class TestClose:
     """CdpEscapeHatch.close() — WebSocket cleanup."""
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_close_calls_client_close(self, mock_connect: MagicMock) -> None:
         """close() calls CdpClient.close_sync()."""
         mock_client = _make_mock_client()
@@ -234,7 +234,7 @@ class TestClose:
         hatch.close()  # Should not raise
         assert hatch._client is None
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_double_close_is_idempotent(self, mock_connect: MagicMock) -> None:
         """Calling close() twice does not raise."""
         mock_client = _make_mock_client()
@@ -261,7 +261,7 @@ class TestConnected:
         hatch = CdpEscapeHatch("ws://localhost:9222/devtools/page/abc")
         assert not hatch.connected
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_connected_after_send(self, mock_connect: MagicMock) -> None:
         """connected is True after send()."""
         mock_client = _make_mock_client(closed=False)
@@ -271,7 +271,7 @@ class TestConnected:
         hatch.send("Runtime.evaluate")
         assert hatch.connected
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_not_connected_after_close(self, mock_connect: MagicMock) -> None:
         """connected is False after close()."""
         mock_client = _make_mock_client(closed=False)
@@ -291,7 +291,7 @@ class TestConnected:
 class TestEventHandler:
     """CdpEscapeHatch.on() — event handler registration."""
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_on_connects_lazily(self, mock_connect: MagicMock) -> None:
         """on() triggers WebSocket connection if not yet connected."""
         mock_client = _make_mock_client()
@@ -304,7 +304,7 @@ class TestEventHandler:
         mock_connect.assert_called_once()
         mock_client.on.assert_called_once_with("Network.requestWillBeSent", handler)
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_on_reuses_existing_connection(self, mock_connect: MagicMock) -> None:
         """on() reuses existing connection."""
         mock_client = _make_mock_client()
@@ -317,7 +317,7 @@ class TestEventHandler:
         # connect_sync called only once (during send)
         mock_connect.assert_called_once()
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_on_after_close_raises_connection_error(self, mock_connect: MagicMock) -> None:
         """on() after close() raises ConnectionError."""
         mock_client = _make_mock_client()
@@ -339,7 +339,7 @@ class TestEventHandler:
 class TestClosedState:
     """After close(), send() must raise ConnectionError — no reconnect."""
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_after_close_raises_connection_error(self, mock_connect: MagicMock) -> None:
         """send() after close() raises ConnectionError immediately."""
         mock_client = _make_mock_client()
@@ -355,7 +355,7 @@ class TestClosedState:
         # No reconnect attempt — connect_sync only called once (initial)
         mock_connect.assert_called_once()
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_send_after_close_without_prior_connect(self, mock_connect: MagicMock) -> None:
         """send() after close() on a never-connected hatch raises ConnectionError."""
         hatch = CdpEscapeHatch("ws://localhost:9222/devtools/page/abc")
@@ -367,7 +367,7 @@ class TestClosedState:
         # Never connected at all
         mock_connect.assert_not_called()
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_websocket_error_maps_to_connection_error(self, mock_connect: MagicMock) -> None:
         """Generic WebSocket exceptions during send() map to ConnectionError."""
         mock_client = _make_mock_client()
@@ -379,7 +379,7 @@ class TestClosedState:
         with pytest.raises(ConnectionError, match="CDP WebSocket error"):
             hatch.send("Runtime.evaluate")
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_cdp_error_not_wrapped(self, mock_connect: MagicMock) -> None:
         """CdpError is not wrapped in ConnectionError — it propagates as-is."""
         mock_client = _make_mock_client()
@@ -393,7 +393,7 @@ class TestClosedState:
         with pytest.raises(CdpError, match="Method not found"):
             hatch.send("Foo.bar")
 
-    @patch("silbercuechrome.escape_hatch.CdpClient.connect_sync")
+    @patch("publicbrowser.escape_hatch.CdpClient.connect_sync")
     def test_connected_is_false_after_close(self, mock_connect: MagicMock) -> None:
         """connected property reflects the _closed flag."""
         mock_client = _make_mock_client(closed=False)
@@ -422,9 +422,9 @@ class TestEscapeHatchIntegration:
 
     def test_escape_hatch_roundtrip_integration(self) -> None:
         """page.cdp.send() round-trip: Runtime.evaluate returns correct result."""
-        from silbercuechrome import Chrome
+        from publicbrowser import Chrome
 
-        chrome = Chrome()
+        chrome = Chrome.connect()
         with chrome.new_page() as page:
             page.navigate("about:blank")
             result = page.cdp.send(
@@ -434,9 +434,9 @@ class TestEscapeHatchIntegration:
 
     def test_mixed_path_integration(self) -> None:
         """Shared Core (navigate) + Escape Hatch (Runtime.evaluate) on same tab."""
-        from silbercuechrome import Chrome
+        from publicbrowser import Chrome
 
-        chrome = Chrome()
+        chrome = Chrome.connect()
         with chrome.new_page() as page:
             # Shared Core path
             page.navigate("about:blank")

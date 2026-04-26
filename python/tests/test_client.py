@@ -18,7 +18,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from silbercuechrome.client import (
+from publicbrowser.client import (
     ScriptApiClient,
     DEFAULT_TIMEOUT,
     LONG_TIMEOUT,
@@ -186,7 +186,7 @@ class TestScriptApiClientCallTool:
 
         # We can't easily test the timeout value passed to urlopen,
         # but we verify the tool name is in _LONG_TIMEOUT_TOOLS
-        from silbercuechrome.client import _LONG_TIMEOUT_TOOLS
+        from publicbrowser.client import _LONG_TIMEOUT_TOOLS
         assert "navigate" in _LONG_TIMEOUT_TOOLS
         assert "wait_for" in _LONG_TIMEOUT_TOOLS
         assert "click" not in _LONG_TIMEOUT_TOOLS
@@ -280,20 +280,20 @@ class TestScriptApiClientAutoStart:
             mock_proc.poll.return_value = None
             mock_popen.return_value = mock_proc
 
-            client.start_server(server_path="/usr/local/bin/silbercuechrome")
+            client.start_server(server_path="/usr/local/bin/public-browser")
 
             mock_popen.assert_called_once_with(
-                ["/usr/local/bin/silbercuechrome", "--script"],
+                ["/usr/local/bin/public-browser", "--script"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
     def test_start_server_finds_binary_in_path(self) -> None:
-        """start_server() finds silbercuechrome in PATH."""
+        """start_server() finds public-browser in PATH."""
         client = ScriptApiClient("127.0.0.1", 19998)
 
-        with patch("shutil.which", side_effect=lambda name: "/opt/bin/silbercuechrome" if name == "silbercuechrome" else None), \
+        with patch("shutil.which", side_effect=lambda name: "/opt/bin/public-browser" if name == "public-browser" else None), \
              patch("subprocess.Popen") as mock_popen, \
              patch.object(client, "_wait_for_server"):
             mock_proc = MagicMock()
@@ -303,7 +303,7 @@ class TestScriptApiClientAutoStart:
             client.start_server()
 
             mock_popen.assert_called_once_with(
-                ["/opt/bin/silbercuechrome", "--script"],
+                ["/opt/bin/public-browser", "--script"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -328,7 +328,7 @@ class TestScriptApiClientAutoStart:
             client.start_server()
 
             mock_popen.assert_called_once_with(
-                ["/usr/local/bin/npx", "-y", "@silbercue/chrome@latest", "--", "--script"],
+                ["/usr/local/bin/npx", "-y", "public-browser@latest", "--", "--script"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

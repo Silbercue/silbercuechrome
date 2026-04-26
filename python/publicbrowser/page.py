@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from silbercuechrome.client import ScriptApiClient, DEFAULT_TIMEOUT, LONG_TIMEOUT
-from silbercuechrome.escape_hatch import CdpEscapeHatch
+from publicbrowser.client import ScriptApiClient, DEFAULT_TIMEOUT, LONG_TIMEOUT
+from publicbrowser.escape_hatch import CdpEscapeHatch
 
 
 class Page:

@@ -1,6 +1,6 @@
 """Chrome — entry point for browser automation (v2 — Shared Core Client).
 
-Provides the top-level ``Chrome`` class that connects to the SilbercueChrome
+Provides the top-level ``Chrome`` class that connects to the Public Browser
 Script API server and manages tab lifecycle via ``new_page()``.
 
 In v2, all browser automation logic runs server-side. The Python library is a
@@ -8,7 +8,7 @@ thin HTTP client that sends tool calls to the server on port 9223.
 
 Usage::
 
-    from silbercuechrome import Chrome
+    from publicbrowser import Chrome
 
     chrome = Chrome.connect()
     with chrome.new_page() as page:
@@ -22,12 +22,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Generator
 
-from silbercuechrome.client import ScriptApiClient
-from silbercuechrome.page import Page
+from publicbrowser.client import ScriptApiClient
+from publicbrowser.page import Page
 
 
 class Chrome:
-    """Connection to the SilbercueChrome Script API server.
+    """Connection to the Public Browser Script API server.
 
     Use ``Chrome.connect()`` to create an instance. Do not instantiate directly.
 
@@ -48,7 +48,7 @@ class Chrome:
         server_path: str | None = None,
         auto_start: bool = True,
     ) -> Chrome:
-        """Connect to the SilbercueChrome Script API server.
+        """Connect to the Public Browser Script API server.
 
         If the server is not running and ``auto_start`` is True, starts it
         automatically as a subprocess.
@@ -78,8 +78,8 @@ class Chrome:
                 client.start_server(server_path=server_path)
             else:
                 raise ConnectionError(
-                    f"SilbercueChrome server not reachable on {host}:{port}. "
-                    f"Start it with 'silbercuechrome --script' or set auto_start=True."
+                    f"Public Browser server not reachable on {host}:{port}. "
+                    f"Start it with 'public-browser --script' or set auto_start=True."
                 )
 
         return cls(client)

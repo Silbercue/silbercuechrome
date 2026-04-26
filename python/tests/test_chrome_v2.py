@@ -16,9 +16,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from silbercuechrome.chrome import Chrome
-from silbercuechrome.client import ScriptApiClient
-from silbercuechrome.page import Page
+from publicbrowser.chrome import Chrome
+from publicbrowser.client import ScriptApiClient
+from publicbrowser.page import Page
 
 
 # ---------------------------------------------------------------------------

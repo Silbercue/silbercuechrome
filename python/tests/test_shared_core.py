@@ -28,9 +28,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from silbercuechrome.chrome import Chrome
-from silbercuechrome.client import ScriptApiClient
-from silbercuechrome.page import Page
+from publicbrowser.chrome import Chrome
+from publicbrowser.client import ScriptApiClient
+from publicbrowser.page import Page
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +485,7 @@ class TestAutoStartVerification:
 
         client = ScriptApiClient("127.0.0.1", 19997)
 
-        with patch("shutil.which", side_effect=lambda name: "/opt/bin/silbercuechrome" if name == "silbercuechrome" else None), \
+        with patch("shutil.which", side_effect=lambda name: "/opt/bin/public-browser" if name == "public-browser" else None), \
              patch("subprocess.Popen") as mock_popen, \
              patch.object(client, "_wait_for_server"):
             mock_proc = MagicMock()
@@ -496,7 +496,7 @@ class TestAutoStartVerification:
 
             # PATH binary is used, NOT npx
             mock_popen.assert_called_once_with(
-                ["/opt/bin/silbercuechrome", "--script"],
+                ["/opt/bin/public-browser", "--script"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -523,7 +523,7 @@ class TestAutoStartVerification:
             client.start_server()
 
             mock_popen.assert_called_once_with(
-                ["/usr/local/bin/npx", "-y", "@silbercue/chrome@latest", "--", "--script"],
+                ["/usr/local/bin/npx", "-y", "public-browser@latest", "--", "--script"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -535,7 +535,7 @@ class TestAutoStartVerification:
 
         client = ScriptApiClient("127.0.0.1", 19997)
 
-        with patch("shutil.which", return_value="/usr/bin/silbercuechrome"), \
+        with patch("shutil.which", return_value="/usr/bin/public-browser"), \
              patch("subprocess.Popen") as mock_popen, \
              patch.object(client, "_wait_for_server"):
             mock_proc = MagicMock()

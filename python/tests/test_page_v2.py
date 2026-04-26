@@ -20,9 +20,9 @@ from typing import Any
 
 import pytest
 
-from silbercuechrome.client import ScriptApiClient
-from silbercuechrome.escape_hatch import CdpEscapeHatch
-from silbercuechrome.page import Page
+from publicbrowser.client import ScriptApiClient
+from publicbrowser.escape_hatch import CdpEscapeHatch
+from publicbrowser.page import Page
 
 
 # ---------------------------------------------------------------------------

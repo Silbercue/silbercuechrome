@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from silbercuechrome.page import (
+from publicbrowser.page import (
     _extract_text,
     _check_error,
     _parse_evaluate_response,
