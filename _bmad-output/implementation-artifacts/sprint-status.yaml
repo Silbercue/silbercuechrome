@@ -107,7 +107,7 @@ development_status:
   11-4-rename-public-browser: done
   11-5-npm-package-migration: done
   11-6-python-package-migration: done
-  11-7-v2-0-0-release: backlog
+  11-7-v2-0-0-release: done
   epic-11-retrospective: optional
 
   # Epic 12: Cortex Phase 1 — Lokales Lernen + Merkle Log

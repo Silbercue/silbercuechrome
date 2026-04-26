@@ -1,5 +1,118 @@
 # Changelog
 
+## [2.0.0] - 2026-04-26
+
+### Everything is Free
+
+All features that were previously Pro-only are now available to everyone at no cost:
+
+- **23 Tools** unlocked (was: 10 Free, 13 Pro-gated)
+- **Unlimited `run_plan`** steps (was: Free limited to 3 steps)
+- **Parallel execution** in `run_plan` (was: Pro-only)
+- **`switch_tab`**, **`virtual_desk`** and all extended tools — no license needed
+- **License system completely removed** — no keys, no grace period, no Polar.sh dependency
+
+### Renamed: SilbercueChrome is now Public Browser
+
+The project has been renamed to reflect its new identity as a fully open, community-driven browser automation server.
+
+| What | Old | New |
+|------|-----|-----|
+| npm package | `@silbercue/chrome` | `public-browser` |
+| Binary | `silbercuechrome` | `public-browser` |
+| Python package | `silbercuechrome` | `publicbrowser` |
+| Debug env var | `DEBUG=silbercuechrome` | `DEBUG=public-browser` |
+| User data dir | `~/.silbercuechrome/` | `~/.public-browser/` |
+| GitHub repo | `Silbercue/SilbercueChrome` | `Silbercue/public-browser` |
+
+### Migration Guide (v1.3.0 to v2.0.0)
+
+**npm / npx users:**
+
+```bash
+# Old
+npx @silbercue/chrome@latest
+# New
+npx public-browser@latest
+```
+
+Update your MCP configuration (Claude Desktop, Cursor, etc.):
+
+```json
+{
+  "mcpServers": {
+    "public-browser": {
+      "command": "npx",
+      "args": ["-y", "public-browser@latest"]
+    }
+  }
+}
+```
+
+**Python users:**
+
+```bash
+pip uninstall silbercuechrome
+pip install publicbrowser
+```
+
+```python
+# Old
+from silbercuechrome import Chrome
+# New
+from publicbrowser import Chrome
+```
+
+**Environment variables:**
+
+```bash
+# Old
+DEBUG=silbercuechrome
+# New
+DEBUG=public-browser
+```
+
+**User data:** The data directory moved from `~/.silbercuechrome/` to `~/.public-browser/`. Your existing data is not migrated automatically — copy it manually if needed.
+
+### Breaking Changes
+
+- **Package name:** `@silbercue/chrome` is deprecated. Use `public-browser`.
+- **Binary name:** `silbercuechrome` is now `public-browser`.
+- **Python package:** `silbercuechrome` is now `publicbrowser`.
+- **Debug env var:** `DEBUG=silbercuechrome` is now `DEBUG=public-browser`.
+- **User data dir:** `~/.silbercuechrome/` is now `~/.public-browser/`.
+- **License keys:** No longer accepted or required. Remove any `SILBERCUE_PRO_KEY` environment variable.
+
+### Removed
+
+- License validation and Polar.sh integration
+- Pro/Free feature gating logic
+- `SILBERCUE_PRO_KEY` environment variable support
+- Pro-specific build pipeline and repository
+
+---
+
+## [1.3.0] - 2026-04-26
+
+### Changed
+- Internal pre-release for Public Browser migration (Stories 11.1-11.6)
+- All Pro feature gates removed
+- License system removed
+- Renamed to Public Browser
+
+## [1.2.0] - 2026-04-25
+
+### Fixed
+- FR-045: evaluate spiral hint now escalates correctly
+
+### Changed
+- Full tool set is default again (FR-035 revised)
+
+## [1.1.1] - 2026-04-21
+
+### Fixed
+- Same-site cross-origin iframes now inlined in A11y-Tree
+
 ## [1.1.0] - 2026-04-16
 
 ### Added
