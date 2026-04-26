@@ -27,6 +27,10 @@ const __dirname = dirname(__filename);
 export const CONFIG = {
   FREE_REPO: resolve(__dirname, ".."),
   NPM_PACKAGE: "public-browser",
+  /** Old package name — deprecated in favour of NPM_PACKAGE. */
+  OLD_NPM_PACKAGE: "@silbercue/chrome",
+  DEPRECATION_MESSAGE:
+    "This package has been renamed to public-browser. Install: npx public-browser@latest",
   GITHUB_REPO_FREE: "Silbercue/public-browser",
   /**
    * Default git branch.
@@ -361,6 +365,9 @@ export function phase5_publishAndRelease(
   if (!opts.skipNpm) {
     if (opts.dryRun) {
       log("  [DRY-RUN] Would run: npm publish --access public");
+      log(
+        `  [DRY-RUN] Would deprecate ${CONFIG.OLD_NPM_PACKAGE}: "${CONFIG.DEPRECATION_MESSAGE}"`,
+      );
     } else {
       log("  Publishing to npm...");
       try {
@@ -371,6 +378,23 @@ export function phase5_publishAndRelease(
           success: false,
           message: `npm publish failed: ${err instanceof Error ? err.message : String(err)}`,
         };
+      }
+
+      // 5.1b Deprecate old package name
+      log(`  Deprecating ${CONFIG.OLD_NPM_PACKAGE}...`);
+      try {
+        run(
+          "npm",
+          ["deprecate", CONFIG.OLD_NPM_PACKAGE, CONFIG.DEPRECATION_MESSAGE],
+          ctx.freeRepo,
+        );
+        log(`  Deprecated ${CONFIG.OLD_NPM_PACKAGE} with redirect to ${CONFIG.NPM_PACKAGE}`);
+      } catch (err) {
+        // Deprecation failure is non-fatal — the new package is already published.
+        // Log a warning but do not abort the pipeline.
+        log(
+          `  WARNING: npm deprecate failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   } else {

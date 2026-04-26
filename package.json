@@ -59,6 +59,10 @@
     "typescript-eslint": "^8",
     "vitest": "^3"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Silbercue/public-browser.git"
+  },
   "engines": {
     "node": ">=18"
   },
