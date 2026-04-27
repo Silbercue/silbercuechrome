@@ -1,0 +1,197 @@
+{
+  "login": {
+    "navigate": {
+      "view_page": { "probability": 0.95, "sampleCount": 0 },
+      "wait_for": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "view_page": {
+      "fill_form": { "probability": 0.80, "sampleCount": 0 },
+      "click": { "probability": 0.15, "sampleCount": 0 },
+      "type": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "fill_form": {
+      "click": { "probability": 0.90, "sampleCount": 0 },
+      "view_page": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.85, "sampleCount": 0 },
+      "wait_for": { "probability": 0.15, "sampleCount": 0 }
+    }
+  },
+  "signup": {
+    "navigate": {
+      "view_page": { "probability": 0.95, "sampleCount": 0 },
+      "wait_for": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "view_page": {
+      "fill_form": { "probability": 0.75, "sampleCount": 0 },
+      "type": { "probability": 0.15, "sampleCount": 0 },
+      "click": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "fill_form": {
+      "click": { "probability": 0.85, "sampleCount": 0 },
+      "view_page": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.80, "sampleCount": 0 },
+      "wait_for": { "probability": 0.20, "sampleCount": 0 }
+    }
+  },
+  "search_form": {
+    "navigate": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "view_page": {
+      "type": { "probability": 0.60, "sampleCount": 0 },
+      "click": { "probability": 0.25, "sampleCount": 0 },
+      "fill_form": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "type": {
+      "click": { "probability": 0.70, "sampleCount": 0 },
+      "press_key": { "probability": 0.30, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    }
+  },
+  "search_results": {
+    "navigate": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "view_page": {
+      "click": { "probability": 0.60, "sampleCount": 0 },
+      "scroll": { "probability": 0.25, "sampleCount": 0 },
+      "type": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.85, "sampleCount": 0 },
+      "wait_for": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "scroll": {
+      "view_page": { "probability": 0.70, "sampleCount": 0 },
+      "click": { "probability": 0.30, "sampleCount": 0 }
+    }
+  },
+  "data_table": {
+    "navigate": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "view_page": {
+      "click": { "probability": 0.50, "sampleCount": 0 },
+      "scroll": { "probability": 0.30, "sampleCount": 0 },
+      "type": { "probability": 0.20, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.80, "sampleCount": 0 },
+      "wait_for": { "probability": 0.20, "sampleCount": 0 }
+    },
+    "scroll": {
+      "view_page": { "probability": 0.65, "sampleCount": 0 },
+      "click": { "probability": 0.35, "sampleCount": 0 }
+    }
+  },
+  "form_simple": {
+    "navigate": {
+      "view_page": { "probability": 0.95, "sampleCount": 0 },
+      "wait_for": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "view_page": {
+      "fill_form": { "probability": 0.70, "sampleCount": 0 },
+      "type": { "probability": 0.20, "sampleCount": 0 },
+      "click": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "fill_form": {
+      "click": { "probability": 0.85, "sampleCount": 0 },
+      "view_page": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "type": {
+      "click": { "probability": 0.60, "sampleCount": 0 },
+      "fill_form": { "probability": 0.40, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.85, "sampleCount": 0 },
+      "wait_for": { "probability": 0.15, "sampleCount": 0 }
+    }
+  },
+  "article": {
+    "navigate": {
+      "view_page": { "probability": 0.95, "sampleCount": 0 },
+      "wait_for": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "view_page": {
+      "scroll": { "probability": 0.55, "sampleCount": 0 },
+      "click": { "probability": 0.35, "sampleCount": 0 },
+      "press_key": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "scroll": {
+      "view_page": { "probability": 0.60, "sampleCount": 0 },
+      "scroll": { "probability": 0.25, "sampleCount": 0 },
+      "click": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    }
+  },
+  "dashboard": {
+    "navigate": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "view_page": {
+      "click": { "probability": 0.55, "sampleCount": 0 },
+      "scroll": { "probability": 0.30, "sampleCount": 0 },
+      "type": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.80, "sampleCount": 0 },
+      "wait_for": { "probability": 0.20, "sampleCount": 0 }
+    },
+    "scroll": {
+      "view_page": { "probability": 0.65, "sampleCount": 0 },
+      "click": { "probability": 0.35, "sampleCount": 0 }
+    }
+  },
+  "settings": {
+    "navigate": {
+      "view_page": { "probability": 0.95, "sampleCount": 0 },
+      "wait_for": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "view_page": {
+      "click": { "probability": 0.60, "sampleCount": 0 },
+      "fill_form": { "probability": 0.25, "sampleCount": 0 },
+      "scroll": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.80, "sampleCount": 0 },
+      "wait_for": { "probability": 0.20, "sampleCount": 0 }
+    },
+    "fill_form": {
+      "click": { "probability": 0.90, "sampleCount": 0 },
+      "view_page": { "probability": 0.10, "sampleCount": 0 }
+    }
+  },
+  "navigation": {
+    "navigate": {
+      "view_page": { "probability": 0.90, "sampleCount": 0 },
+      "wait_for": { "probability": 0.10, "sampleCount": 0 }
+    },
+    "view_page": {
+      "click": { "probability": 0.75, "sampleCount": 0 },
+      "scroll": { "probability": 0.20, "sampleCount": 0 },
+      "type": { "probability": 0.05, "sampleCount": 0 }
+    },
+    "click": {
+      "view_page": { "probability": 0.85, "sampleCount": 0 },
+      "wait_for": { "probability": 0.15, "sampleCount": 0 }
+    },
+    "scroll": {
+      "view_page": { "probability": 0.60, "sampleCount": 0 },
+      "click": { "probability": 0.40, "sampleCount": 0 }
+    }
+  }
+}

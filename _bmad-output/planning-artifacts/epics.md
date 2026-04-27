@@ -151,7 +151,8 @@ N/A — MCP-Server ohne UI.
 | FR25-FR29 | DONE/DEFERRED | Epic 6 (Steering), Stories 6.1/6.2 deferred |
 | FR30-FR31 | GEAENDERT | Epic 11 (Migration) — Rename + keine Einschraenkungen |
 | FR34-FR39 | v1 DONE | Epic 9 (Script API v1), v2 Shared Core ausstehend |
-| FR40-FR46 | NEU/RETROFIT | Epic 12 (Cortex Phase 1, DONE) + Epic 12a (Pattern Generalization) + Epic 13 (Cortex Phase 2) |
+| FR40-FR44 | DONE | Epic 12 (Cortex Phase 1) + Epic 12a (Pattern Generalization) |
+| FR45-FR46 | Vereinfacht | Story 12a.6 (Community-Markov im npm-Paket). Epic 13 gestrichen |
 
 ## Epic List
 
@@ -173,7 +174,7 @@ N/A — MCP-Server ohne UI.
 - **Epic 11: Public Browser Migration (v2.0.0)** — Pro-Features freischalten, License entfernen, Rename, Package-Migration
 - **Epic 12: Cortex Phase 1 — Lokales Lernen + Merkle Log** — Pattern-Recorder, lokaler Merkle Log, Cortex-Hints, Telemetrie-Upload — DONE
 - **Epic 12a: Cortex Pattern Generalization** — Seitentyp-Klassifikator, Markov-Tabelle, Hint-Matcher + Telemetrie Retrofit auf PageType
-- **Epic 13: Cortex Phase 2 — Validierung + Distribution** — WASM-Validator, Sigstore-Signierung, OCI Distribution, Canary-Deployment
+- ~~**Epic 13: Cortex Phase 2 — Validierung + Distribution**~~ — GESTRICHEN (2026-04-27). Grund: Epic 12a (PageType-Pivot) hat das Problem eliminiert. 10KB Markov-Tabelle shipped statisch im npm-Paket, braucht weder WASM noch Sigstore noch OCI. Verbleibende Arbeit → Story 12a.6
 
 ## Epic 11: Public Browser Migration (v2.0.0)
 
@@ -553,116 +554,49 @@ So that Community-Daten im neuen Format gesammelt werden und NFR21 staerker erfu
 **Then** enthaelt es: pageType, toolSequence, successRate, contentHash, timestamp
 **And** KEINE domain, KEINE pathPattern (NFR21 staerker erfuellt)
 
-## Epic 13: Cortex Phase 2 — Validierung + Distribution
+## ~~Epic 13: Cortex Phase 2 — Validierung + Distribution~~ GESTRICHEN
 
-**Goal:** Patterns werden ueber Installationen geteilt, statistisch validiert und kryptographisch signiert verteilt. Die Community profitiert kollektiv.
+**Datum:** 2026-04-27
+**Grund:** Epic 12a (PageType-Pivot) hat das zugrunde liegende Problem eliminiert.
 
-**FRs:** FR45-FR46
-**NFRs:** NFR19 (Bundle-Download max 2s), NFR20 (WASM-Determinismus), NFR21 (Pattern-Privacy)
+Die Markov-Tabelle ist ~10KB statt Megabytes an Domain-Patterns. Damit entfallen:
+- WASM-Validator (JSON-Schema + SHA256 reicht fuer 10KB)
+- Sigstore-Signierung (npm-Paket ist bereits signiert)
+- OCI Distribution (10KB shipped statisch mit `npm install`)
+- Canary-Deployment (monatliche npm-Releases reichen)
+- Bundle-Loader (kein separater Download noetig)
 
-### Story 13.1: WASM-Validator
+**FRs betroffen:** FR45-FR46 werden vereinfacht zu Story 12a.6.
+**NFRs:** NFR19 trivial erfuellt (kein Download), NFR20 entfaellt (kein WASM), NFR21 bereits durch 12a.5 erfuellt.
+
+---
+
+### Story 12a.6: Community-Markov-Tabelle im npm-Paket
 
 As a Developer,
-I want einen deterministischen WASM-Validator der Patterns statistisch validiert,
-So that nur vertrauenswuerdige Patterns ins Community-Bundle gelangen.
+I want eine vorkuratierte Community-Markov-Tabelle die statisch im npm-Paket ausgeliefert wird,
+So that jede Installation sofort von Community-Wissen profitiert (ohne separaten Download).
 
 **Acceptance Criteria:**
 
-**Given** cortex-validator/ ist ein Rust-Projekt mit Cargo.toml
-**When** es mit Nix gebaut wird (flake.nix)
-**Then** produziert es ein WASM-Modul (wasm32-wasi)
+**Given** `src/cortex/community-markov.json` existiert
+**When** der MCP-Server startet
+**Then** wird die Community-Tabelle geladen und mit der lokalen Markov-Tabelle gemergt (Community als Baseline, lokale Daten ueberschreiben bei gleichem Key)
 
-**Given** eine Markov-Tabelle mit Eintraegen wird dem Validator uebergeben
-**When** er validiert
-**Then** werden nur Markov-Tabellen-Eintraege akzeptiert die: aus N unabhaengigen Installationen aggregiert sind, innerhalb eines Zeitfensters liegen, keinen Anomalie-Check ausloesen. Input-Format: Markov-Tabelle (JSON), nicht Einzel-Pattern-Liste
+**Given** die Community-Tabelle geladen wird
+**When** ein SHA256-Integritaets-Check durchgefuehrt wird
+**Then** wird der Hashwert gegen einen im Code hinterlegten Expected-Hash geprueft
+**And** bei Mismatch wird die Tabelle ignoriert und eine Warnung auf stderr geloggt
 
-**Given** der gleiche Input auf zwei verschiedenen Plattformen
-**When** der Validator ausgefuehrt wird
-**Then** ist der Output identisch (NFR20, verifizierbar durch Nix-Build-Hash)
+**Given** Telemetrie-Daten von Nutzern eingehen (opt-in, Story 12a.5)
+**When** ein Aggregations-Script (`scripts/aggregate-telemetry.ts`) ausgefuehrt wird
+**Then** wird eine neue `community-markov.json` generiert (Batch-Job, nicht Echtzeit)
+**And** die Datei wird beim naechsten `npm publish` mit ausgeliefert
 
-### Story 13.2: Sigstore-Signierung
+**Given** die Community-Tabelle als JSON vorliegt
+**Then** ist sie unter 50KB (Ziel: ~10KB bei 20 Seitentypen)
+**And** enthaelt NUR: pageType, lastTool, nextTool, probability, sampleCount
+**And** keine Domain, keine URLs, kein PII (NFR21)
 
-As a Developer,
-I want dass validierte Bundles per Sigstore signiert werden,
-So that jede Installation die Authentizitaet und Integritaet des Bundles verifizieren kann.
-
-**Acceptance Criteria:**
-
-**Given** ein validiertes Cortex-Bundle liegt vor
-**When** Cosign Keyless Signing via GitHub OIDC ausgefuehrt wird
-**Then** existiert eine Sigstore-Signatur im Rekor Transparency Log
-
-**Given** kein Private Key wird verwendet (Keyless)
-**Then** ist die Signierung an die GitHub-Identity gebunden, nicht an einen rotierenden Key
-
-### Story 13.3: OCI Distribution
-
-As a Developer,
-I want Cortex-Bundles ueber eine OCI Registry verteilen,
-So that Installationen das Bundle beim Start herunterladen koennen.
-
-**Acceptance Criteria:**
-
-**Given** ein signiertes Bundle vorliegt
-**When** ORAS push an GitHub Container Registry ausgefuehrt wird
-**Then** ist das Bundle Content-Addressed (SHA-256) verfuegbar. Bundle ist eine Markov-Tabelle (~10KB JSON), nicht eine JSONL-Datei mit Einzelpatterns. NFR19 (max 2s Download) ist bei dieser Groesse trivial erfuellt
-
-**Given** cortex/bundle-loader.ts wird beim Server-Start ausgefuehrt
-**When** ein neues Bundle verfuegbar ist
-**Then** wird es heruntergeladen, Sigstore-Signatur und Merkle Proof werden verifiziert (FR45)
-
-**Given** der Download dauert laenger als 2 Sekunden
-**Then** wird auf lokalen Cache zurueckgegriffen oder ohne Cortex gestartet (NFR19)
-
-**Given** ein Bundle ist ungueltig (Signatur-Mismatch, Proof-Fehler)
-**Then** wird es ignoriert — sicherer Default (FR46)
-
-### Story 13.4: Canary-Deployment
-
-As a Developer,
-I want neue Patterns erst an 5% der Installationen ausrollen,
-So that Anomalien erkannt werden bevor sie alle Nutzer betreffen.
-
-**Acceptance Criteria:**
-
-**Given** ein neues Community-Bundle wird gebaut
-**When** das Canary-Flag gesetzt ist
-**Then** laden nur ~5% der Installationen das neue Bundle (basierend auf Installations-ID Hash)
-
-**Given** Anomalie-Metriken ueberschreiten einen Schwellenwert
-**When** der Canary-Check laeuft
-**Then** wird automatisch auf das vorherige Bundle zurueckgerollt
-
-### Story 13.5: Community-Monitoring
-
-As a Developer,
-I want ein oeffentliches Dashboard fuer Cortex-Gesundheit,
-So that die Community die Integritaet des Systems pruefen kann.
-
-**Acceptance Criteria:**
-
-**Given** rekor-monitor laeuft als GitHub Action
-**When** eine neue Signatur im Rekor Transparency Log erscheint
-**Then** wird sie automatisch geprueft und das Dashboard aktualisiert
-
-**Given** ein unautorisierter Signierversuch erkannt wird
-**Then** wird ein Alert ausgeloest
-
-### Story 13.6: Client-Verifikation
-
-As a Developer,
-I want dass jede Installation Bundles lokal verifiziert,
-So that keine ungueltigen oder manipulierten Patterns geladen werden.
-
-**Acceptance Criteria:**
-
-**Given** cortex/bundle-loader.ts laedt ein Bundle herunter
-**When** die Sigstore-Signatur ungueltig ist
-**Then** wird das Bundle ignoriert und eine Warnung geloggt (stderr)
-
-**Given** der Merkle Inclusion Proof fuer einen Pattern-Eintrag schlaegt fehl
-**When** der Eintrag validiert wird
-**Then** wird der einzelne Eintrag ignoriert (nicht das ganze Bundle)
-
-**Given** ein Bundle wird erfolgreich verifiziert
-**Then** werden die Patterns in den hint-matcher geladen und stehen fuer navigate/view_page zur Verfuegung
+**Given** kein `community-markov.json` existiert (erster Start, Entwicklung)
+**Then** startet der Server ohne Community-Daten (nur lokales Lernen, graceful degradation)

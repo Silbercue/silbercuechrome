@@ -6,6 +6,8 @@ import { ToolRegistry } from "./registry.js";
 import { VERSION } from "./version.js";
 import { ScriptApiServer } from "./transport/script-api-server.js";
 import { hintMatcher } from "./cortex/hint-matcher.js";
+import { loadCommunityMarkov } from "./cortex/community-loader.js";
+import { markovTable } from "./cortex/markov-table.js";
 
 /**
  * MCP server bootstrap — lazy-launch architecture.
@@ -129,6 +131,14 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
     hintMatcher.refreshAsync(),
     new Promise((r) => setTimeout(r, 2000)),
   ]);
+
+  // 3a. Story 12a.6: Merge community Markov table after local data is loaded.
+  //     Local data has higher weights from usage and takes precedence via
+  //     merge semantics (max-weight). Community data fills gaps.
+  const communityTable = loadCommunityMarkov();
+  if (communityTable) {
+    markovTable.merge(communityTable);
+  }
 
   // 3b. Create the MCP server with dynamic instructions.
   const server = new McpServer(

@@ -33,7 +33,7 @@
     "./cdp/session-manager.js": "./build/cdp/session-manager.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x build/index.js",
+    "build": "tsc && chmod +x build/index.js && cp src/cortex/community-markov.json build/cortex/community-markov.json",
     "test": "vitest run",
     "token-count": "node scripts/token-count.mjs",
     "lint": "eslint .",
