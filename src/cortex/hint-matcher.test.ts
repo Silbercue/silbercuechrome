@@ -19,17 +19,24 @@ import { tmpdir } from "node:os";
 import { HintMatcher, hintMatcher } from "./hint-matcher.js";
 import type { CortexPattern } from "./cortex-types.js";
 
-/** Helper to create a minimal CortexPattern. */
-function makePattern(overrides: Partial<CortexPattern> = {}): CortexPattern {
-  return {
+/**
+ * Helper to create a minimal CortexPattern (Story 12a.2: pageType required, domain optional).
+ *
+ * Story 12a.2 Temporary Compat: pathPattern is no longer on CortexPattern but
+ * hint-matcher still reads it via `(p as any).pathPattern` for compat until 12a.4.
+ * The helper includes pathPattern as an extra field on the object.
+ */
+function makePattern(overrides: Partial<CortexPattern> & { domain?: string; pathPattern?: string } = {}): CortexPattern {
+  const base = {
+    pageType: "dashboard",
     domain: "example.com",
     pathPattern: "/dashboard",
     toolSequence: ["navigate", "view_page", "click"],
-    outcome: "success",
+    outcome: "success" as const,
     contentHash: "a1b2c3d4e5f6a7b8",
     timestamp: Date.now(),
-    ...overrides,
   };
+  return { ...base, ...overrides } as CortexPattern;
 }
 
 describe("HintMatcher (Story 12.3)", () => {

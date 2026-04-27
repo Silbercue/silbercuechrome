@@ -25,29 +25,47 @@ import {
 } from "./cortex-types.js";
 
 describe("cortex-types (Story 12.1)", () => {
-  describe("CortexPattern shape", () => {
+  describe("CortexPattern shape (Story 12a.2: pageType-based)", () => {
     it("has all required fields with correct types", () => {
       const pattern: CortexPattern = {
-        domain: "example.com",
-        pathPattern: "/users/:id/profile",
+        pageType: "login",
         toolSequence: ["navigate", "view_page", "click"],
         outcome: "success",
         contentHash: "a1b2c3d4e5f6a7b8",
         timestamp: Date.now(),
       };
 
-      expect(pattern.domain).toBe("example.com");
-      expect(pattern.pathPattern).toBe("/users/:id/profile");
+      expect(pattern.pageType).toBe("login");
       expect(pattern.toolSequence).toEqual(["navigate", "view_page", "click"]);
       expect(pattern.outcome).toBe("success");
       expect(pattern.contentHash).toBe("a1b2c3d4e5f6a7b8");
       expect(typeof pattern.timestamp).toBe("number");
     });
 
+    it("domain is optional (debugging metadata only)", () => {
+      const withDomain: CortexPattern = {
+        pageType: "data_table",
+        domain: "example.com",
+        toolSequence: ["navigate", "view_page"],
+        outcome: "success",
+        contentHash: "0000000000000000",
+        timestamp: 0,
+      };
+      expect(withDomain.domain).toBe("example.com");
+
+      const withoutDomain: CortexPattern = {
+        pageType: "data_table",
+        toolSequence: ["navigate", "view_page"],
+        outcome: "success",
+        contentHash: "0000000000000000",
+        timestamp: 0,
+      };
+      expect(withoutDomain.domain).toBeUndefined();
+    });
+
     it("outcome is constrained to 'success'", () => {
       const pattern: CortexPattern = {
-        domain: "test.com",
-        pathPattern: "/",
+        pageType: "unknown",
         toolSequence: ["navigate", "view_page"],
         outcome: "success",
         contentHash: "0000000000000000",
@@ -57,20 +75,18 @@ describe("cortex-types (Story 12.1)", () => {
     });
   });
 
-  describe("ToolCallEvent shape", () => {
+  describe("ToolCallEvent shape (Story 12a.2: pageType-based)", () => {
     it("has all required fields with correct types", () => {
       const event: ToolCallEvent = {
         toolName: "click",
         timestamp: Date.now(),
-        domain: "example.com",
-        path: "/users/123/profile",
+        pageType: "login",
         contentHash: "a1b2c3d4e5f6a7b8",
       };
 
       expect(event.toolName).toBe("click");
       expect(typeof event.timestamp).toBe("number");
-      expect(event.domain).toBe("example.com");
-      expect(event.path).toBe("/users/123/profile");
+      expect(event.pageType).toBe("login");
       expect(event.contentHash).toBe("a1b2c3d4e5f6a7b8");
     });
   });

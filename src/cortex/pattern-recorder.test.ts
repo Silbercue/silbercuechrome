@@ -38,19 +38,17 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("navigate -> view_page -> click -> wait_for produces a pattern (AC #1)", () => {
-    const domain = "example.com";
-    const path = "/products/list";
+    const pageType = "data_table";
     const hash = "a1b2c3d4e5f6a7b8";
 
-    recorder.record("navigate", domain, path, hash);
-    recorder.record("view_page", domain, path, hash);
-    recorder.record("click", domain, path, hash);
-    recorder.record("wait_for", domain, path, hash);
+    recorder.record("navigate", "unknown", hash);
+    recorder.record("view_page", pageType, hash);
+    recorder.record("click", pageType, hash);
+    recorder.record("wait_for", pageType, hash);
 
     expect(recorder.emittedPatterns).toHaveLength(1);
     const p = recorder.emittedPatterns[0];
-    expect(p.domain).toBe("example.com");
-    expect(p.pathPattern).toBe("/products/list");
+    expect(p.pageType).toBe("data_table");
     expect(p.toolSequence).toEqual(["navigate", "view_page", "click", "wait_for"]);
     expect(p.outcome).toBe("success");
     expect(p.contentHash).toBe(hash);
@@ -62,9 +60,9 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("sequence without navigate at start produces no pattern", () => {
-    recorder.record("view_page", "example.com", "/", "abc123");
-    recorder.record("click", "example.com", "/", "abc123");
-    recorder.record("wait_for", "example.com", "/", "abc123");
+    recorder.record("view_page", "login", "abc123");
+    recorder.record("click", "login", "abc123");
+    recorder.record("wait_for", "login", "abc123");
 
     expect(recorder.emittedPatterns).toHaveLength(0);
   });
@@ -74,7 +72,7 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("single tool call produces no pattern", () => {
-    recorder.record("navigate", "example.com", "/", "abc123");
+    recorder.record("navigate", "unknown", "abc123");
 
     expect(recorder.emittedPatterns).toHaveLength(0);
   });
@@ -84,62 +82,47 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("ignores events older than SEQUENCE_TIMEOUT_MS", () => {
-    recorder.record("navigate", "example.com", "/page", "hash1");
+    recorder.record("navigate", "unknown", "hash1");
 
     // Advance time beyond the timeout
     vi.advanceTimersByTime(SEQUENCE_TIMEOUT_MS + 1);
 
-    recorder.record("view_page", "example.com", "/page", "hash2");
+    recorder.record("view_page", "article", "hash2");
 
     // The navigate is too old, so no valid sequence starts with navigate
     expect(recorder.emittedPatterns).toHaveLength(0);
   });
 
   it("records pattern when all events are within SEQUENCE_TIMEOUT_MS", () => {
-    recorder.record("navigate", "example.com", "/page", "hash1");
+    recorder.record("navigate", "unknown", "hash1");
 
     // Advance time but stay within the timeout
     vi.advanceTimersByTime(SEQUENCE_TIMEOUT_MS - 1);
 
-    recorder.record("view_page", "example.com", "/page", "hash2");
+    recorder.record("view_page", "article", "hash2");
 
     expect(recorder.emittedPatterns).toHaveLength(1);
   });
 
   // =========================================================================
-  // pathPattern normalisation
+  // Story 12a.2: pageType from last event
   // =========================================================================
 
-  it("normalises UUID path segments to :uuid", () => {
-    recorder.record("navigate", "example.com", "/users/550e8400-e29b-41d4-a716-446655440000/profile", "h1");
-    recorder.record("view_page", "example.com", "/users/550e8400-e29b-41d4-a716-446655440000/profile", "h2");
+  it("uses pageType from the LAST event, not the navigate event", () => {
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "login", "h2");
 
     expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].pathPattern).toBe("/users/:uuid/profile");
+    expect(recorder.emittedPatterns[0].pageType).toBe("login");
   });
 
-  it("normalises numeric ID path segments to :id", () => {
-    recorder.record("navigate", "example.com", "/posts/12345/comments", "h1");
-    recorder.record("view_page", "example.com", "/posts/12345/comments", "h2");
+  it("navigate with unknown pageType does not affect final pattern", () => {
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "search_results", "h2");
+    recorder.record("click", "search_results", "h3");
 
     expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].pathPattern).toBe("/posts/:id/comments");
-  });
-
-  it("normalises hex hash path segments to :hash", () => {
-    recorder.record("navigate", "example.com", "/assets/a1b2c3d4e5f6a7b8/image.png", "h1");
-    recorder.record("view_page", "example.com", "/assets/a1b2c3d4e5f6a7b8/image.png", "h2");
-
-    expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].pathPattern).toBe("/assets/:hash/image.png");
-  });
-
-  it("does not normalise short non-ID segments", () => {
-    recorder.record("navigate", "example.com", "/about/team", "h1");
-    recorder.record("view_page", "example.com", "/about/team", "h2");
-
-    expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].pathPattern).toBe("/about/team");
+    expect(recorder.emittedPatterns[0].pageType).toBe("search_results");
   });
 
   // =========================================================================
@@ -169,13 +152,13 @@ describe("PatternRecorder (Story 12.1)", () => {
   it("ring buffer discards events beyond 64", () => {
     // Fill buffer with 64 non-navigate events
     for (let i = 0; i < 64; i++) {
-      recorder.record("view_page", "example.com", "/", `hash${i}`);
+      recorder.record("view_page", "article", `hash${i}`);
     }
 
     // The navigate event we recorded earlier should be gone
     // Now add a navigate + view_page — only these 2 are in the buffer
-    recorder.record("navigate", "example.com", "/test", "h1");
-    recorder.record("view_page", "example.com", "/test", "h2");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "article", "h2");
 
     // The buffer was trimmed from the front. Navigate is event 65, view_page is 66.
     // After trim the buffer has 64 entries: the last 64 events.
@@ -185,11 +168,11 @@ describe("PatternRecorder (Story 12.1)", () => {
   });
 
   it("navigate at position 0 is lost when buffer overflows", () => {
-    recorder.record("navigate", "example.com", "/lost", "h0");
+    recorder.record("navigate", "unknown", "h0");
 
     // Push 64 more non-navigate events — navigate gets pushed out
     for (let i = 0; i < 64; i++) {
-      recorder.record("view_page", "example.com", "/lost", `hash${i}`);
+      recorder.record("view_page", "article", `hash${i}`);
     }
 
     // One pattern was emitted (and continuously updated/replaced as the
@@ -214,16 +197,16 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("records multiple patterns from different navigate sequences", () => {
-    recorder.record("navigate", "site-a.com", "/page1", "h1");
-    recorder.record("view_page", "site-a.com", "/page1", "h2");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "login", "h2");
 
-    recorder.record("navigate", "site-b.com", "/page2", "h3");
-    recorder.record("click", "site-b.com", "/page2", "h4");
-    recorder.record("view_page", "site-b.com", "/page2", "h5");
+    recorder.record("navigate", "unknown", "h3");
+    recorder.record("click", "data_table", "h4");
+    recorder.record("view_page", "data_table", "h5");
 
     expect(recorder.emittedPatterns).toHaveLength(2);
-    expect(recorder.emittedPatterns[0].domain).toBe("site-a.com");
-    expect(recorder.emittedPatterns[1].domain).toBe("site-b.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("login");
+    expect(recorder.emittedPatterns[1].pageType).toBe("data_table");
   });
 
   // =========================================================================
@@ -231,13 +214,13 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("uses latest navigate as sequence start when multiple navigates exist", () => {
-    recorder.record("navigate", "old.com", "/old", "h1");
-    recorder.record("navigate", "new.com", "/new", "h2");
-    recorder.record("view_page", "new.com", "/new", "h3");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("navigate", "unknown", "h2");
+    recorder.record("view_page", "login", "h3");
 
     // Should produce a pattern from the second navigate onward
     expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].domain).toBe("new.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("login");
     expect(recorder.emittedPatterns[0].toolSequence).toEqual(["navigate", "view_page"]);
   });
 
@@ -273,23 +256,23 @@ describe("PatternRecorder (Story 12.1)", () => {
   // =========================================================================
 
   it("isolates events between sessions", () => {
-    recorder.record("navigate", "site-a.com", "/a", "h1", "session-1");
-    recorder.record("view_page", "site-a.com", "/a", "h2", "session-1");
+    recorder.record("navigate", "unknown", "h1", "session-1");
+    recorder.record("view_page", "login", "h2", "session-1");
 
-    recorder.record("navigate", "site-b.com", "/b", "h3", "session-2");
-    recorder.record("view_page", "site-b.com", "/b", "h4", "session-2");
+    recorder.record("navigate", "unknown", "h3", "session-2");
+    recorder.record("view_page", "data_table", "h4", "session-2");
 
     expect(recorder.emittedPatterns).toHaveLength(2);
-    expect(recorder.emittedPatterns[0].domain).toBe("site-a.com");
-    expect(recorder.emittedPatterns[1].domain).toBe("site-b.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("login");
+    expect(recorder.emittedPatterns[1].pageType).toBe("data_table");
   });
 
   it("events from one session do not affect another session's sequence", () => {
     // Session 1: navigate only (below MIN_SEQUENCE_LENGTH)
-    recorder.record("navigate", "site-a.com", "/a", "h1", "session-1");
+    recorder.record("navigate", "unknown", "h1", "session-1");
 
     // Session 2: different events — should NOT combine with session 1
-    recorder.record("view_page", "site-b.com", "/b", "h2", "session-2");
+    recorder.record("view_page", "login", "h2", "session-2");
 
     // No patterns — session 1 has only 1 event, session 2 has no navigate
     expect(recorder.emittedPatterns).toHaveLength(0);
@@ -302,14 +285,14 @@ describe("PatternRecorder (Story 12.1)", () => {
   it("caps emittedPatterns at 1000 entries", () => {
     // Generate 1010 distinct patterns (each with a unique navigate sequence)
     for (let i = 0; i < 1010; i++) {
-      recorder.record("navigate", `site-${i}.com`, "/", `h${i}a`, `sess-${i}`);
-      recorder.record("view_page", `site-${i}.com`, "/", `h${i}b`, `sess-${i}`);
+      recorder.record("navigate", "unknown", `h${i}a`, `sess-${i}`);
+      recorder.record("view_page", `type-${i}`, `h${i}b`, `sess-${i}`);
     }
 
     expect(recorder.emittedPatterns.length).toBeLessThanOrEqual(1000);
     // The oldest patterns should have been removed
-    expect(recorder.emittedPatterns[0].domain).toBe("site-10.com");
-    expect(recorder.emittedPatterns[recorder.emittedPatterns.length - 1].domain).toBe("site-1009.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("type-10");
+    expect(recorder.emittedPatterns[recorder.emittedPatterns.length - 1].pageType).toBe("type-1009");
   });
 });
 
@@ -334,16 +317,15 @@ describe("PatternRecorder + LocalStore Integration (Story 12.2)", () => {
   });
 
   it("pattern is stored in BOTH emittedPatterns array AND persistent JSONL", async () => {
-    const domain = "integration.com";
-    const path = "/test";
+    const pageType = "form_simple";
     const hash = "integrationhash1";
 
-    recorder.record("navigate", domain, path, hash);
-    recorder.record("view_page", domain, path, hash);
+    recorder.record("navigate", "unknown", hash);
+    recorder.record("view_page", pageType, hash);
 
     // In-memory pattern should be emitted immediately
     expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].domain).toBe("integration.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("form_simple");
 
     // M1: Await the store's append directly instead of setTimeout.
     // The fire-and-forget append returns a promise we can access via the store's write queue.
@@ -351,10 +333,10 @@ describe("PatternRecorder + LocalStore Integration (Story 12.2)", () => {
     const flushPattern = recorder.emittedPatterns[0];
     await store.append(flushPattern);
 
-    // Persistent store should have exactly 1 pattern (dedup merges same domain+pathPattern)
+    // Persistent store should have exactly 1 pattern (dedup merges same pageType)
     const all = await store.getAll();
     expect(all).toHaveLength(1);
-    const found = all.find((p) => p.domain === "integration.com");
+    const found = all.find((p) => p.pageType === "form_simple");
     expect(found).toBeDefined();
     expect(found!.toolSequence).toEqual(["navigate", "view_page"]);
 
@@ -366,11 +348,11 @@ describe("PatternRecorder + LocalStore Integration (Story 12.2)", () => {
 
   it("recorder still works without a LocalStore (backward compatibility)", () => {
     const plainRecorder = new PatternRecorder();
-    plainRecorder.record("navigate", "nostore.com", "/", "h1");
-    plainRecorder.record("view_page", "nostore.com", "/", "h2");
+    plainRecorder.record("navigate", "unknown", "h1");
+    plainRecorder.record("view_page", "login", "h2");
 
     expect(plainRecorder.emittedPatterns).toHaveLength(1);
-    expect(plainRecorder.emittedPatterns[0].domain).toBe("nostore.com");
+    expect(plainRecorder.emittedPatterns[0].pageType).toBe("login");
   });
 
   it("LocalStore failure does not break pattern recording", async () => {
@@ -379,12 +361,12 @@ describe("PatternRecorder + LocalStore Integration (Story 12.2)", () => {
     const brokenRecorder = new PatternRecorder(brokenStore);
 
     // Should not throw
-    brokenRecorder.record("navigate", "broken.com", "/", "h1");
-    brokenRecorder.record("view_page", "broken.com", "/", "h2");
+    brokenRecorder.record("navigate", "unknown", "h1");
+    brokenRecorder.record("view_page", "login", "h2");
 
     // In-memory pattern should still be recorded
     expect(brokenRecorder.emittedPatterns).toHaveLength(1);
-    expect(brokenRecorder.emittedPatterns[0].domain).toBe("broken.com");
+    expect(brokenRecorder.emittedPatterns[0].pageType).toBe("login");
 
     // M1: Await the broken store's append to flush the write queue.
     // The append swallows the error internally (M3), so this resolves cleanly.
@@ -416,8 +398,8 @@ describe("PatternRecorder + TelemetryUploader Integration (Story 12.5)", () => {
 
     // Create a fresh recorder (without local store to keep it simple).
     const recorder = new PatternRecorder();
-    recorder.record("navigate", "telemetry-test.com", "/page", "h1");
-    recorder.record("view_page", "telemetry-test.com", "/page", "h2");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "login", "h2");
 
     // Pattern should be emitted.
     expect(recorder.emittedPatterns).toHaveLength(1);
@@ -427,7 +409,7 @@ describe("PatternRecorder + TelemetryUploader Integration (Story 12.5)", () => {
 
     // The spy should have been called with the emitted pattern.
     expect(uploadSpy).toHaveBeenCalledTimes(1);
-    expect(uploadSpy.mock.calls[0][0].domain).toBe("telemetry-test.com");
+    expect(uploadSpy.mock.calls[0][0].pageType).toBe("login");
 
     uploadSpy.mockRestore();
   });
@@ -438,11 +420,11 @@ describe("PatternRecorder + TelemetryUploader Integration (Story 12.5)", () => {
     // still works normally (the actual import won't fail in tests, but
     // the pattern should be recorded regardless).
     const recorder = new PatternRecorder();
-    recorder.record("navigate", "safe.com", "/", "h1");
-    recorder.record("view_page", "safe.com", "/", "h2");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "article", "h2");
 
     expect(recorder.emittedPatterns).toHaveLength(1);
-    expect(recorder.emittedPatterns[0].domain).toBe("safe.com");
+    expect(recorder.emittedPatterns[0].pageType).toBe("article");
   });
 
   it("C2: maybeUpload() is NOT called when telemetry is disabled (default)", async () => {
@@ -454,8 +436,8 @@ describe("PatternRecorder + TelemetryUploader Integration (Story 12.5)", () => {
     const uploadSpy = vi.spyOn(telemetryMod.telemetryUploader, "maybeUpload");
 
     const recorder = new PatternRecorder();
-    recorder.record("navigate", "disabled-test.com", "/page", "h1");
-    recorder.record("view_page", "disabled-test.com", "/page", "h2");
+    recorder.record("navigate", "unknown", "h1");
+    recorder.record("view_page", "login", "h2");
 
     expect(recorder.emittedPatterns).toHaveLength(1);
 

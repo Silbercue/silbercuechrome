@@ -6,6 +6,24 @@ import { EMULATED_WIDTH, EMULATED_HEIGHT } from "../cdp/emulation.js";
 import { debug } from "../cdp/debug.js";
 import { prefetchSlot } from "./prefetch-slot.js";
 
+// Story 12a.2: Lazy-loaded page classifier to avoid circular dependency
+// (page-classifier.ts imports AXNode from this module). The function is
+// resolved on first use via dynamic import — subsequent calls use the
+// cached reference. If the import fails, the fallback returns "unknown".
+//
+// H1 fix: The import fires at module scope (prewarm) so that the classifier
+// is ready before the first getPageType() call. The _classifierReady flag
+// tracks whether the import has resolved — if not, getPageType() returns
+// "unknown" explicitly rather than silently using the fallback function.
+let classifyPageFn: (nodes: AXNode[]) => string = () => "unknown";
+let _classifierReady = false;
+const _classifierPromise = import("../cortex/page-classifier.js")
+  .then((m) => { classifyPageFn = m.classifyPage; _classifierReady = true; })
+  .catch((err) => {
+    debug("[a11y-tree] Failed to load page-classifier: %s", err instanceof Error ? err.message : String(err));
+    _classifierReady = true; // fallback stays () => "unknown"
+  });
+
 /** Strip hash fragment from URL for navigation comparison.
  *  Hash-only changes (anchor navigation) should NOT reset refs. */
 function stripHash(url: string): string {
@@ -734,6 +752,45 @@ export class A11yTreeProcessor {
   hasPrecomputed(sessionId: string): boolean {
     return this._precomputedNodes !== null
       && this._precomputedSessionId === sessionId;
+  }
+
+  /**
+   * Story 12a.2: Classify the current page type from the cached AXNode data.
+   *
+   * Returns the page type string (e.g. "login", "data_table", "unknown").
+   * If no precomputed cache is available (e.g. after navigate reset), returns "unknown".
+   * Uses dynamic import to avoid circular dependencies and lazy-load the classifier.
+   * Errors are caught and "unknown" is returned (Cortex error philosophy).
+   *
+   * C1 fix: Optional sessionId parameter for tab isolation. When provided, the
+   * method only classifies if the cached tree belongs to that session/tab.
+   * If the cache belongs to a different tab, returns "unknown" rather than
+   * classifying the wrong tab's tree.
+   *
+   * H1 fix: Explicitly checks _classifierReady to avoid silent fallback when
+   * the dynamic import hasn't resolved yet.
+   */
+  getPageType(sessionId?: string): string {
+    try {
+      // H1: Classifier not yet loaded — return "unknown" explicitly.
+      if (!_classifierReady) {
+        return "unknown";
+      }
+      if (!this._precomputedNodes || this._precomputedNodes.length === 0) {
+        return "unknown";
+      }
+      // C1: Tab isolation — if a sessionId is provided and the cached tree
+      // belongs to a different tab, return "unknown" rather than classifying
+      // the wrong tab's data.
+      if (sessionId !== undefined && this._precomputedSessionId !== sessionId) {
+        return "unknown";
+      }
+      // Synchronous call — classifyPage is a pure function, no I/O
+      return classifyPageFn(this._precomputedNodes);
+    } catch (err) {
+      debug("[a11y-tree] getPageType() failed: %s", err instanceof Error ? err.message : String(err));
+      return "unknown";
+    }
   }
 
   /**

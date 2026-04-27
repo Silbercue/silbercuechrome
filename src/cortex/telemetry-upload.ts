@@ -45,7 +45,9 @@ export class TelemetryUploader {
       if (!this._config.enabled) return;
 
       // AC #4: Rate-limiting per pattern key.
-      const key = `${pattern.domain}||${pattern.pathPattern}`;
+      // Story 12a.2 Temporary Compat: domain is optional, pathPattern removed.
+      // Use fallbacks until Story 12a.5 redesigns the rate-limit key.
+      const key = `${pattern.domain ?? ""}||${(pattern as { pathPattern?: string }).pathPattern ?? ""}`;
       const now = Date.now();
       const lastUpload = this._lastUploadByKey.get(key);
       if (lastUpload !== undefined && now - lastUpload < this._config.rateLimitMs) {
@@ -81,10 +83,15 @@ export class TelemetryUploader {
    * NO Object.assign(). This prevents future CortexPattern fields from
    * leaking into the upload payload (NFR21).
    */
+  /**
+   * Story 12a.2 Temporary Compat: domain is optional and pathPattern is removed
+   * from CortexPattern. Use fallback empty strings for the telemetry payload
+   * fields. Full redesign with pageType in Story 12a.5.
+   */
   _sanitize(pattern: CortexPattern): TelemetryPayload {
     return {
-      domain: pattern.domain,
-      pathPattern: pattern.pathPattern,
+      domain: pattern.domain ?? "",
+      pathPattern: (pattern as { pathPattern?: string }).pathPattern ?? "",
       toolSequence: [...pattern.toolSequence],
       successRate: 1.0, // Phase 1: only successful patterns are recorded.
       contentHash: pattern.contentHash,

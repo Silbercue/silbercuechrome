@@ -15,9 +15,16 @@ import type { TelemetryConfig } from "./cortex-types.js";
 import { TELEMETRY_RATE_LIMIT_MS } from "./cortex-types.js";
 import { TelemetryUploader } from "./telemetry-upload.js";
 
-/** Factory for a minimal valid CortexPattern. */
-function makePattern(overrides: Partial<CortexPattern> = {}): CortexPattern {
+/**
+ * Factory for a minimal valid CortexPattern (Story 12a.2: pageType-based).
+ *
+ * Story 12a.2 Temporary Compat: pathPattern is no longer on CortexPattern but
+ * telemetry-upload still reads it via `(pattern as any).pathPattern` for compat
+ * until Story 12a.5. The helper includes pathPattern as an extra field.
+ */
+function makePattern(overrides: Partial<CortexPattern> & { domain?: string; pathPattern?: string } = {}): CortexPattern {
   return {
+    pageType: "login",
     domain: "example.com",
     pathPattern: "/users/:id/profile",
     toolSequence: ["navigate", "view_page", "click"],
@@ -25,7 +32,7 @@ function makePattern(overrides: Partial<CortexPattern> = {}): CortexPattern {
     contentHash: "a1b2c3d4e5f6a7b8",
     timestamp: 1700000000000,
     ...overrides,
-  };
+  } as CortexPattern;
 }
 
 /** Factory for a TelemetryConfig with telemetry enabled. */

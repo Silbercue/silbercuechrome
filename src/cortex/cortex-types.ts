@@ -1,28 +1,38 @@
 /**
- * Story 12.1: Cortex Type Definitions.
+ * Story 12.1 / 12a.2: Cortex Type Definitions.
  *
  * Defines the core data structures for the Cortex subsystem's pattern
- * recording. These types are consumed by `PatternRecorder` (this story)
- * and will later be persisted by the Merkle Log (Story 12.2).
+ * recording. These types are consumed by `PatternRecorder` and persisted
+ * by the Merkle Log (Story 12.2).
  *
- * Privacy (NFR21): Patterns contain ONLY domain, normalised path-pattern,
- * tool sequence, outcome, content-hash, and timestamp. No full URLs, no
- * query parameters, no auth tokens, no page content. The content-hash is
- * a truncated SHA-256 — not reversible.
+ * Story 12a.2: Patterns are keyed by pageType (seitentyp-basiert) instead
+ * of domain/pathPattern. The pageType is determined by the page-classifier
+ * (Story 12a.1) from the A11y-Tree — privacy-preserving because "login"
+ * reveals less than "accounts.google.com".
+ *
+ * Privacy (NFR21): Patterns contain ONLY pageType, tool sequence, outcome,
+ * content-hash, and timestamp. Domain is kept as optional debugging
+ * metadata. No full URLs, no query parameters, no auth tokens, no page
+ * content. The content-hash is a truncated SHA-256 — not reversible.
  */
 
 /**
  * A recorded successful tool-interaction pattern.
  *
  * Represents a sequence of tool calls that achieved a successful outcome
- * on a specific domain/path combination. Used by the Cortex to learn
- * from repeated interactions.
+ * on a specific page type. Used by the Cortex to learn from repeated
+ * interactions across domains.
+ *
+ * Story 12a.2: Primary key is `pageType` (e.g. "login", "data_table").
+ * The domain is kept as optional metadata for debugging — never used
+ * for matching. The old `pathPattern` field has been removed; the page
+ * type replaces path-based assignment.
  */
 export interface CortexPattern {
-  /** The domain where the pattern was observed (e.g. "example.com"). */
-  domain: string;
-  /** Normalised URL path with IDs replaced by placeholders (e.g. "/users/:id/profile"). */
-  pathPattern: string;
+  /** Page type classification (e.g. "login", "data_table", "search_results"). Primary key for pattern matching. */
+  pageType: string;
+  /** Domain where the pattern was observed (optional debugging metadata, not used for matching). */
+  domain?: string;
   /** Ordered list of tool names that formed the successful sequence. */
   toolSequence: string[];
   /** Outcome of the sequence — only successful sequences are recorded. */
@@ -38,16 +48,17 @@ export interface CortexPattern {
  *
  * The `PatternRecorder` maintains a ring-buffer of these events and
  * checks after each new event whether a recordable sequence has formed.
+ *
+ * Story 12a.2: Events track pageType instead of domain/path — the page
+ * type is determined by the page-classifier from the A11y-Tree.
  */
 export interface ToolCallEvent {
   /** Name of the tool that was called (e.g. "navigate", "click"). */
   toolName: string;
   /** Unix timestamp (ms) when the event was recorded. */
   timestamp: number;
-  /** Domain extracted from the current page URL. */
-  domain: string;
-  /** Path extracted from the current page URL. */
-  path: string;
+  /** Page type classification from the page-classifier (e.g. "login", "unknown"). */
+  pageType: string;
   /** Truncated SHA-256 hash (16 hex chars) of the tool response content. */
   contentHash: string;
 }

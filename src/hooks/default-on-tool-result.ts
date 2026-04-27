@@ -56,6 +56,7 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import { deferredDiffSlot } from "../cache/deferred-diff-slot.js";
 import { debug } from "../cdp/debug.js";
 import { patternRecorder, PatternRecorder } from "../cortex/pattern-recorder.js";
+import { a11yTree } from "../cache/a11y-tree.js";
 
 const DEFAULT_INITIAL_WAIT_MS = 350;
 const DEFAULT_RETRY_WAIT_MS = 500;
@@ -257,57 +258,37 @@ export function createDefaultOnToolResult(): OnToolResult {
         }
       }
 
-      // --- Story 12.1: Pattern Recording (Cortex Phase 1) ---
+      // --- Story 12.1 / 12a.2: Pattern Recording (Cortex Phase 1) ---
       //
       // Record every successful tool call for the Cortex pattern recorder.
       // The recorder is a passive observer — it reads the response content
       // and buffers events internally. It NEVER modifies the tool response.
       //
-      // URL extraction strategy:
-      //  - For `navigate`: `a11yTree.reset()` runs BEFORE this hook (registry.ts
-      //    line 793-794), so `context.a11yTree.currentUrl` is empty. Instead,
-      //    extract the URL from the navigate response text (the handler writes
-      //    "Navigated to https://..." into the first text block).
-      //  - For all other tools: use `context.a11yTree.currentUrl` as normal.
+      // Story 12a.2: Page type classification replaces URL-based domain/path.
+      //  - For `navigate`: pageType is "unknown" (A11y-Tree is empty after reset).
+      //    This is correct — navigate alone never forms a recordable sequence
+      //    (MIN_SEQUENCE_LENGTH = 2). The pattern uses the pageType from the
+      //    LAST event in the sequence (typically after view_page/click).
+      //  - For all other tools: pageType from the precomputed A11y-Tree cache.
       //
       // Session-scoped: the sessionId from context is passed through so the
       // recorder maintains separate buffers per session (parallel tabs).
       try {
-        let url: URL | null = null;
+        // Determine page type from the A11y-Tree singleton cache.
+        // For navigate calls the cache is empty (reset runs before this hook),
+        // so getPageType() returns "unknown" — which is the correct behavior.
+        // C1 fix: pass sessionId for tab isolation — ensures the cached tree
+        // belongs to the active tab, not a stale tree from another tab.
+        const pageType = a11yTree.getPageType(context.sessionId);
 
-        if (toolName === "navigate") {
-          // Navigate: extract URL from response text (currentUrl is empty after reset)
-          const firstText = result.content.find(
-            (block): block is { type: "text"; text: string } => block.type === "text",
-          );
-          if (firstText) {
-            url = PatternRecorder.extractUrlFromResponse(firstText.text);
-          }
-        } else {
-          // All other tools: use the live currentUrl
-          const currentUrl = context.a11yTree.currentUrl;
-          if (currentUrl) {
-            try {
-              url = new URL(currentUrl);
-            } catch {
-              // Malformed URL — skip recording
-            }
-          }
-        }
+        // Compute content hash from text content blocks
+        const textContent = result.content
+          .filter((block): block is { type: "text"; text: string } => block.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+        const contentHash = PatternRecorder.computeContentHash(textContent);
 
-        if (url) {
-          const domain = url.hostname;
-          const path = url.pathname;
-
-          // Compute content hash from text content blocks
-          const textContent = result.content
-            .filter((block): block is { type: "text"; text: string } => block.type === "text")
-            .map((block) => block.text)
-            .join("\n");
-          const contentHash = PatternRecorder.computeContentHash(textContent);
-
-          patternRecorder.record(toolName, domain, path, contentHash, context.sessionId);
-        }
+        patternRecorder.record(toolName, pageType, contentHash, context.sessionId);
       } catch (recordErr) {
         // Pattern recording must NEVER disrupt the tool response.
         debug("[default-on-tool-result] pattern recording threw: %s",

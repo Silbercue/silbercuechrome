@@ -630,7 +630,7 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
   // Story 12.1 (Task 4.3): Pattern Recorder integration
   // =========================================================================
 
-  it("calls patternRecorder.record() on navigate — extracts URL from response text (H1 fix: currentUrl empty after reset)", async () => {
+  it("calls patternRecorder.record() on navigate — pageType is 'unknown' (A11y-Tree empty after reset)", async () => {
     const { patternRecorder } = await import("../cortex/pattern-recorder.js");
     const recordSpy = vi.spyOn(patternRecorder, "record");
 
@@ -648,11 +648,15 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
 
     await hook("navigate", result, context);
 
+    // Story 12a.2: record() now takes (toolName, pageType, contentHash, sessionId).
+    // For navigate calls the A11y-Tree is empty, so pageType is "unknown".
     expect(recordSpy).toHaveBeenCalledTimes(1);
+    // M1 fix: Assert concrete pageType value instead of expect.any(String).
+    // The A11y-Tree singleton has no precomputed cache in the test env,
+    // so getPageType() returns "unknown".
     expect(recordSpy).toHaveBeenCalledWith(
       "navigate",
-      "shop.example.com",
-      "/products/42",
+      "unknown",
       expect.stringMatching(/^[0-9a-f]{16}$/),
       "sess-1",
     );
@@ -660,7 +664,7 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
     recordSpy.mockRestore();
   });
 
-  it("pattern recording uses currentUrl for non-navigate tools and does not modify response", async () => {
+  it("pattern recording uses pageType for non-navigate tools and does not modify response", async () => {
     const { patternRecorder } = await import("../cortex/pattern-recorder.js");
     const recordSpy = vi.spyOn(patternRecorder, "record");
 
@@ -682,12 +686,13 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
     expect(out.content).toHaveLength(1);
     expect(out.content[0]).toMatchObject({ type: "text", text: "Page content here" });
 
-    // Non-navigate tools use currentUrl (not response text extraction)
+    // M1 fix: Assert concrete pageType value instead of expect.any(String).
+    // The A11y-Tree singleton has no precomputed cache in the test env,
+    // so getPageType() returns "unknown".
     expect(recordSpy).toHaveBeenCalledTimes(1);
     expect(recordSpy).toHaveBeenCalledWith(
       "view_page",
-      "example.com",
-      "/page",
+      "unknown",
       expect.stringMatching(/^[0-9a-f]{16}$/),
       "sess-1",
     );
@@ -695,7 +700,7 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
     recordSpy.mockRestore();
   });
 
-  it("pattern recording handles missing currentUrl gracefully", async () => {
+  it("pattern recording always records even without currentUrl (Story 12a.2: pageType-based)", async () => {
     const { patternRecorder } = await import("../cortex/pattern-recorder.js");
     const recordSpy = vi.spyOn(patternRecorder, "record");
 
@@ -713,8 +718,16 @@ describe("createDefaultOnToolResult (P3 — default Free-tier hook)", () => {
 
     await hook("view_page", result, context);
 
-    // Should not record when there's no URL (no domain to extract)
-    expect(recordSpy).not.toHaveBeenCalled();
+    // M1 fix: Assert concrete pageType value instead of expect.any(String).
+    // The A11y-Tree singleton has no precomputed cache in the test env,
+    // so getPageType() returns "unknown".
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    expect(recordSpy).toHaveBeenCalledWith(
+      "view_page",
+      "unknown",
+      expect.stringMatching(/^[0-9a-f]{16}$/),
+      "sess-1",
+    );
 
     recordSpy.mockRestore();
   });

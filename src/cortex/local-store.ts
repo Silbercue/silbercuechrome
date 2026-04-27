@@ -82,17 +82,23 @@ export class LocalStore {
     try {
       await this._ensureDir();
 
-      // H5: Check for dedup — same domain + pathPattern means update in-place,
+      // H5: Check for dedup — same pageType means update in-place,
       // do NOT write a new JSONL entry. Only the in-memory state is updated.
+      // Story 12a.2: Dedup key changed from domain+pathPattern to pageType.
       const existing = await this._readPatternsRaw();
       const dupIdx = existing.findIndex(
-        (p) => p.domain === pattern.domain && p.pathPattern === pattern.pathPattern,
+        (p) => p.pageType === pattern.pageType,
       );
       if (dupIdx >= 0) {
-        // Replace in-memory only — rewrite the full file to keep persistence consistent
+        // Replace in-memory only — rewrite the full file to keep persistence consistent.
+        // H2 fix: Atomic write via temp file + rename (same pattern as _writeTreeHead).
+        // A crash during writeFile would corrupt the JSONL; rename() is atomic on POSIX.
         existing[dupIdx] = pattern;
         const content = existing.map((p) => JSON.stringify(p)).join("\n") + "\n";
-        await writeFile(join(this._dataDir, PATTERNS_FILE), content, "utf-8");
+        const target = join(this._dataDir, PATTERNS_FILE);
+        const tmp = target + "." + randomBytes(4).toString("hex") + ".tmp";
+        await writeFile(tmp, content, "utf-8");
+        await rename(tmp, target);
       } else {
         const line = JSON.stringify(pattern) + "\n";
         await appendFile(join(this._dataDir, PATTERNS_FILE), line, "utf-8");
@@ -369,7 +375,13 @@ export class LocalStore {
     this._dirEnsured = true;
   }
 
-  /** Read all patterns from the JSONL file, skipping corrupt lines. */
+  /**
+   * Read all patterns from the JSONL file, skipping corrupt lines.
+   *
+   * Story 12a.2: Also skips legacy entries that lack the `pageType` field
+   * (old domain/pathPattern format). This provides a clean transition
+   * without migration code — old entries are simply ignored.
+   */
   private async _readPatternsRaw(): Promise<CortexPattern[]> {
     let raw: string;
     try {
@@ -382,7 +394,13 @@ export class LocalStore {
     const lines = raw.split("\n").filter((l) => l.trim() !== "");
     for (const line of lines) {
       try {
-        patterns.push(JSON.parse(line) as CortexPattern);
+        const parsed = JSON.parse(line);
+        // Story 12a.2: Skip legacy entries without pageType field
+        if (!parsed.pageType) {
+          debug("[local-store] Skipping legacy entry without pageType");
+          continue;
+        }
+        patterns.push(parsed as CortexPattern);
       } catch {
         debug("[local-store] Skipping corrupt JSONL line: %s", line.slice(0, 80));
       }

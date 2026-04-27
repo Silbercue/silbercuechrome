@@ -15,11 +15,10 @@ import { createHash } from "node:crypto";
 import { LocalStore } from "./local-store.js";
 import type { CortexPattern, SignedTreeHead } from "./cortex-types.js";
 
-/** Helper: create a minimal valid CortexPattern. */
-function makePattern(domain = "example.com", idx = 0): CortexPattern {
+/** Helper: create a minimal valid CortexPattern (Story 12a.2: pageType-based). */
+function makePattern(pageType = "data_table", idx = 0): CortexPattern {
   return {
-    domain,
-    pathPattern: `/page/${idx}`,
+    pageType: `${pageType}_${idx}`,
     toolSequence: ["navigate", "view_page"],
     outcome: "success",
     contentHash: `hash${String(idx).padStart(12, "0")}`,
@@ -50,7 +49,7 @@ describe("LocalStore (Story 12.2)", () => {
 
     const all = await store.getAll();
     expect(all).toHaveLength(1);
-    expect(all[0].domain).toBe("example.com");
+    expect(all[0].pageType).toBe("data_table_0");
 
     const head = await store.getTreeHead();
     expect(head.treeSize).toBe(1);
@@ -59,23 +58,23 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("getAll() reads all patterns correctly", async () => {
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
-    await store.append(makePattern("c.com", 2));
+    await store.append(makePattern("login", 0));
+    await store.append(makePattern("signup", 1));
+    await store.append(makePattern("checkout", 2));
 
     const all = await store.getAll();
     expect(all).toHaveLength(3);
-    expect(all[0].domain).toBe("a.com");
-    expect(all[1].domain).toBe("b.com");
-    expect(all[2].domain).toBe("c.com");
+    expect(all[0].pageType).toBe("login_0");
+    expect(all[1].pageType).toBe("signup_1");
+    expect(all[2].pageType).toBe("checkout_2");
   });
 
   it("getTreeHead() returns correct root hash", async () => {
-    await store.append(makePattern("x.com", 0));
+    await store.append(makePattern("login", 0));
     const head1 = await store.getTreeHead();
     expect(head1.treeSize).toBe(1);
 
-    await store.append(makePattern("y.com", 1));
+    await store.append(makePattern("signup", 1));
     const head2 = await store.getTreeHead();
     expect(head2.treeSize).toBe(2);
     expect(head2.rootHash).not.toBe(head1.rootHash);
@@ -88,7 +87,7 @@ describe("LocalStore (Story 12.2)", () => {
   it("getInclusionProof() returns valid proof for every leaf index (AC #2)", async () => {
     // Build a tree with 5 patterns
     for (let i = 0; i < 5; i++) {
-      await store.append(makePattern("test.com", i));
+      await store.append(makePattern("test", i));
     }
 
     const head = await store.getTreeHead();
@@ -110,8 +109,8 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("verifyInclusionProof() returns true for valid proof (AC #2)", async () => {
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
+    await store.append(makePattern("article", 0));
+    await store.append(makePattern("form_simple", 1));
 
     const head = await store.getTreeHead();
     const patterns = await store.getAll();
@@ -122,8 +121,8 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("verifyInclusionProof() returns false for tampered proof (AC #3)", async () => {
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
+    await store.append(makePattern("article", 0));
+    await store.append(makePattern("form_simple", 1));
 
     const head = await store.getTreeHead();
     const patterns = await store.getAll();
@@ -145,13 +144,13 @@ describe("LocalStore (Story 12.2)", () => {
   // =========================================================================
 
   it("verifyIntegrity() detects manipulated JSONL entries (AC #3)", async () => {
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
+    await store.append(makePattern("article", 0));
+    await store.append(makePattern("form_simple", 1));
 
     // Tamper with the JSONL file
     const jsonlPath = join(tmpDir, "patterns.jsonl");
     let content = await readFile(jsonlPath, "utf-8");
-    content = content.replace('"a.com"', '"evil.com"');
+    content = content.replace('"article_0"', '"evil_0"');
     await writeFile(jsonlPath, content, "utf-8");
 
     const result = await store.verifyIntegrity();
@@ -161,9 +160,9 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("verifyIntegrity() returns valid=true for unmanipulated log (AC #3)", async () => {
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
-    await store.append(makePattern("c.com", 2));
+    await store.append(makePattern("article", 0));
+    await store.append(makePattern("form_simple", 1));
+    await store.append(makePattern("settings", 2));
 
     const result = await store.verifyIntegrity();
     expect(result.valid).toBe(true);
@@ -175,7 +174,7 @@ describe("LocalStore (Story 12.2)", () => {
   // =========================================================================
 
   it("leaf hash follows RFC-6962: SHA-256(0x00 || data) (AC #4)", () => {
-    const pattern = makePattern("rfc.com", 42);
+    const pattern = makePattern("profile", 42);
     const leafHash = store._hashLeaf(pattern);
 
     // Manually compute the expected hash
@@ -222,7 +221,7 @@ describe("LocalStore (Story 12.2)", () => {
     const heads: SignedTreeHead[] = [];
 
     for (let i = 0; i < 7; i++) {
-      await store.append(makePattern("grow.com", i));
+      await store.append(makePattern("navigation", i));
       heads.push(await store.getTreeHead());
     }
 
@@ -239,9 +238,9 @@ describe("LocalStore (Story 12.2)", () => {
 
   it("odd leaf count: RFC-6962 split works correctly", async () => {
     // 3 leaves → RFC-6962 split: k=2, left=[0,1], right=[2]
-    await store.append(makePattern("a.com", 0));
-    await store.append(makePattern("b.com", 1));
-    await store.append(makePattern("c.com", 2));
+    await store.append(makePattern("article", 0));
+    await store.append(makePattern("form_simple", 1));
+    await store.append(makePattern("settings", 2));
 
     const head = await store.getTreeHead();
     expect(head.treeSize).toBe(3);
@@ -257,7 +256,7 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("single leaf: inclusion proof works", async () => {
-    await store.append(makePattern("solo.com", 0));
+    await store.append(makePattern("unknown", 0));
     const head = await store.getTreeHead();
     const patterns = await store.getAll();
 
@@ -271,7 +270,7 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("out-of-range leaf index returns empty proof", async () => {
-    await store.append(makePattern("a.com", 0));
+    await store.append(makePattern("article", 0));
     const proof = await store.getInclusionProof(99);
     expect(proof.hashes).toHaveLength(0);
     expect(proof.leafIndex).toBe(99);
@@ -281,7 +280,7 @@ describe("LocalStore (Story 12.2)", () => {
     const customDir = await mkdtemp(join(tmpdir(), "merkle-custom-"));
     const customStore = new LocalStore({ dataDir: customDir });
 
-    await customStore.append(makePattern("custom.com", 0));
+    await customStore.append(makePattern("checkout", 0));
     const all = await customStore.getAll();
     expect(all).toHaveLength(1);
 
@@ -289,7 +288,7 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("handles corrupt JSONL lines gracefully", async () => {
-    await store.append(makePattern("good.com", 0));
+    await store.append(makePattern("search_form", 0));
 
     // Inject a corrupt line
     const jsonlPath = join(tmpDir, "patterns.jsonl");
@@ -298,14 +297,14 @@ describe("LocalStore (Story 12.2)", () => {
     await writeFile(jsonlPath, content, "utf-8");
 
     // Append another valid pattern
-    await store.append(makePattern("also-good.com", 1));
+    await store.append(makePattern("dashboard", 1));
 
     // getAll should skip the corrupt line
     const all = await store.getAll();
     // We have: original good pattern, corrupt line (skipped), also-good pattern
     // But append re-reads ALL patterns and rebuilds — the corrupt line is skipped
     // so the tree head reflects only the 2 valid patterns
-    const validPatterns = all.filter((p) => p.domain === "good.com" || p.domain === "also-good.com");
+    const validPatterns = all.filter((p) => p.pageType === "search_form_0" || p.pageType === "dashboard_1");
     expect(validPatterns).toHaveLength(2);
   });
 
@@ -321,7 +320,7 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("deterministic: same pattern always produces same leaf hash", () => {
-    const p = makePattern("det.com", 7);
+    const p = makePattern("media", 7);
     const h1 = store._hashLeaf(p);
     const h2 = store._hashLeaf(p);
     expect(h1).toBe(h2);
@@ -329,15 +328,15 @@ describe("LocalStore (Story 12.2)", () => {
   });
 
   it("different patterns produce different leaf hashes", () => {
-    const h1 = store._hashLeaf(makePattern("a.com", 0));
-    const h2 = store._hashLeaf(makePattern("b.com", 1));
+    const h1 = store._hashLeaf(makePattern("article", 0));
+    const h2 = store._hashLeaf(makePattern("form_simple", 1));
     expect(h1).not.toBe(h2);
   });
 
   it("inclusion proof for power-of-two leaf count", async () => {
     // 4 leaves — perfectly balanced tree
     for (let i = 0; i < 4; i++) {
-      await store.append(makePattern("pow2.com", i));
+      await store.append(makePattern("login", i));
     }
 
     const head = await store.getTreeHead();
@@ -352,7 +351,7 @@ describe("LocalStore (Story 12.2)", () => {
 
   it("inclusion proof for large tree (16 leaves)", async () => {
     for (let i = 0; i < 16; i++) {
-      await store.append(makePattern("large.com", i));
+      await store.append(makePattern("mfa", i));
     }
 
     const head = await store.getTreeHead();
@@ -388,7 +387,7 @@ describe("LocalStore (Story 12.2)", () => {
   it("verifyInclusionProof returns false for proof with wrong hashes (M2)", async () => {
     // Build a real tree then corrupt the proof hashes
     for (let i = 0; i < 4; i++) {
-      await store.append(makePattern("m2.com", i));
+      await store.append(makePattern("error", i));
     }
     const head = await store.getTreeHead();
     const patterns = await store.getAll();
@@ -411,7 +410,7 @@ describe("LocalStore (Story 12.2)", () => {
     // Write a fake tree head to an empty store
     const fakeHead = { treeSize: 5, rootHash: "a".repeat(64), timestamp: 123 };
     const { writeFile: wf } = await import("node:fs/promises");
-    await store.append(makePattern("x.com", 0)); // ensure dir exists
+    await store.append(makePattern("form_wizard", 0)); // ensure dir exists
     // Now remove the patterns file to simulate empty log with forged head
     const { rm: rmF } = await import("node:fs/promises");
     await rmF(join(tmpDir, "patterns.jsonl"));
@@ -430,7 +429,7 @@ describe("LocalStore (Story 12.2)", () => {
     // Fire 5 appends concurrently
     const promises = [];
     for (let i = 0; i < 5; i++) {
-      promises.push(store.append(makePattern("concurrent.com", i)));
+      promises.push(store.append(makePattern("search_results", i)));
     }
     await Promise.all(promises);
 
@@ -445,8 +444,8 @@ describe("LocalStore (Story 12.2)", () => {
   // H5: Dedup does not create duplicate JSONL entries
   // =========================================================================
 
-  it("dedup: same domain+pathPattern updates in-place, no extra JSONL line (H5)", async () => {
-    const p1 = makePattern("dedup.com", 0);
+  it("dedup: same pageType updates in-place, no extra JSONL line (H5)", async () => {
+    const p1 = makePattern("login", 0);
     const p2: CortexPattern = { ...p1, contentHash: "updatedHash00000", timestamp: p1.timestamp + 1 };
 
     await store.append(p1);
@@ -468,6 +467,36 @@ describe("LocalStore (Story 12.2)", () => {
   it("append does not throw on file system errors (M3)", async () => {
     const badStore = new LocalStore({ dataDir: "/dev/null/impossible-path" });
     // Should not throw — error is swallowed and debug-logged
-    await expect(badStore.append(makePattern("fail.com", 0))).resolves.toBeUndefined();
+    await expect(badStore.append(makePattern("error", 0))).resolves.toBeUndefined();
+  });
+
+  // =========================================================================
+  // Story 12a.2: Legacy JSONL entries without pageType are skipped
+  // =========================================================================
+
+  it("skips legacy entries without pageType when reading (Story 12a.2)", async () => {
+    // Write a legacy-format entry (domain/pathPattern, no pageType)
+    const jsonlPath = join(tmpDir, "patterns.jsonl");
+    const legacyEntry = JSON.stringify({
+      domain: "legacy.com",
+      pathPattern: "/old/path",
+      toolSequence: ["navigate", "view_page"],
+      outcome: "success",
+      contentHash: "legacyhash000000",
+      timestamp: 1700000000000,
+    });
+    const newEntry = JSON.stringify({
+      pageType: "login_0",
+      toolSequence: ["navigate", "view_page", "click"],
+      outcome: "success",
+      contentHash: "newhash000000000",
+      timestamp: 1700000001000,
+    });
+    await writeFile(jsonlPath, legacyEntry + "\n" + newEntry + "\n", "utf-8");
+
+    const all = await store.getAll();
+    // Legacy entry should be skipped, only the new-format entry remains
+    expect(all).toHaveLength(1);
+    expect(all[0].pageType).toBe("login_0");
   });
 });

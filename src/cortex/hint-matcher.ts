@@ -58,12 +58,21 @@ export class HintMatcher {
    * Load patterns into the internal index.
    * Compiles path patterns to RegExp for fast matching.
    */
+  /**
+   * Load patterns into the internal index.
+   * Compiles path patterns to RegExp for fast matching.
+   *
+   * Story 12a.2 Temporary Compat: domain and pathPattern are now optional
+   * on CortexPattern. Patterns without domain are stored under "" and will
+   * not match any URL — acceptable until Story 12a.4 redesigns the matcher.
+   */
   loadPatterns(patterns: CortexPattern[]): void {
     this._index.clear();
     for (const p of patterns) {
       try {
-        const domain = p.domain.toLowerCase();
-        const regex = HintMatcher._pathPatternToRegex(p.pathPattern);
+        const domain = (p.domain ?? "").toLowerCase();
+        const pathPattern = (p as { pathPattern?: string }).pathPattern ?? "/";
+        const regex = HintMatcher._pathPatternToRegex(pathPattern);
         let bucket = this._index.get(domain);
         if (!bucket) {
           bucket = [];
@@ -73,8 +82,8 @@ export class HintMatcher {
       } catch (err) {
         debug(
           "[hint-matcher] Failed to compile pattern %s%s: %s",
-          p.domain,
-          p.pathPattern,
+          p.domain ?? "",
+          (p as { pathPattern?: string }).pathPattern ?? "/",
           err instanceof Error ? err.message : String(err),
         );
       }
@@ -166,10 +175,12 @@ export class HintMatcher {
       const persisted = await store.getAll();
       const inMemory = patternRecorder.emittedPatterns;
 
+      // Story 12a.2 Temporary Compat: Use domain ?? "" and pathPattern ?? "/"
+      // for dedup key. Full redesign to pageType-based dedup in Story 12a.4.
       const seen = new Map<string, CortexPattern>();
       for (const p of [...persisted, ...inMemory]) {
         const seqKey = p.toolSequence.join(",");
-        const key = `${p.domain}||${p.pathPattern}||${seqKey}`;
+        const key = `${p.domain ?? ""}||${(p as { pathPattern?: string }).pathPattern ?? "/"}||${seqKey}`;
         const existing = seen.get(key);
         if (!existing || p.timestamp > existing.timestamp) {
           seen.set(key, p);
@@ -210,6 +221,10 @@ export class HintMatcher {
    * - successRate: fraction of successful patterns (Phase 1: always 1.0)
    * - installationCount: number of distinct matching patterns
    */
+  /**
+   * Story 12a.2 Temporary Compat: pathPattern may be absent on new-format
+   * patterns. Fallback to "/" for aggregation. Full redesign in Story 12a.4.
+   */
   private static _aggregate(matches: CompiledPattern[], domain: string): CortexHint {
     // Find the most common tool sequence
     const seqCounts = new Map<string, { count: number; seq: string[]; pathPattern: string }>();
@@ -222,7 +237,7 @@ export class HintMatcher {
         seqCounts.set(key, {
           count: 1,
           seq: m.pattern.toolSequence,
-          pathPattern: m.pattern.pathPattern,
+          pathPattern: (m.pattern as { pathPattern?: string }).pathPattern ?? "/",
         });
       }
     }
@@ -237,8 +252,9 @@ export class HintMatcher {
 
     // C4 fix: installationCount = number of DISTINCT patterns (domain+pathPattern),
     // not the raw matches array length which can contain duplicates.
+    // Story 12a.2 Temporary Compat: use domain ?? "" and pathPattern ?? "/"
     const distinctPatterns = new Set(
-      matches.map((m) => `${m.pattern.domain}||${m.pattern.pathPattern}`),
+      matches.map((m) => `${m.pattern.domain ?? ""}||${(m.pattern as { pathPattern?: string }).pathPattern ?? "/"}`),
     ).size;
 
     return {

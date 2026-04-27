@@ -5482,4 +5482,80 @@ describe("A11yTreeProcessor", () => {
       expect(processor.resolveRef("e1")).toBe(100);
     });
   });
+
+  // =========================================================================
+  // Story 12a.2 C1: getPageType() tab isolation
+  // =========================================================================
+
+  describe("getPageType — tab isolation (C1 fix)", () => {
+    it("returns 'unknown' when no precomputed cache exists", () => {
+      expect(processor.getPageType()).toBe("unknown");
+      expect(processor.getPageType("s1")).toBe("unknown");
+    });
+
+    it("returns a classification when called without sessionId (backward compat)", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.refreshPrecomputed(cdp, "tab-a");
+
+      // Without sessionId, getPageType() classifies the cached tree regardless of tab
+      const pageType = processor.getPageType();
+      expect(typeof pageType).toBe("string");
+      expect(pageType.length).toBeGreaterThan(0);
+    });
+
+    it("returns 'unknown' when sessionId does not match the cached tab", async () => {
+      const nodes: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Test" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdp = mockCdpClient(nodes);
+      await processor.refreshPrecomputed(cdp, "tab-a");
+
+      // Cache belongs to tab-a — querying tab-b returns "unknown"
+      expect(processor.getPageType("tab-b")).toBe("unknown");
+    });
+
+    it("getPageType(tabIdA) and getPageType(tabIdB) return independent results", async () => {
+      // Prime cache with tab-a's tree
+      const nodesA: AXNode[] = [
+        makeNode({
+          nodeId: "1",
+          role: { type: "role", value: "WebArea" },
+          name: { type: "computedString", value: "Tab A" },
+          backendDOMNodeId: 100,
+        }),
+      ];
+      const cdpA = mockCdpClient(nodesA);
+      await processor.refreshPrecomputed(cdpA, "tab-a");
+
+      // The cache is now primed for tab-a.
+      expect(processor.hasPrecomputed("tab-a")).toBe(true);
+
+      // tab-a has a cached tree — getPageType("tab-a") classifies it
+      const typeA = processor.getPageType("tab-a");
+      expect(typeof typeA).toBe("string");
+      expect(typeA.length).toBeGreaterThan(0);
+
+      // tab-b has no cached tree — getPageType("tab-b") must return "unknown"
+      // because the cache belongs to tab-a, not tab-b (C1 tab isolation).
+      const typeB = processor.getPageType("tab-b");
+      expect(typeB).toBe("unknown");
+
+      // Without sessionId (backward compat): classifies whatever is cached
+      const typeNoFilter = processor.getPageType();
+      expect(typeNoFilter).toBe(typeA);
+    });
+  });
 });

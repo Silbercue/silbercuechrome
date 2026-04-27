@@ -31,7 +31,7 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-16
-last_updated: 2026-04-27  # Story 12a.2 ready-for-dev, Epic 12a in-progress
+last_updated: 2026-04-27  # Story 12a.2 done, Story 12a.3 ready-for-dev, Epic 12a in-progress
 project: SilbercueChrome  # wird zu PublicBrowser in Epic 11
 project_key: NOKEY
 tracking_system: file-system
@@ -123,8 +123,8 @@ development_status:
   # Domain-basierte Patterns → Seitentyp-basierte Wahrscheinlichkeiten
   epic-12a: in-progress
   12a-1-seitentyp-taxonomie-a11y-tree-klassifikator: done
-  12a-2-cortexpattern-retrofit-auf-pagetype: ready-for-dev
-  12a-3-markov-uebergangstabelle: backlog
+  12a-2-cortexpattern-retrofit-auf-pagetype: done
+  12a-3-markov-uebergangstabelle: ready-for-dev
   12a-4-hint-matcher-retrofit: backlog
   12a-5-telemetrie-payload-privacy-update: backlog
   epic-12a-retrospective: optional

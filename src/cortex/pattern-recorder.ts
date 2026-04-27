@@ -1,5 +1,5 @@
 /**
- * Story 12.1: Pattern Recorder — Cortex Phase 1.
+ * Story 12.1 / 12a.2: Pattern Recorder — Cortex Phase 1.
  *
  * Records successful tool-call sequences as patterns that the Cortex can
  * learn from. Session-scoped ring-buffer design modelled after
@@ -10,9 +10,13 @@
  * modifies the tool response or throws errors that could disrupt the
  * tool flow.
  *
- * Privacy (NFR21): Only domain, normalised path-pattern, tool names,
- * outcome, content-hash, and timestamp are stored. No full URLs, no
- * query parameters, no auth tokens, no page content.
+ * Story 12a.2: Patterns are now keyed by pageType (from page-classifier.ts)
+ * instead of domain/pathPattern. The page type is determined from the
+ * A11y-Tree before record() is called.
+ *
+ * Privacy (NFR21): Only pageType, tool names, outcome, content-hash,
+ * and timestamp are stored. No full URLs, no query parameters, no auth
+ * tokens, no page content.
  *
  * Persistence is NOT handled here — patterns are kept in memory only.
  * Story 12.2 (Merkle Log) will consume `emittedPatterns` for persistence.
@@ -32,15 +36,6 @@ const MAX_BUFFER_SIZE = 64;
 
 /** Maximum number of emitted patterns kept in memory before oldest are discarded. */
 const MAX_EMITTED_PATTERNS = 1000;
-
-/** UUID pattern: 8-4-4-4-12 hex chars. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Pure numeric segment (at least 1 digit). */
-const NUMERIC_ID_RE = /^\d+$/;
-
-/** Hex hash segment (at least 8 hex chars, whole segment). */
-const HEX_HASH_RE = /^[0-9a-f]{8,}$/i;
 
 /** Regex to extract a URL from navigate response text. */
 const URL_FROM_RESPONSE_RE = /https?:\/\/[^\s)]+/;
@@ -81,17 +76,22 @@ export class PatternRecorder {
    * Record a successful tool call. Appends to the session's ring buffer
    * and checks whether a recordable sequence has formed.
    *
+   * Story 12a.2: Takes pageType instead of domain/path. The pageType is
+   * determined by the page-classifier before this method is called.
+   *
+   * @param toolName - Name of the tool that was called.
+   * @param pageType - Page type classification from page-classifier (e.g. "login", "unknown").
+   * @param contentHash - Truncated SHA-256 of the response content.
    * @param sessionId - Session scope for the buffer (from context.sessionId).
    */
-  record(toolName: string, domain: string, path: string, contentHash: string, sessionId = "__default__"): void {
+  record(toolName: string, pageType: string, contentHash: string, sessionId = "__default__"): void {
     try {
       const session = this._getSession(sessionId);
 
       const event: ToolCallEvent = {
         toolName,
         timestamp: Date.now(),
-        domain,
-        path,
+        pageType,
         contentHash,
       };
 
@@ -167,12 +167,14 @@ export class PatternRecorder {
     const lastTimestamp = sequenceEvents[sequenceEvents.length - 1].timestamp;
     if (lastTimestamp - firstTimestamp > SEQUENCE_TIMEOUT_MS) return;
 
-    // Use the last event's data for the pattern metadata
+    // Use the last event's data for the pattern metadata.
+    // Story 12a.2: pageType from the LAST event (after view_page/click, when
+    // the A11y-Tree is populated) — the navigate event has "unknown" because
+    // the tree is empty after reset().
     const lastEvent = sequenceEvents[sequenceEvents.length - 1];
 
     const pattern: CortexPattern = {
-      domain: lastEvent.domain,
-      pathPattern: PatternRecorder._toPathPattern(lastEvent.path),
+      pageType: lastEvent.pageType,
       toolSequence: sequenceEvents.map((e: ToolCallEvent) => e.toolName),
       outcome: "success",
       contentHash: lastEvent.contentHash,
@@ -229,28 +231,6 @@ export class PatternRecorder {
           err instanceof Error ? err.message : String(err),
         );
       });
-  }
-
-  /**
-   * Normalise a URL path by replacing dynamic segments (UUIDs, numeric IDs,
-   * hex hashes) with placeholders.
-   *
-   * Examples:
-   *  - `/users/550e8400-e29b-41d4-a716-446655440000/profile` -> `/users/:uuid/profile`
-   *  - `/posts/12345/comments` -> `/posts/:id/comments`
-   *  - `/assets/a1b2c3d4e5f6/image.png` -> `/assets/:hash/image.png`
-   */
-  static _toPathPattern(path: string): string {
-    if (!path) return "/";
-    const segments = path.split("/");
-    const normalised = segments.map((seg) => {
-      if (!seg) return seg; // empty segment (leading slash)
-      if (UUID_RE.test(seg)) return ":uuid";
-      if (NUMERIC_ID_RE.test(seg)) return ":id";
-      if (HEX_HASH_RE.test(seg)) return ":hash";
-      return seg;
-    });
-    return normalised.join("/");
   }
 
   /**
