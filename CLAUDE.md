@@ -10,17 +10,17 @@ npm test               # vitest run (1500+ Tests)
 node build/index.js    # MCP-Server starten (Stdio, verbindet zu Chrome via CDP)
 ```
 
-### Dev-Mode (lokaler Build statt Binary)
+### Dev-Mode (lokaler Build statt npm-Version)
 
 ```bash
-npm run dev            # baut und schaltet MCP auf lokalen Build
-npm run dev:off        # schaltet zurueck auf npx
+npm run dev            # baut und symlinkt npx-Cache auf lokalen Build
+npm run dev:off        # stellt npm-published Build wieder her
 npm run dev:status     # zeigt aktiven Modus
 ```
 
-Tauscht die npx-Ausfuehrung gegen ein Wrapper-Script das den lokalen Build startet. MCP reconnect greift sofort — kein Claude Code Neustart noetig.
+Claude Code startet den MCP via `npx public-browser@latest` (npx-Cache unter `~/.npm/_npx/`). Dev-Mode symlinkt den `build/` Ordner im Cache auf den lokalen Build — jeder `npm run build` greift sofort.
 
-**Wann nutzen:** Bei JEDEM Code-Fix der live im Browser verifiziert werden muss. Ohne Dev-Mode laeuft MCP auf dem alten Build. Workflow: `npm run dev` -> `mcp-control reconnect` -> testen -> am Ende `npm run dev:off`.
+**Wann nutzen:** Bei JEDEM Code-Fix der live im Browser verifiziert werden muss. Ohne Dev-Mode laeuft MCP auf der npm-published Version. Workflow: `npm run dev` -> `mcp-control reconnect` -> testen -> am Ende `npm run dev:off`.
 
 ## Benchmark
 

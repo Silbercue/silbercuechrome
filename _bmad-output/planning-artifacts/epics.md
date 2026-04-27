@@ -80,11 +80,11 @@ FR38: Die Script API nutzt ein Context-Manager-Pattern (with chrome.new_page())
 FR39: Die Script API wird als Python-Package (pip install publicbrowser) distribuiert
 
 **Cortex — Selbstlernendes Wissen (NEU — Epic 12 + 13)**
-FR40: Der MCP zeichnet erfolgreiche Tool-Sequenzen automatisch als Pattern-Eintraege auf (Domain, Pfad-Pattern, Tool-Sequenz, Outcome, Content-Hash)
+FR40: Der MCP zeichnet erfolgreiche Tool-Sequenzen automatisch als Pattern-Eintraege auf (Seitentyp, Tool-Sequenz, Outcome, Content-Hash). Der Seitentyp wird regelbasiert aus dem A11y-Tree bestimmt (kein ML). Domain wird optional als Metadatum gespeichert, nicht als Schluessel verwendet
 FR41: Pattern-Eintraege werden in einem kryptographisch gesicherten Append-Only Merkle Log gespeichert (RFC-6962-kompatibel)
-FR42: Bei URL-Pattern-Match liefern navigate und view_page Cortex-Hints in der Tool-Response (_meta.cortex)
+FR42: Bei Seitentyp-Match liefern navigate und view_page Cortex-Hints in der Tool-Response (_meta.cortex). Der Seitentyp wird aus dem A11y-Tree der aktuellen Seite bestimmt. Hints enthalten Markov-basierte Tool-Vorhersagen (naechstes wahrscheinlichstes Tool)
 FR43: Der MCP zeigt in seiner Server-Description die Anzahl geladener Community-Patterns an
-FR44: Pattern-Eintraege koennen opt-in an einen Collection-Endpoint gesendet werden (anonymisiert, Rate-Limited, kein PII)
+FR44: Pattern-Eintraege koennen opt-in an einen Collection-Endpoint gesendet werden (anonymisiert, Rate-Limited, kein PII). Payloads enthalten Seitentyp und Tool-Sequenz — keine Domain, keine URLs
 FR45: Der Cortex-Bundle wird beim Start heruntergeladen, Sigstore-Signatur und Merkle Inclusion Proof werden lokal verifiziert
 FR46: Ungueltige oder nicht-verifizierbare Bundles werden ignoriert (sicherer Default, kein Fallback auf unverifizierten Content)
 
@@ -121,12 +121,12 @@ NFR18: MCP-Server und Script-API koennen gleichzeitig auf denselben Chrome zugre
 **Cortex-Integritaet (NEU — Epic 12 + 13)**
 NFR19: Cortex-Bundle-Download darf den MCP-Start um maximal 2 Sekunden verzoegern (Cache-Hit: 0ms, Cache-Miss: max 2s)
 NFR20: Der WASM-Validator ist deterministisch — gleiche Inputs erzeugen auf jeder Plattform identische Outputs (Nix-Build-Hash)
-NFR21: Cortex-Patterns enthalten ausschliesslich: Domain, Pfad-Pattern, Tool-Sequenz, Metriken. Keine User-Daten, keine Credentials
+NFR21: Cortex-Patterns enthalten ausschliesslich: Seitentyp, Tool-Sequenz, Metriken. Domain optional lokal, nicht in Telemetrie/Bundles. Keine User-Daten, keine Credentials
 
 ### Additional Requirements (Architecture)
 
 - Brownfield-Projekt: v1.3.0, 22 Epics DONE, 1500+ Tests. Kein Scaffolding.
-- Cortex-Modul: src/cortex/ mit 6 Dateien (pattern-recorder, local-store, hint-matcher, bundle-loader, telemetry-upload, cortex-types)
+- Cortex-Modul: src/cortex/ mit 8 Dateien (pattern-recorder, local-store, hint-matcher, page-classifier, markov-table, bundle-loader, telemetry-upload, cortex-types)
 - Cortex-Validator: Separates Rust-Projekt (cortex-validator/), kompiliert zu WASM (wasmtime, WASI P2), Nix-Build
 - Integration Points Cortex: hooks/ fuer Pattern-Recording, navigate + read-page fuer Hint-Delivery, index.ts fuer Bundle-Loading beim Start
 - License-Modul entfernen: src/license/, cli/license-commands.ts, Feature-Gating in registry.ts und plan-executor.ts
@@ -151,7 +151,7 @@ N/A — MCP-Server ohne UI.
 | FR25-FR29 | DONE/DEFERRED | Epic 6 (Steering), Stories 6.1/6.2 deferred |
 | FR30-FR31 | GEAENDERT | Epic 11 (Migration) — Rename + keine Einschraenkungen |
 | FR34-FR39 | v1 DONE | Epic 9 (Script API v1), v2 Shared Core ausstehend |
-| FR40-FR46 | NEU | Epic 12 (Cortex Phase 1) + Epic 13 (Cortex Phase 2) |
+| FR40-FR46 | NEU/RETROFIT | Epic 12 (Cortex Phase 1, DONE) + Epic 12a (Pattern Generalization) + Epic 13 (Cortex Phase 2) |
 
 ## Epic List
 
@@ -171,7 +171,8 @@ N/A — MCP-Server ohne UI.
 ### Neue Epics (Public Browser Pivot)
 
 - **Epic 11: Public Browser Migration (v2.0.0)** — Pro-Features freischalten, License entfernen, Rename, Package-Migration
-- **Epic 12: Cortex Phase 1 — Lokales Lernen + Merkle Log** — Pattern-Recorder, lokaler Merkle Log, Cortex-Hints, Telemetrie-Upload
+- **Epic 12: Cortex Phase 1 — Lokales Lernen + Merkle Log** — Pattern-Recorder, lokaler Merkle Log, Cortex-Hints, Telemetrie-Upload — DONE
+- **Epic 12a: Cortex Pattern Generalization** — Seitentyp-Klassifikator, Markov-Tabelle, Hint-Matcher + Telemetrie Retrofit auf PageType
 - **Epic 13: Cortex Phase 2 — Validierung + Distribution** — WASM-Validator, Sigstore-Signierung, OCI Distribution, Canary-Deployment
 
 ## Epic 11: Public Browser Migration (v2.0.0)
@@ -418,6 +419,140 @@ So that Community-Intelligence aufgebaut werden kann.
 **Given** der Upload wird Rate-Limited
 **Then** maximal 1 Upload pro Minute pro Pattern-Typ
 
+## Epic 12a: Cortex Pattern Generalization
+
+**Goal:** Cortex-Patterns von domain-basierten auf seitentyp-basierte Schluessel umstellen. Drei-Schichten-Erkennung: regelbasierter Klassifikator (Schicht 1), Markov-Uebergangstabelle (Schicht 2), SimHash-Fallback (Schicht 3, deferred).
+
+**FRs:** FR40 (aktualisiert), FR42 (aktualisiert)
+**NFRs:** NFR19 (Bundle-Groesse drastisch reduziert), NFR21 (Privacy verbessert)
+
+### Story 12a.1: Seitentyp-Taxonomie + A11y-Tree-Klassifikator
+
+As a Developer,
+I want einen regelbasierten Klassifikator der aus dem A11y-Tree den Seitentyp bestimmt,
+So that Cortex-Patterns domainunabhaengig zugeordnet werden koennen.
+
+**Acceptance Criteria:**
+
+**Given** ein A11y-Tree einer Login-Seite (form + textbox[type=password] + button)
+**When** der Klassifikator aufgerufen wird
+**Then** gibt er den Seitentyp `login` zurueck
+
+**Given** ein A11y-Tree einer Suchergebnis-Seite (search-Landmark oder prominentes textbox + Submit)
+**When** der Klassifikator aufgerufen wird
+**Then** gibt er den Seitentyp `search_results` zurueck
+
+**Given** ein A11y-Tree einer unbekannten Seite die keinem Typ zugeordnet werden kann
+**When** der Klassifikator aufgerufen wird
+**Then** gibt er den Seitentyp `unknown` zurueck (graceful degradation)
+
+**Given** src/cortex/page-classifier.ts existiert
+**Then** enthaelt es eine Seitentyp-Taxonomie mit mindestens 15 Typen
+**And** ein Feature-Vektor-Extraktor der ARIA-Rollen, Marker und Label-Keywords zaehlt
+**And** eine regelbasierte Zuordnungsfunktion (kein ML, kein Training, deterministisch)
+
+**Given** die 35 Benchmark-Testseiten
+**When** der Klassifikator auf jede angewendet wird
+**Then** klassifiziert er mindestens 80% korrekt (PoC-Validierung)
+
+### Story 12a.2: CortexPattern Retrofit auf PageType
+
+As a Developer,
+I want das CortexPattern-Datenmodell von domain-basiert auf seitentyp-basiert umstellen,
+So that Patterns domainuebergreifend gemacht werden koennen.
+
+**Acceptance Criteria:**
+
+**Given** cortex-types.ts definiert CortexPattern
+**When** das Interface aktualisiert wird
+**Then** enthaelt es `pageType: string` statt `domain: string` als primaeren Schluessel
+**And** `domain` wird optional beibehalten als Metadatum (Debugging, nicht fuer Matching)
+**And** `pathPattern` wird entfernt (der Seitentyp ersetzt die Pfad-basierte Zuordnung)
+
+**Given** pattern-recorder.ts zeichnet Patterns auf
+**When** ein erfolgreicher Tool-Call erfolgt
+**Then** wird der Seitentyp via page-classifier.ts bestimmt (statt URL-Parsing)
+**And** der Pattern-Eintrag nutzt `pageType` als Schluessel
+
+**Given** local-store.ts speichert CortexPatterns
+**When** das neue Format geschrieben wird
+**Then** werden neue Eintraege im neuen Format gespeichert
+**And** alte JSONL-Eintraege (mit domain/pathPattern) werden beim Lesen toleriert aber ignoriert (sauberer Uebergang statt Migration)
+
+**Given** alle Aenderungen durchgefuehrt sind
+**Then** npm test laeuft ohne Regression
+
+### Story 12a.3: Markov-Uebergangstabelle
+
+As a Developer,
+I want eine gewichtete Markov-Uebergangstabelle die Tool-Wahrscheinlichkeiten pro Seitentyp speichert,
+So that der Cortex vorhersagen kann welches Tool als naechstes am wahrscheinlichsten erfolgreich ist.
+
+**Acceptance Criteria:**
+
+**Given** src/cortex/markov-table.ts existiert
+**When** lokale Patterns aggregiert werden
+**Then** wird eine Tabelle gebaut: `P(naechstes_tool | letztes_tool, seiten_typ)`
+
+**Given** 10 erfolgreiche Patterns auf login-Seiten mit Sequenz navigate → fill_form → click
+**When** die Tabelle abgefragt wird fuer `(navigate, login)`
+**Then** gibt sie `fill_form` mit hoher Wahrscheinlichkeit zurueck
+
+**Given** die Tabelle als JSON exportiert wird
+**Then** ist sie unter 50KB (Ziel: ~10KB fuer Community-Format)
+
+**Given** die Tabelle einen Decay-Mechanismus hat
+**When** ein Eintrag aelter als 30 Tage ist
+**Then** wird sein Gewicht reduziert (ACO-Verdampfung)
+
+### Story 12a.4: Hint-Matcher Retrofit
+
+As a Developer,
+I want den Hint-Matcher von Domain-Lookup auf PageType-Lookup + Markov-Vorhersage umstellen,
+So that Cortex-Hints domainunabhaengig funktionieren.
+
+**Acceptance Criteria:**
+
+**Given** hint-matcher.ts nutzt aktuell einen Domain-Index (Map<domain, CompiledPattern[]>)
+**When** auf PageType-Index umgestellt wird
+**Then** nutzt es Map<pageType, MarkovEntry[]> statt Domain-Lookup
+
+**Given** der LLM-Agent navigate("https://gitlab.com/login") aufruft
+**When** der Klassifikator den Seitentyp `login` erkennt
+**Then** liefert der Hint-Matcher Markov-basierte Empfehlungen (z.B. "fill_form mit P=0.85")
+**And** der Hint kommt von Community-Daten ALLER Login-Seiten, nicht nur von gitlab.com
+
+**Given** der Seitentyp `unknown` zurueckgegeben wird
+**When** der Hint-Matcher abgefragt wird
+**Then** wird kein Hint geliefert (graceful degradation, wie heute bei fehlendem Domain-Match)
+
+**Given** die CortexHint-Struktur aktualisiert wird
+**Then** enthaelt sie `pageType` statt `domain` und `pathPattern`
+**And** die Integration in navigate.ts und read-page.ts (_meta.cortex) bleibt identisch
+
+### Story 12a.5: Telemetrie-Payload + Privacy-Update
+
+As a Developer,
+I want das Telemetrie-Payload auf das neue Seitentyp-Format aktualisieren,
+So that Community-Daten im neuen Format gesammelt werden und NFR21 staerker erfuellt wird.
+
+**Acceptance Criteria:**
+
+**Given** telemetry-upload.ts sanitisiert CortexPattern-Eintraege
+**When** _sanitize() aufgerufen wird
+**Then** enthaelt das Payload `pageType` statt `domain` und `pathPattern`
+
+**Given** das Rate-Limit nutzt aktuell `domain||pathPattern` als Key
+**When** auf `pageType||toolSequenceHash` umgestellt wird
+**Then** funktioniert das Rate-Limiting korrekt fuer das neue Format
+
+**Given** ein Pattern-Eintrag mit Seitentyp `login` wird hochgeladen
+**Then** enthaelt der Payload KEINE Domain-Information (Privacy-Verbesserung gegenueber vorher)
+
+**Given** TelemetryPayload in cortex-types.ts aktualisiert wird
+**Then** enthaelt es: pageType, toolSequence, successRate, contentHash, timestamp
+**And** KEINE domain, KEINE pathPattern (NFR21 staerker erfuellt)
+
 ## Epic 13: Cortex Phase 2 — Validierung + Distribution
 
 **Goal:** Patterns werden ueber Installationen geteilt, statistisch validiert und kryptographisch signiert verteilt. Die Community profitiert kollektiv.
@@ -437,9 +572,9 @@ So that nur vertrauenswuerdige Patterns ins Community-Bundle gelangen.
 **When** es mit Nix gebaut wird (flake.nix)
 **Then** produziert es ein WASM-Modul (wasm32-wasi)
 
-**Given** eine Menge roher Patterns wird dem Validator uebergeben
+**Given** eine Markov-Tabelle mit Eintraegen wird dem Validator uebergeben
 **When** er validiert
-**Then** werden nur Patterns akzeptiert die: N unabhaengige Bestaetigungen haben, innerhalb eines definierten Zeitfensters liegen, keinen Anomalie-Check ausloesen
+**Then** werden nur Markov-Tabellen-Eintraege akzeptiert die: aus N unabhaengigen Installationen aggregiert sind, innerhalb eines Zeitfensters liegen, keinen Anomalie-Check ausloesen. Input-Format: Markov-Tabelle (JSON), nicht Einzel-Pattern-Liste
 
 **Given** der gleiche Input auf zwei verschiedenen Plattformen
 **When** der Validator ausgefuehrt wird
@@ -470,7 +605,7 @@ So that Installationen das Bundle beim Start herunterladen koennen.
 
 **Given** ein signiertes Bundle vorliegt
 **When** ORAS push an GitHub Container Registry ausgefuehrt wird
-**Then** ist das Bundle Content-Addressed (SHA-256) verfuegbar
+**Then** ist das Bundle Content-Addressed (SHA-256) verfuegbar. Bundle ist eine Markov-Tabelle (~10KB JSON), nicht eine JSONL-Datei mit Einzelpatterns. NFR19 (max 2s Download) ist bei dieser Groesse trivial erfuellt
 
 **Given** cortex/bundle-loader.ts wird beim Server-Start ausgefuehrt
 **When** ein neues Bundle verfuegbar ist

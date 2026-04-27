@@ -56,6 +56,7 @@ import type { SessionManager } from "../cdp/session-manager.js";
 import { deferredDiffSlot } from "../cache/deferred-diff-slot.js";
 import { debug } from "../cdp/debug.js";
 import { patternRecorder, PatternRecorder } from "../cortex/pattern-recorder.js";
+import { showPatternRecorded } from "../overlay/session-overlay.js";
 import { a11yTree } from "../cache/a11y-tree.js";
 
 const DEFAULT_INITIAL_WAIT_MS = 350;
@@ -288,7 +289,12 @@ export function createDefaultOnToolResult(): OnToolResult {
           .join("\n");
         const contentHash = PatternRecorder.computeContentHash(textContent);
 
+        const countBefore = patternRecorder.emittedPatterns.length;
         patternRecorder.record(toolName, pageType, contentHash, context.sessionId);
+        if (patternRecorder.emittedPatterns.length > countBefore) {
+          const emitted = patternRecorder.emittedPatterns[patternRecorder.emittedPatterns.length - 1];
+          showPatternRecorded(context.cdpClient, context.sessionId, emitted.pageType).catch(() => {});
+        }
       } catch (recordErr) {
         // Pattern recording must NEVER disrupt the tool response.
         debug("[default-on-tool-result] pattern recording threw: %s",

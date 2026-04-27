@@ -12,6 +12,8 @@ status: 'complete'
 completedAt: '2026-04-26'
 lastStep: 8
 editHistory:
+  - date: '2026-04-27'
+    changes: 'Cortex Pattern Generalization: Pattern-Key auf pageType, +2 Module (page-classifier, markov-table), Cortex-Sektion und Directory-Tree aktualisiert'
   - date: '2026-04-26'
     changes: 'Public Browser Pivot: Pro/License entfernt, Cortex-Architektur (src/cortex/, cortex-validator/), Rename, FR40-46+NFR19-21 gemappt'
   - date: '2026-04-16'
@@ -69,7 +71,7 @@ Architektur-treibende NFRs:
 - **NFR18 (CDP-Koexistenz):** Erzwingt Multi-Client-faehigen Zugriff: MCP via Pipe/stdio und Script API via Server HTTP-Endpunkt (Port 9223) gleichzeitig, Tab-Isolation zwischen Clients
 - **NFR19 (Bundle-Download max 2s):** Erzwingt asynchronen Cortex-Bundle-Download mit Cache-First-Strategie und hartem Timeout beim Server-Start
 - **NFR20 (WASM-Determinismus):** Erzwingt Nix-Build fuer den Cortex-Validator, gleiche Inputs → gleiche Outputs auf jeder Plattform
-- **NFR21 (Pattern-Privacy):** Erzwingt striktes Datenmodell im Cortex — nur Domain, Pfad-Pattern, Tool-Sequenz, Metriken. Keine User-Daten, keine Credentials
+- **NFR21 (Pattern-Privacy):** Erzwingt striktes Datenmodell im Cortex — nur Seitentyp, Tool-Sequenz, Metriken. Domain optional lokal, nicht in Telemetrie/Bundles. Keine User-Daten, keine Credentials
 
 ### Technical Constraints & Dependencies
 
@@ -208,13 +210,22 @@ Alle Kern-Entscheidungen sind implementiert und produktiv validiert. Kein Redesi
 
 **Entscheidung:** Neues Subsystem `src/cortex/` das erfolgreiche Tool-Sequenzen aufzeichnet, lokal in einem Merkle Log speichert, und ueber die Community teilt.
 
-**Architektur:**
-- `cortex/pattern-recorder.ts` — Hook nach erfolgreichen Tool-Calls (wie Ambient-Context). Zeichnet Domain, Pfad-Pattern, Tool-Sequenz, Outcome und Content-Hash auf.
+**Pattern-Key:** `pageType` (regelbasiert aus A11y-Tree bestimmt, Epic 12a Retrofit). Drei-Schichten-Erkennung:
+1. Schicht 1: Regelbasierter A11y-Tree-Klassifikator → Seitentyp (~20 Typen)
+2. Schicht 2: Gewichtete Markov-Uebergangstabelle → Tool-Vorhersage pro Seitentyp
+3. Schicht 3: SimHash-Fallback → fuer unbekannte Seitentypen (deferred, Phase 2)
+
+**Community-Bundle-Format:** JSON Markov-Tabelle (~10KB): `{ pageType → { lastTool → { nextTool → weight } } }`. Ersetzt JSONL-Einzelpatterns (domain + pathPattern pro Zeile).
+
+**Architektur (8 Dateien, +2 durch Epic 12a):**
+- `cortex/pattern-recorder.ts` — Hook nach erfolgreichen Tool-Calls (wie Ambient-Context). Bestimmt Seitentyp via page-classifier und zeichnet Tool-Sequenz, Outcome und Content-Hash auf.
 - `cortex/local-store.ts` — Lokaler Append-Only Merkle Log (RFC-6962-kompatibel). Speichert Patterns kryptographisch gesichert.
-- `cortex/hint-matcher.ts` — URL-Pattern-Matching. Wird in navigate und view_page eingebunden, liefert Cortex-Hints in `_meta.cortex`.
+- `cortex/hint-matcher.ts` — Seitentyp-Matching + Markov-Vorhersage. Wird in navigate und view_page eingebunden, liefert Cortex-Hints in `_meta.cortex`.
+- `cortex/page-classifier.ts` — **Neu (Epic 12a).** Regelbasierter A11y-Tree-Klassifikator → Seitentyp (~20 Typen). Deterministisch, kein ML.
+- `cortex/markov-table.ts` — **Neu (Epic 12a).** Gewichtete Uebergangstabelle: P(naechstes_tool | letztes_tool, seiten_typ). Export als ~10KB JSON fuer Community-Sharing.
 - `cortex/bundle-loader.ts` — Laeuft beim Server-Start. Laedt Community-Bundle herunter, verifiziert Sigstore-Signatur und Merkle Inclusion Proof. Cache-First mit hartem 2s-Timeout (NFR19).
-- `cortex/telemetry-upload.ts` — Opt-in. Sendet anonymisierte Pattern-Eintraege an Collection-Endpoint (HTTPS POST, Rate-Limited, kein PII).
-- `cortex/cortex-types.ts` — Pattern, Bundle, MerkleProof, HintMatch Typen.
+- `cortex/telemetry-upload.ts` — Opt-in. Sendet anonymisierte Pattern-Eintraege (Seitentyp + Tool-Sequenz, keine Domain) an Collection-Endpoint (HTTPS POST, Rate-Limited, kein PII).
+- `cortex/cortex-types.ts` — Pattern (mit PageType statt Domain), Bundle (Markov-Tabelle statt Einzelpatterns), MerkleProof, HintMatch Typen.
 
 **Externe Komponente: cortex-validator/**
 - Separates Rust-Projekt (nicht Teil des Node.js-Builds)
@@ -283,8 +294,9 @@ Die Zielgruppe fuer deterministische Scripting (Tomek-Persona) arbeitet typische
 
 **Implementation Sequence fuer v2.0:**
 1. Epic 11: Public Browser Migration — Pro-Gates entfernen, License entfernen, Rename, npm/pip-Package migrieren
-2. Epic 12: Cortex Phase 1 — Pattern-Recorder, Merkle Log, Cortex-Hints, Telemetrie-Upload
-3. Epic 13: Cortex Phase 2 — WASM-Validator, Sigstore-Signierung, OCI Distribution, Canary-Deployment
+2. Epic 12: Cortex Phase 1 — Pattern-Recorder, Merkle Log, Cortex-Hints, Telemetrie-Upload — DONE
+3. Epic 12a: Cortex Pattern Generalization — Seitentyp-Klassifikator, Markov-Tabelle, Hint-Matcher + Telemetrie Retrofit
+4. Epic 13: Cortex Phase 2 — WASM-Validator, Sigstore-Signierung, OCI Distribution, Canary-Deployment
 
 **Cross-Component Dependencies:**
 - Tool Steering (registry.ts) ↔ Anti-Pattern-Detection (hooks) ↔ run_plan (plan/)
@@ -450,12 +462,14 @@ PublicBrowser/
 │   │   └── default-on-tool-result.ts # Ambient-Context, DOM-Diff, Cortex-Pattern-Recording
 │   │
 │   ├── cortex/               # Selbstlernende Wissensschicht
-│   │   ├── pattern-recorder.ts # Zeichnet erfolgreiche Sequenzen auf
+│   │   ├── pattern-recorder.ts # Zeichnet erfolgreiche Sequenzen auf (Seitentyp-basiert)
 │   │   ├── local-store.ts     # Lokaler Merkle Log (WASM oder native)
-│   │   ├── hint-matcher.ts    # URL-Pattern-Matching fuer Cortex-Hints
+│   │   ├── hint-matcher.ts    # Seitentyp-Matching + Markov-Vorhersage fuer Cortex-Hints
+│   │   ├── page-classifier.ts # A11y-Tree → Seitentyp (regelbasiert, deterministisch)
+│   │   ├── markov-table.ts    # Uebergangstabelle: P(next_tool | last_tool, page_type)
 │   │   ├── bundle-loader.ts   # Download + Verifikation des Community-Bundles
-│   │   ├── telemetry-upload.ts # Opt-in Upload anonymisierter Patterns
-│   │   └── cortex-types.ts    # Pattern, Bundle, MerkleProof Typen
+│   │   ├── telemetry-upload.ts # Opt-in Upload anonymisierter Patterns (Seitentyp, keine Domain)
+│   │   └── cortex-types.ts    # Pattern (PageType), Bundle (Markov-Tabelle), MerkleProof Typen
 │   │
 │   ├── transport/            # MCP-Transport-Layer
 │   │   ├── pipe-transport.ts # stdio (Default)
@@ -746,7 +760,8 @@ Erfolgreicher Tool-Call ──→ hooks/ ──→ cortex/pattern-recorder.ts
 
 **Implementation-Prioritaet:**
 1. Epic 11: Public Browser Migration — Pro-Gates entfernen, License entfernen, Rename, v2.0.0
-2. Epic 12: Cortex Phase 1 — Pattern-Recorder, Merkle Log, Cortex-Hints, Telemetrie-Upload
-3. Epic 13: Cortex Phase 2 — WASM-Validator, Sigstore, OCI Distribution, Canary-Deployment
-4. Script API v2: Shared Core Umbau (Epic 9, Stories 9.7-9.11)
-5. Story 23.1/6.1 (evaluate Anti-Spiral v2) — deferred
+2. Epic 12: Cortex Phase 1 — Pattern-Recorder, Merkle Log, Cortex-Hints, Telemetrie-Upload — DONE
+3. Epic 12a: Cortex Pattern Generalization — Seitentyp-Klassifikator, Markov-Tabelle, Retrofit
+4. Epic 13: Cortex Phase 2 — WASM-Validator, Sigstore, OCI Distribution, Canary-Deployment
+5. Script API v2: Shared Core Umbau (Epic 9, Stories 9.7-9.11)
+6. Story 23.1/6.1 (evaluate Anti-Spiral v2) — deferred

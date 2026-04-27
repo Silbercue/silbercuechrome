@@ -312,10 +312,10 @@ export function classify(features: PageFeatureVector): PageType {
     }
   }
 
-  // 2. login — Passwort-Feld + max 2 textbox + Formular (username/email + password)
-  //    <= 2 statt <= 3: Signups haben typischerweise 3+ Felder (Name+Email+Password
-  //    oder Email+Password+Confirm). 3 Felder = signup, nicht login.
-  if (hasPasswordField && textboxCount <= 2 && formCount >= 1) {
+  // 2. login — Passwort-Feld + max 2 textbox (username/email + password)
+  //    formCount-Check entfernt: viele <form>-Tags haben kein aria-label und
+  //    erscheinen deshalb nicht als form-Landmark im A11y-Tree (z.B. GitHub Login).
+  if (hasPasswordField && textboxCount <= 2) {
     return "login";
   }
 
@@ -340,8 +340,10 @@ export function classify(features: PageFeatureVector): PageType {
     return "checkout";
   }
 
-  // 6. search_results — search-Landmark + viele Links
-  if (hasSearchLandmark && linkCount >= 5) {
+  // 6. search_results — search-Landmark + viele Links + wenig Headings
+  //    Echte Suchergebnis-Seiten haben wenige Headings (< 8). Content-reiche Seiten
+  //    mit Suchfeld (Wikipedia: 20+ Headings, Amazon: 8+) fallen nicht rein.
+  if (hasSearchLandmark && linkCount >= 5 && headingCount < 8) {
     return "search_results";
   }
 

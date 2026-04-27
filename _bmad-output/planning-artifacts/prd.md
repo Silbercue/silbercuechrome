@@ -44,6 +44,8 @@ author: Julian
 date: 2026-04-14
 lastEdited: '2026-04-26'
 editHistory:
+  - date: '2026-04-27'
+    changes: 'Cortex Pattern Generalization: FR40, FR42, FR44, NFR21 auf Seitentyp-basiertes Datenmodell aktualisiert (domain+pathPattern → pageType). Sprint Change Proposal 2026-04-27.'
   - date: '2026-04-26'
     changes: 'Public Browser Pivot: Open-Core → Open Source, Pro entfernt, Rename zu Public Browser, Cortex-Vision (FR40-46, NFR20-22, Journey 6 Priya). Sprint Change Proposal 2026-04-26.'
   - date: '2026-04-16'
@@ -427,11 +429,11 @@ Distribution: `pip install publicbrowser`. Scripts nutzen intern dieselben Tool-
 
 ### Cortex — Selbstlernendes Wissen
 
-- FR40: Der MCP zeichnet erfolgreiche Tool-Sequenzen automatisch als Pattern-Eintraege auf (Domain, Pfad-Pattern, Tool-Sequenz, Outcome, Content-Hash)
+- FR40: Der MCP zeichnet erfolgreiche Tool-Sequenzen automatisch als Pattern-Eintraege auf (Seitentyp, Tool-Sequenz, Outcome, Content-Hash). Der Seitentyp wird regelbasiert aus dem A11y-Tree bestimmt (kein ML). Domain wird optional als Metadatum gespeichert, nicht als Schluessel verwendet
 - FR41: Pattern-Eintraege werden in einem kryptographisch gesicherten Append-Only Merkle Log gespeichert (RFC-6962-kompatibel)
-- FR42: Bei URL-Pattern-Match liefern navigate und view_page Cortex-Hints in der Tool-Response (_meta.cortex)
+- FR42: Bei Seitentyp-Match liefern navigate und view_page Cortex-Hints in der Tool-Response (_meta.cortex). Der Seitentyp wird aus dem A11y-Tree der aktuellen Seite bestimmt. Hints enthalten Markov-basierte Tool-Vorhersagen (naechstes wahrscheinlichstes Tool)
 - FR43: Der MCP zeigt in seiner Server-Description die Anzahl geladener Community-Patterns an
-- FR44: Pattern-Eintraege koennen opt-in an einen Collection-Endpoint gesendet werden (anonymisiert, Rate-Limited, kein PII)
+- FR44: Pattern-Eintraege koennen opt-in an einen Collection-Endpoint gesendet werden (anonymisiert, Rate-Limited, kein PII). Payloads enthalten Seitentyp und Tool-Sequenz — keine Domain, keine URLs
 - FR45: Der Cortex-Bundle wird beim Start heruntergeladen, Sigstore-Signatur und Merkle Inclusion Proof werden lokal verifiziert
 - FR46: Ungueltige oder nicht-verifizierbare Bundles werden ignoriert (sicherer Default, kein Fallback auf unverifizierten Content)
 
@@ -474,4 +476,4 @@ Distribution: `pip install publicbrowser`. Scripts nutzen intern dieselben Tool-
 
 - NFR19: Cortex-Bundle-Download darf den MCP-Start um maximal 2 Sekunden verzoegern (Cache-Hit: 0ms, Cache-Miss: max 2s, Timeout: Fallback auf lokalen Cache oder kein Cortex)
 - NFR20: Der WASM-Validator ist deterministisch — gleiche Inputs erzeugen auf jeder Plattform identische Outputs (verifizierbar durch Nix-Build-Hash)
-- NFR21: Cortex-Patterns enthalten ausschliesslich: Domain, Pfad-Pattern, Tool-Sequenz, Success-Rate, Installations-Count, Validator-Hash, Timestamp. Keine User-Daten, keine Credentials, keine Session-Tokens
+- NFR21: Cortex-Patterns enthalten ausschliesslich: Seitentyp, Tool-Sequenz, Success-Rate, Installations-Count, Validator-Hash, Timestamp. Optional: Domain als Metadatum (nur lokal, wird nicht in Telemetrie-Uploads oder Community-Bundles uebertragen). Keine User-Daten, keine Credentials, keine Session-Tokens

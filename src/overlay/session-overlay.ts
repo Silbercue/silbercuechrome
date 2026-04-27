@@ -117,7 +117,7 @@ const OVERLAY_REMOVE_SCRIPT = `(() => {
 })()`;
 
 let _scriptIdentifier: string | undefined;
-let _tierLabel = "Open Source";
+let _tierLabel = "Public Browser";
 // Last tool elapsed time
 let _lastElapsedMs = 0;
 
@@ -241,6 +241,29 @@ export async function showClickIndicator(cdpClient: CdpClient, sessionId: string
   } catch {
     // Non-critical
   }
+}
+
+/**
+ * Flash a Cortex pattern notification in the overlay (fades out after 3s).
+ */
+export async function showPatternRecorded(cdpClient: CdpClient, sessionId: string, pageType: string): Promise<void> {
+  const safe = pageType.replace(/[^a-z_]/g, "");
+  const script = `(() => {
+  var host = document.getElementById('${OVERLAY_ID}');
+  if (!host || !host.shadowRoot) return;
+  var sr = host.shadowRoot;
+  var bar = sr.querySelector('.sc-bar');
+  if (!bar) return;
+  var n = document.createElement('span');
+  n.textContent = '\\u{1F9E0} ${safe}';
+  n.style.cssText = 'color:#a29bfe;font-weight:600;margin-left:auto;opacity:1;transition:opacity 2s ease-out 1s;';
+  bar.appendChild(n);
+  requestAnimationFrame(function() { n.style.opacity = '0'; });
+  setTimeout(function() { n.remove(); }, 3200);
+})()`;
+  try {
+    await cdpClient.send("Runtime.evaluate", { expression: script, awaitPromise: false }, sessionId);
+  } catch { /* non-critical */ }
 }
 
 const TOOL_LABELS: Record<string, string> = {
