@@ -31,7 +31,7 @@ export const CONFIG = {
   OLD_NPM_PACKAGE: "@silbercue/chrome",
   DEPRECATION_MESSAGE:
     "This package has been renamed to public-browser. Install: npx public-browser@latest",
-  GITHUB_REPO_FREE: "Silbercue/silbercuechrome",
+  GITHUB_REPO_FREE: "Silbercue/public-browser",
   /**
    * Default git branch.
    * Override per Env-Var `SILBERCUE_PUBLISH_BRANCH` (z.B. fuer Test-Branches).
