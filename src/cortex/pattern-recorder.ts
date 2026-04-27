@@ -25,6 +25,7 @@ import {
   MAX_SEQUENCE_LENGTH,
   SEQUENCE_TIMEOUT_MS,
 } from "./cortex-types.js";
+import type { LocalStore } from "./local-store.js";
 
 /** Maximum number of events kept in the ring buffer (same as ToolSequenceTracker). */
 const MAX_BUFFER_SIZE = 64;
@@ -58,6 +59,13 @@ export class PatternRecorder {
 
   /** Collected patterns (consumed by Story 12.2 for persistence). */
   readonly emittedPatterns: CortexPattern[] = [];
+
+  /** Optional persistent store (Story 12.2 — Merkle append-only log). */
+  private readonly _localStore?: LocalStore;
+
+  constructor(localStore?: LocalStore) {
+    this._localStore = localStore;
+  }
 
   /** Get or create session state for the given sessionId. */
   private _getSession(sessionId: string): SessionState {
@@ -185,6 +193,17 @@ export class PatternRecorder {
         this.emittedPatterns.splice(0, this.emittedPatterns.length - MAX_EMITTED_PATTERNS);
       }
     }
+
+    // Story 12.2: fire-and-forget persistence to Merkle log.
+    // Errors are caught and debug-logged — never disrupt the tool flow.
+    if (this._localStore) {
+      this._localStore.append(pattern).catch((err: unknown) => {
+        debug(
+          "[pattern-recorder] localStore.append() failed: %s",
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    }
   }
 
   /**
@@ -218,5 +237,24 @@ export class PatternRecorder {
   }
 }
 
-/** Module-level singleton (same pattern as `toolSequence` in telemetry/tool-sequence.ts). */
-export const patternRecorder = new PatternRecorder();
+/**
+ * Module-level singleton (same pattern as `toolSequence` in telemetry/tool-sequence.ts).
+ *
+ * Story 12.2: The singleton is constructed with a LocalStore instance using
+ * the default data directory. The dynamic import avoids circular dependencies
+ * and keeps the module loadable even if the fs layer has issues.
+ */
+let _singletonStore: LocalStore | undefined;
+try {
+  // Dynamic require at module scope — LocalStore constructor is sync (no I/O).
+  // Using a variable import to avoid issues with the type-only import above.
+  const { LocalStore: LS } = await import("./local-store.js");
+  _singletonStore = new LS();
+} catch (err) {
+  debug(
+    "[pattern-recorder] Failed to initialise LocalStore for singleton: %s",
+    err instanceof Error ? err.message : String(err),
+  );
+}
+
+export const patternRecorder = new PatternRecorder(_singletonStore);

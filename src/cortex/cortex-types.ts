@@ -52,6 +52,63 @@ export interface ToolCallEvent {
   contentHash: string;
 }
 
+/**
+ * Story 12.2: Merkle Log Types.
+ *
+ * Defines data structures for the append-only Merkle log that provides
+ * cryptographic integrity for stored patterns. RFC-6962-compatible.
+ */
+
+/** A node in the Merkle hash tree (used internally for tree construction). */
+export interface MerkleNode {
+  /** SHA-256 hash of this node (hex-encoded). */
+  hash: string;
+  /** Left child (null for leaf nodes). */
+  left: MerkleNode | null;
+  /** Right child (null for leaf nodes). */
+  right: MerkleNode | null;
+}
+
+/**
+ * RFC-6962 Section 2.1.1 Inclusion Proof.
+ *
+ * Contains the sibling hashes needed to recompute the path from a leaf
+ * to the tree root. Allows verifying a single entry without knowing the
+ * entire tree.
+ */
+export interface MerkleInclusionProof {
+  /** Zero-based index of the leaf in the log. */
+  leafIndex: number;
+  /** Total number of leaves in the tree when this proof was generated. */
+  treeSize: number;
+  /** Ordered sibling hashes from leaf to root (hex-encoded). */
+  hashes: string[];
+}
+
+/**
+ * RFC-6962 Section 3.5 Signed Tree Head (simplified for local use).
+ *
+ * In Phase 1 there is no PKI signature — the locally stored tree head
+ * provides integrity verification for the append-only log.
+ */
+export interface SignedTreeHead {
+  /** Total number of leaves in the tree. */
+  treeSize: number;
+  /** SHA-256 Merkle root hash (hex-encoded, empty string for empty tree). */
+  rootHash: string;
+  /** Unix timestamp in milliseconds when the tree head was written. */
+  timestamp: number;
+}
+
+/** Configuration options for the LocalStore. */
+export interface LocalStoreOptions {
+  /**
+   * Directory where the Merkle log files are stored.
+   * Default: `~/.public-browser/cortex/`
+   */
+  dataDir?: string;
+}
+
 /** Minimum number of tools in a sequence to be considered recordable. */
 export const MIN_SEQUENCE_LENGTH = 2;
 

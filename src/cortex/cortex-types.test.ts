@@ -5,7 +5,14 @@
  * required fields and that constants are exported with correct values.
  */
 import { describe, it, expect } from "vitest";
-import type { CortexPattern, ToolCallEvent } from "./cortex-types.js";
+import type {
+  CortexPattern,
+  ToolCallEvent,
+  MerkleNode,
+  MerkleInclusionProof,
+  SignedTreeHead,
+  LocalStoreOptions,
+} from "./cortex-types.js";
 import {
   MIN_SEQUENCE_LENGTH,
   MAX_SEQUENCE_LENGTH,
@@ -60,6 +67,85 @@ describe("cortex-types (Story 12.1)", () => {
       expect(event.domain).toBe("example.com");
       expect(event.path).toBe("/users/123/profile");
       expect(event.contentHash).toBe("a1b2c3d4e5f6a7b8");
+    });
+  });
+
+  // ==========================================================================
+  // Story 12.2: Merkle Log Type Shapes
+  // ==========================================================================
+
+  describe("MerkleNode shape (Story 12.2)", () => {
+    it("has hash, left, and right fields", () => {
+      const leaf: MerkleNode = { hash: "abc123", left: null, right: null };
+      expect(leaf.hash).toBe("abc123");
+      expect(leaf.left).toBeNull();
+      expect(leaf.right).toBeNull();
+    });
+
+    it("supports nested tree structure", () => {
+      const left: MerkleNode = { hash: "left", left: null, right: null };
+      const right: MerkleNode = { hash: "right", left: null, right: null };
+      const parent: MerkleNode = { hash: "parent", left, right };
+
+      expect(parent.left).toBe(left);
+      expect(parent.right).toBe(right);
+    });
+  });
+
+  describe("MerkleInclusionProof shape (Story 12.2)", () => {
+    it("has leafIndex, treeSize, and hashes fields", () => {
+      const proof: MerkleInclusionProof = {
+        leafIndex: 3,
+        treeSize: 8,
+        hashes: ["aaa", "bbb", "ccc"],
+      };
+      expect(proof.leafIndex).toBe(3);
+      expect(proof.treeSize).toBe(8);
+      expect(proof.hashes).toEqual(["aaa", "bbb", "ccc"]);
+    });
+
+    it("empty proof is valid shape", () => {
+      const proof: MerkleInclusionProof = {
+        leafIndex: 0,
+        treeSize: 1,
+        hashes: [],
+      };
+      expect(proof.hashes).toHaveLength(0);
+    });
+  });
+
+  describe("SignedTreeHead shape (Story 12.2)", () => {
+    it("has treeSize, rootHash, and timestamp fields", () => {
+      const sth: SignedTreeHead = {
+        treeSize: 42,
+        rootHash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        timestamp: 1700000000000,
+      };
+      expect(sth.treeSize).toBe(42);
+      expect(sth.rootHash).toHaveLength(64);
+      expect(sth.timestamp).toBe(1700000000000);
+    });
+
+    it("empty tree head uses conventional defaults", () => {
+      const sth: SignedTreeHead = {
+        treeSize: 0,
+        rootHash: "",
+        timestamp: 0,
+      };
+      expect(sth.treeSize).toBe(0);
+      expect(sth.rootHash).toBe("");
+    });
+  });
+
+  describe("LocalStoreOptions shape (Story 12.2)", () => {
+    it("dataDir is optional", () => {
+      const opts: LocalStoreOptions = {};
+      expect(opts.dataDir).toBeUndefined();
+    });
+
+    it("accepts a custom dataDir", () => {
+      const opts: LocalStoreOptions = { dataDir: "/tmp/cortex-test" };
+      expect(opts.dataDir).toBe("/tmp/cortex-test");
     });
   });
 
