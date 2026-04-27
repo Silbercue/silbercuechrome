@@ -19,6 +19,42 @@ import { hintMatcher } from "./cortex/hint-matcher.js";
  *
  * See `src/cdp/browser-session.ts` for the full lifecycle + retry policy.
  */
+
+/**
+ * Story 12.4: Build the MCP server instructions string.
+ *
+ * When patternCount > 0 a "Cortex: N patterns loaded." line is appended
+ * so the LLM agent knows cortex knowledge is available before the first
+ * page visit. When 0 patterns exist the cortex line is omitted entirely.
+ */
+export function buildInstructions(patternCount: number): string {
+  const base = [
+    "Public Browser controls a real Chrome browser via CDP.",
+    "",
+    "Workflow: virtual_desk → navigate (to open a page) → view_page (read) → click/type/fill_form (act) → view_page (verify the result).",
+    "",
+    "CRITICAL — view_page vs capture_image:",
+    "- To see what is on the page: ALWAYS call view_page. It returns text + element refs for click/type.",
+    "- capture_image is ONLY for CSS layout checks, canvas content, or when the user explicitly asks for a screenshot.",
+    "- Do NOT call capture_image to read text, find buttons, check errors, or see page state — that is view_page.",
+    "- capture_image cannot return element refs, so you cannot click anything you see in it.",
+    "",
+    "Other rules:",
+    "- After every interaction, use view_page again to verify the result before proceeding.",
+    "- fill_form beats multiple type calls for any form with 2+ fields.",
+    "- For multi-step workflows, use run_plan to execute N steps in one call.",
+    "- evaluate is for JS computation and style mutations (.style.X = ...) — not for CSS reading or element discovery.",
+    "- Avoid evaluate as default recovery after click/type errors — call view_page for fresh refs and retry with the dedicated tool.",
+    "",
+    "Script API: `pip install publicbrowser` gives you a Python library for deterministic browser automation without an LLM. Scripts route through the same tool handlers as MCP (Shared Core). Usage: `from publicbrowser import Chrome; chrome = Chrome.connect(); page = chrome.new_page()` — then `page.navigate()`, `page.click()`, `page.fill()`, `page.evaluate()` etc. Auto-starts the server. Add `--script` to the MCP args for parallel MCP + Script access.",
+  ].join("\n");
+
+  if (patternCount > 0) {
+    return base + `\nCortex: ${patternCount} patterns loaded.`;
+  }
+  return base;
+}
+
 export interface StartServerOptions {
   /** Attach-only mode: connect to existing Chrome, no auto-launch, no reconnect. */
   attach?: boolean;
@@ -85,33 +121,23 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
     console.error("Public Browser --script: external CDP clients expected, tab ownership tracking enabled");
   }
 
-  // 3. Create the MCP server.
+  // 3. Story 12.4: Load cortex patterns BEFORE McpServer construction so
+  //    the pattern count can be included in the instructions string.
+  //    Hard 2s timeout (NFR19: cortex must not delay server start > 2s).
+  //    On timeout or error: patternCount = 0 → no cortex line in instructions.
+  await Promise.race([
+    hintMatcher.refreshAsync(),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]);
+
+  // 3b. Create the MCP server with dynamic instructions.
   const server = new McpServer(
     {
       name: "public-browser",
       version: VERSION,
     },
     {
-      instructions: [
-        "Public Browser controls a real Chrome browser via CDP.",
-        "",
-        "Workflow: virtual_desk → navigate (to open a page) → view_page (read) → click/type/fill_form (act) → view_page (verify the result).",
-        "",
-        "CRITICAL — view_page vs capture_image:",
-        "- To see what is on the page: ALWAYS call view_page. It returns text + element refs for click/type.",
-        "- capture_image is ONLY for CSS layout checks, canvas content, or when the user explicitly asks for a screenshot.",
-        "- Do NOT call capture_image to read text, find buttons, check errors, or see page state — that is view_page.",
-        "- capture_image cannot return element refs, so you cannot click anything you see in it.",
-        "",
-        "Other rules:",
-        "- After every interaction, use view_page again to verify the result before proceeding.",
-        "- fill_form beats multiple type calls for any form with 2+ fields.",
-        "- For multi-step workflows, use run_plan to execute N steps in one call.",
-        "- evaluate is for JS computation and style mutations (.style.X = ...) — not for CSS reading or element discovery.",
-        "- Avoid evaluate as default recovery after click/type errors — call view_page for fresh refs and retry with the dedicated tool.",
-        "",
-        "Script API: `pip install publicbrowser` gives you a Python library for deterministic browser automation without an LLM. Scripts route through the same tool handlers as MCP (Shared Core). Usage: `from publicbrowser import Chrome; chrome = Chrome.connect(); page = chrome.new_page()` — then `page.navigate()`, `page.click()`, `page.fill()`, `page.evaluate()` etc. Auto-starts the server. Add `--script` to the MCP args for parallel MCP + Script access.",
-      ].join("\n"),
+      instructions: buildInstructions(hintMatcher.patternCount),
     },
   );
 
@@ -122,13 +148,6 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
     browserSession,
   );
   registry.registerAll();
-
-  // 4b. Story 12.3: Cortex hint-matcher — load persisted patterns into the
-  //     in-memory index. Fire-and-forget: server start must NOT be blocked
-  //     (NFR19: max 2s for cortex operations). Empty store = no hints.
-  hintMatcher.refreshAsync().catch(() => {
-    /* errors are debug-logged inside refreshAsync */
-  });
 
   // 5. Start the stdio transport. This is the point at which Claude Code
   //    sees us come online — still no Chrome has been launched.

@@ -43,6 +43,18 @@ export class HintMatcher {
   private _index = new Map<string, CompiledPattern[]>();
 
   /**
+   * Total number of loaded patterns across all domain buckets.
+   * Returns 0 when no patterns are loaded.
+   */
+  get patternCount(): number {
+    let count = 0;
+    for (const bucket of this._index.values()) {
+      count += bucket.length;
+    }
+    return count;
+  }
+
+  /**
    * Load patterns into the internal index.
    * Compiles path patterns to RegExp for fast matching.
    */

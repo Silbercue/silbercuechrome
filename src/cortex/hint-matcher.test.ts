@@ -347,6 +347,74 @@ describe("HintMatcher (Story 12.3)", () => {
   });
 
   // =========================================================================
+  // Story 12.4: patternCount getter
+  // =========================================================================
+
+  it("patternCount returns 0 on empty index (Story 12.4)", () => {
+    expect(matcher.patternCount).toBe(0);
+  });
+
+  it("patternCount returns correct count after loadPatterns (Story 12.4)", () => {
+    matcher.loadPatterns([
+      makePattern({ domain: "a.com", pathPattern: "/one" }),
+      makePattern({ domain: "a.com", pathPattern: "/two" }),
+      makePattern({ domain: "b.com", pathPattern: "/three" }),
+    ]);
+    expect(matcher.patternCount).toBe(3);
+  });
+
+  it("patternCount updates after refresh via loadPatterns (Story 12.4)", () => {
+    matcher.loadPatterns([makePattern()]);
+    expect(matcher.patternCount).toBe(1);
+
+    // Reload with more patterns
+    matcher.loadPatterns([
+      makePattern({ pathPattern: "/a" }),
+      makePattern({ pathPattern: "/b" }),
+      makePattern({ pathPattern: "/c" }),
+      makePattern({ pathPattern: "/d" }),
+    ]);
+    expect(matcher.patternCount).toBe(4);
+
+    // Reload with empty → back to 0
+    matcher.loadPatterns([]);
+    expect(matcher.patternCount).toBe(0);
+  });
+
+  // =========================================================================
+  // Story 12.4 C2: patternCount after refresh()
+  // =========================================================================
+
+  it("patternCount returns correct value after refresh() loads from patternRecorder (Story 12.4 C2)", async () => {
+    const patterns = [
+      makePattern({ domain: "c2.com", pathPattern: "/alpha" }),
+      makePattern({ domain: "c2.com", pathPattern: "/beta" }),
+      makePattern({ domain: "c2.com", pathPattern: "/gamma" }),
+    ];
+
+    // Mock the dynamic import that refresh() uses internally
+    vi.doMock("./pattern-recorder.js", () => ({
+      patternRecorder: { emittedPatterns: patterns },
+    }));
+
+    // Fresh import so the mock is picked up by the dynamic import() chain
+    const { HintMatcher: FreshMatcher } = await import("./hint-matcher.js");
+    const freshMatcher = new FreshMatcher();
+
+    // Before refresh: empty
+    expect(freshMatcher.patternCount).toBe(0);
+
+    // Call refresh() (fire-and-forget internally), wait for the async settle
+    freshMatcher.refresh();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // After refresh: patternCount reflects the loaded patterns
+    expect(freshMatcher.patternCount).toBe(3);
+
+    vi.doUnmock("./pattern-recorder.js");
+  });
+
+  // =========================================================================
   // Singleton export
   // =========================================================================
 
