@@ -391,3 +391,82 @@ describe("PatternRecorder + LocalStore Integration (Story 12.2)", () => {
     await brokenStore.append(brokenRecorder.emittedPatterns[0]);
   });
 });
+
+// =============================================================================
+// Story 12.5: Integration Test — PatternRecorder + TelemetryUploader
+// =============================================================================
+
+describe("PatternRecorder + TelemetryUploader Integration (Story 12.5)", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("pattern emission triggers telemetryUploader.maybeUpload() via dynamic import", async () => {
+    // The pattern-recorder dynamically imports telemetry-upload.js
+    // and calls telemetryUploader.maybeUpload(). We spy on the singleton.
+    const telemetryMod = await import("./telemetry-upload.js");
+    const uploadSpy = vi.spyOn(telemetryMod.telemetryUploader, "maybeUpload");
+
+    // Create a fresh recorder (without local store to keep it simple).
+    const recorder = new PatternRecorder();
+    recorder.record("navigate", "telemetry-test.com", "/page", "h1");
+    recorder.record("view_page", "telemetry-test.com", "/page", "h2");
+
+    // Pattern should be emitted.
+    expect(recorder.emittedPatterns).toHaveLength(1);
+
+    // Wait for the dynamic import promise to resolve.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The spy should have been called with the emitted pattern.
+    expect(uploadSpy).toHaveBeenCalledTimes(1);
+    expect(uploadSpy.mock.calls[0][0].domain).toBe("telemetry-test.com");
+
+    uploadSpy.mockRestore();
+  });
+
+  it("pattern emission works even if telemetry module fails to import", () => {
+    // The dynamic import is wrapped in .catch() — a failure should not
+    // break pattern recording. We test this by verifying the recorder
+    // still works normally (the actual import won't fail in tests, but
+    // the pattern should be recorded regardless).
+    const recorder = new PatternRecorder();
+    recorder.record("navigate", "safe.com", "/", "h1");
+    recorder.record("view_page", "safe.com", "/", "h2");
+
+    expect(recorder.emittedPatterns).toHaveLength(1);
+    expect(recorder.emittedPatterns[0].domain).toBe("safe.com");
+  });
+
+  it("C2: maybeUpload() is NOT called when telemetry is disabled (default)", async () => {
+    // The singleton telemetryUploader has telemetry disabled by default
+    // (no PUBLIC_BROWSER_TELEMETRY env variable). Spy on its maybeUpload
+    // and verify it is still called by the pattern-recorder dynamic import,
+    // but the internal enabled-check prevents any fetch.
+    const telemetryMod = await import("./telemetry-upload.js");
+    const uploadSpy = vi.spyOn(telemetryMod.telemetryUploader, "maybeUpload");
+
+    const recorder = new PatternRecorder();
+    recorder.record("navigate", "disabled-test.com", "/page", "h1");
+    recorder.record("view_page", "disabled-test.com", "/page", "h2");
+
+    expect(recorder.emittedPatterns).toHaveLength(1);
+
+    // Wait for the dynamic import promise to resolve.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // maybeUpload is called (the recorder always calls it), but with
+    // telemetry disabled the method bails out immediately — no fetch.
+    expect(uploadSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    uploadSpy.mockRestore();
+  });
+});

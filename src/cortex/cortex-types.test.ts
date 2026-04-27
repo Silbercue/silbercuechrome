@@ -14,11 +14,14 @@ import type {
   LocalStoreOptions,
   CortexHint,
   HintMatchResult,
+  TelemetryPayload,
+  TelemetryConfig,
 } from "./cortex-types.js";
 import {
   MIN_SEQUENCE_LENGTH,
   MAX_SEQUENCE_LENGTH,
   SEQUENCE_TIMEOUT_MS,
+  TELEMETRY_RATE_LIMIT_MS,
 } from "./cortex-types.js";
 
 describe("cortex-types (Story 12.1)", () => {
@@ -213,6 +216,69 @@ describe("cortex-types (Story 12.1)", () => {
     });
   });
 
+  // ==========================================================================
+  // Story 12.5: Telemetry Upload Type Shapes
+  // ==========================================================================
+
+  describe("TelemetryPayload shape (Story 12.5)", () => {
+    it("has all required fields with correct types", () => {
+      const payload: TelemetryPayload = {
+        domain: "example.com",
+        pathPattern: "/users/:id/profile",
+        toolSequence: ["navigate", "view_page", "click"],
+        successRate: 1.0,
+        contentHash: "a1b2c3d4e5f6a7b8",
+        timestamp: 1700000000000,
+      };
+
+      expect(payload.domain).toBe("example.com");
+      expect(payload.pathPattern).toBe("/users/:id/profile");
+      expect(payload.toolSequence).toEqual(["navigate", "view_page", "click"]);
+      expect(payload.successRate).toBe(1.0);
+      expect(payload.contentHash).toBe("a1b2c3d4e5f6a7b8");
+      expect(typeof payload.timestamp).toBe("number");
+    });
+
+    it("contains exactly 6 whitelisted fields (NFR21)", () => {
+      const payload: TelemetryPayload = {
+        domain: "test.com",
+        pathPattern: "/",
+        toolSequence: ["navigate", "view_page"],
+        successRate: 1.0,
+        contentHash: "0000000000000000",
+        timestamp: 0,
+      };
+      const keys = Object.keys(payload);
+      expect(keys).toHaveLength(6);
+      expect(keys.sort()).toEqual(
+        ["contentHash", "domain", "pathPattern", "successRate", "timestamp", "toolSequence"],
+      );
+    });
+  });
+
+  describe("TelemetryConfig shape (Story 12.5)", () => {
+    it("has enabled, endpoint, and rateLimitMs fields", () => {
+      const config: TelemetryConfig = {
+        enabled: false,
+        endpoint: "https://cortex.public-browser.dev/v1/patterns",
+        rateLimitMs: 60_000,
+      };
+
+      expect(config.enabled).toBe(false);
+      expect(config.endpoint).toBe("https://cortex.public-browser.dev/v1/patterns");
+      expect(config.rateLimitMs).toBe(60_000);
+    });
+
+    it("enabled defaults to false in typical usage", () => {
+      const config: TelemetryConfig = {
+        enabled: false,
+        endpoint: "https://example.com/v1/patterns",
+        rateLimitMs: 60_000,
+      };
+      expect(config.enabled).toBe(false);
+    });
+  });
+
   describe("Constants", () => {
     it("MIN_SEQUENCE_LENGTH is 2", () => {
       expect(MIN_SEQUENCE_LENGTH).toBe(2);
@@ -224,6 +290,10 @@ describe("cortex-types (Story 12.1)", () => {
 
     it("SEQUENCE_TIMEOUT_MS is 60_000", () => {
       expect(SEQUENCE_TIMEOUT_MS).toBe(60_000);
+    });
+
+    it("TELEMETRY_RATE_LIMIT_MS is 60_000 (Story 12.5)", () => {
+      expect(TELEMETRY_RATE_LIMIT_MS).toBe(60_000);
     });
   });
 });

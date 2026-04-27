@@ -31,7 +31,7 @@
 # - Dev moves story to 'review', then runs code-review
 
 generated: 2026-04-16
-last_updated: 2026-04-27  # Story 12.5 ready-for-dev
+last_updated: 2026-04-27  # Story 12.5 done
 project: SilbercueChrome  # wird zu PublicBrowser in Epic 11
 project_key: NOKEY
 tracking_system: file-system
@@ -116,7 +116,7 @@ development_status:
   12-2-lokaler-merkle-log: done
   12-3-cortex-hint-in-tool-responses: done
   12-4-icon-badge-indikator: done
-  12-5-opt-in-telemetrie-upload: ready-for-dev
+  12-5-opt-in-telemetrie-upload: done
   epic-12-retrospective: optional
 
   # Epic 13: Cortex Phase 2 — Validierung + Distribution
