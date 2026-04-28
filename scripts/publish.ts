@@ -164,6 +164,20 @@ export function phase1_checkRepoStatus(
     };
   }
 
+  // 5b. Check no gitignored files are tracked (prevents accidental leaks to public repo)
+  const ignoredTracked = runOrNull(
+    "git",
+    ["ls-files", "--ignored", "--exclude-standard"],
+    freeRepo,
+  );
+  if (ignoredTracked && ignoredTracked.trim() !== "") {
+    const files = ignoredTracked.trim().split("\n");
+    return {
+      success: false,
+      message: `${files.length} gitignored file(s) are still tracked — run 'git rm --cached' first:\n${files.join("\n")}`,
+    };
+  }
+
   // 6. Check repo branch
   const freeBranch = run(
     "git",

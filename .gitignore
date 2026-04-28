@@ -47,9 +47,7 @@ eslint.config.js
 vitest.config.ts
 .claude/
 _bmad/
-_bmad-output/*
-!_bmad-output/planning-artifacts/
-!_bmad-output/planning-artifacts/**
+_bmad-output/
 docs/
 scripts/
 test-hardest/
