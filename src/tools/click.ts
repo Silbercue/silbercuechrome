@@ -281,12 +281,10 @@ export async function clickHandler(
 
   // UX-001: Resolve text to ref before validation
   if (params.text && !params.ref && !params.selector) {
-    // Ensure a11y tree is populated — fetch fresh if needed
-    if (!a11yTree.hasRefs()) {
-      try {
-        await a11yTree.getTree(cdpClient, sessionId!, { depth: 3, filter: "interactive", fresh: true }, sessionManager);
-      } catch { /* best-effort — findByText will return null */ }
-    }
+    // FR-046: Always fetch fresh a11y tree — previous refs may be stale after DOM mutations (e.g. type → restructure)
+    try {
+      await a11yTree.getTree(cdpClient, sessionId!, { depth: 3, filter: "interactive", fresh: true }, sessionManager);
+    } catch { /* best-effort — findByText will return null */ }
     const match = a11yTree.findByText(params.text);
     if (match) {
       params.ref = match.ref;

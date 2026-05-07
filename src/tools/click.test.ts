@@ -849,6 +849,33 @@ describe("clickHandler", () => {
     expect(a11yTree.getTree).toHaveBeenCalled();
   });
 
+  it("should always fetch fresh a11y tree even when refs exist (FR-046: stale ref after DOM mutation)", async () => {
+    // Simulate: hasRefs() returns true (stale refs from before a type/DOM-restructure)
+    mockHasRefs.mockReturnValue(true);
+    mockFindByText.mockReturnValue({ ref: "e200", backendNodeId: 200 });
+    mockResolveElement.mockResolvedValue({
+      backendNodeId: 200,
+      objectId: "obj-200",
+      role: "button",
+      name: "Suchen",
+      resolvedVia: "ref",
+      resolvedSessionId: "s1",
+    });
+    const { cdpClient } = createMockCdp();
+
+    const result = await clickHandler({ text: "Suchen" } as ClickParams, cdpClient, "s1");
+
+    expect(result.isError).toBeUndefined();
+    // Key assertion: getTree MUST be called with fresh:true even though hasRefs() was true
+    expect(a11yTree.getTree).toHaveBeenCalledWith(
+      cdpClient,
+      "s1",
+      expect.objectContaining({ fresh: true }),
+      undefined,
+    );
+    expect(mockFindByText).toHaveBeenCalledWith("Suchen");
+  });
+
   // --- Story 16.5: humanMouseMove callback delegation ---
 
   describe("Story 16.5 — humanMouseMove callback", () => {
