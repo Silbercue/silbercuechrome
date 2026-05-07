@@ -225,11 +225,16 @@ export class BrowserSession implements IBrowserSession {
       debug("BrowserSession: Chrome running with profile %s — will try CDP attach", profileSpec);
     }
 
+    const headlessDefault = this.sessionDefaults.getDefault("headless");
+    const headless = typeof headlessDefault === "boolean"
+      ? headlessDefault
+      : (this._options.headless ?? false);
+
     this._launcher = new ChromeLauncher({
       profilePath: resolved.userDataDir,
       profileDirectory: resolved.profileDirectory,
       isRealProfile: resolved.isRealProfile,
-      headless: this._options.headless ?? false,
+      headless,
       autoLaunch: chromeRunning ? false : (this._options.autoLaunch ?? true),
       port: this._cdpPort,
       autoReconnect: false,

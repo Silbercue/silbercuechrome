@@ -280,7 +280,7 @@ export async function launchChrome(
   }
 
   if (options?.headless !== false) {
-    flags.unshift("--headless");
+    flags.unshift("--headless=new");
   }
 
   debug("Spawning Chrome: %s %s", chromePath, flags.join(" "));

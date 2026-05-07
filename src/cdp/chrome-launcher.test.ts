@@ -226,7 +226,7 @@ describe("launchChrome", () => {
     expect(spawn).toHaveBeenCalledWith(
       "/bin/sh",
       expect.arrayContaining([
-        "--headless",
+        "--headless=new",
         "--remote-debugging-pipe",
         "--no-first-run",
       ]),
@@ -400,7 +400,7 @@ describe("ChromeLauncher", () => {
       const mockChild = createMockChildProcess();
       (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
         "/bin/sh",
-        "--headless",
+        "--headless=new",
         "--remote-debugging-pipe",
         "--user-data-dir=/tmp/public-browser-test",
       ];
@@ -1092,7 +1092,7 @@ describe("Chrome Profile Support", () => {
       const mockChild = createMockChildProcess();
       (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
         "/bin/sh",
-        "--headless",
+        "--headless=new",
         "--remote-debugging-pipe",
         "--user-data-dir=/tmp",
       ];
@@ -1310,7 +1310,7 @@ describe("Chrome Profile Support", () => {
       const reconnectChild = createMockChildProcess();
       (reconnectChild as unknown as { spawnargs: string[] }).spawnargs = [
         "/bin/sh",
-        "--headless",
+        "--headless=new",
         "--remote-debugging-pipe",
         "--user-data-dir=/tmp",
       ];
@@ -1438,7 +1438,7 @@ describe("AutoLaunch connection strategy", () => {
     const mockChild = createMockChildProcess();
     (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
       "/bin/sh",
-      "--headless",
+      "--headless=new",
       "--remote-debugging-pipe",
       "--user-data-dir=/tmp/public-browser-test",
     ];
@@ -1497,7 +1497,7 @@ describe("AutoLaunch connection strategy", () => {
     const mockChild = createMockChildProcess();
     (mockChild as unknown as { spawnargs: string[] }).spawnargs = [
       "/bin/sh",
-      "--headless",
+      "--headless=new",
       "--remote-debugging-pipe",
       "--user-data-dir=/tmp/public-browser-test",
     ];
@@ -1532,7 +1532,7 @@ describe("AutoLaunch connection strategy", () => {
     expect(spawn).toHaveBeenCalledWith(
       "/bin/sh",
       expect.arrayContaining([
-        "--headless",
+        "--headless=new",
         "--remote-debugging-pipe",
       ]),
       expect.objectContaining({
