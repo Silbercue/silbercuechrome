@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { BrowserSession } from "./cdp/browser-session.js";
 import { resolveAutoLaunch } from "./cdp/chrome-launcher.js";
+import { resolveProfileSpec, isChromeRunningWithProfile } from "./cdp/chrome-profiles.js";
+import type { ResolvedProfile } from "./cdp/chrome-profiles.js";
 import { ToolRegistry } from "./registry.js";
 import { VERSION } from "./version.js";
 import { ScriptApiServer } from "./transport/script-api-server.js";
@@ -67,6 +69,8 @@ export interface StartServerOptions {
    * ignored by MCP tools (switch_tab, virtual_desk, navigate).
    */
   script?: boolean;
+  /** Chrome profile name (e.g. "Julian") or raw path. Resolved at startup. */
+  profile?: string;
 }
 
 export async function startServer(options?: StartServerOptions): Promise<void> {
@@ -74,7 +78,6 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
   const scriptMode = options?.script ?? false;
 
   // 1. Read environment — no Chrome is touched here.
-  const profilePath = process.env.SILBERCUE_CHROME_PROFILE || undefined;
   const headlessEnv = process.env.SILBERCUE_CHROME_HEADLESS === "true";
   const portEnv = process.env.SILBERCUE_CHROME_PORT;
   const cdpPort = portEnv ? parseInt(portEnv, 10) : 9222;
@@ -82,26 +85,59 @@ export async function startServer(options?: StartServerOptions): Promise<void> {
     console.error(`Error: SILBERCUE_CHROME_PORT="${portEnv}" is not a valid port (1-65535).`);
     process.exit(1);
   }
-  const autoLaunch = attachMode
+
+  // 1b. Profile resolution: CLI --profile > PUBLIC_BROWSER_PROFILE > SILBERCUE_CHROME_PROFILE
+  const profileSpec = options?.profile
+    || process.env.PUBLIC_BROWSER_PROFILE
+    || process.env.SILBERCUE_CHROME_PROFILE
+    || undefined;
+
+  let profilePath: string | undefined;
+  let profileDirectory: string | undefined;
+  let isRealProfile = false;
+  let forceAttach = false;
+
+  if (profileSpec) {
+    try {
+      const resolved: ResolvedProfile = resolveProfileSpec(profileSpec);
+      profilePath = resolved.userDataDir;
+      profileDirectory = resolved.profileDirectory;
+      isRealProfile = resolved.isRealProfile;
+
+      // Lock-file detection: if Chrome is already running with this profile,
+      // force attach mode so we connect via WebSocket instead of launching.
+      if (isChromeRunningWithProfile(resolved.userDataDir)) {
+        console.error(
+          `Public Browser: Chrome already running with profile "${profileSpec}" — attaching via CDP.`,
+        );
+        forceAttach = true;
+      } else {
+        console.error(
+          `Public Browser using profile: "${profileSpec}" → ${resolved.profileDirectory} in ${resolved.userDataDir}`,
+        );
+      }
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  }
+
+  const effectiveAttach = attachMode || forceAttach;
+  const autoLaunch = effectiveAttach
     ? false
     : resolveAutoLaunch(
         process.env as Record<string, string | undefined>,
         headlessEnv,
       );
 
-  if (profilePath) {
-    console.error(`Public Browser using Chrome profile: ${profilePath}`);
-  }
-
   // 2. Create the lazy BrowserSession. No launch yet.
-  //    In attach mode: autoLaunch = false (set above), attachMode flag
-  //    for tab-lifecycle cleanup. autoReconnect is already false by default
-  //    in BrowserSession constructor — no need to set it explicitly.
   const browserSession = new BrowserSession({
     profilePath,
+    profileDirectory,
+    isRealProfile,
     headless: headlessEnv,
     autoLaunch,
-    attachMode,
+    attachMode: effectiveAttach,
     scriptMode,
     cdpPort,
   });

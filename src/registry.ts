@@ -1716,17 +1716,24 @@ export class ToolRegistry implements ToolRegistryPublic {
 
     // --- 9. Meta (configure_session/run_plan) ---
     // Story 7.3: configure_session — set session defaults and auto-promote
+    // NOT wrapped with ensureReady() — configure_session is a meta-tool that
+    // must work BEFORE Chrome launches (e.g. to set a profile).
     if (this._browserSession.sessionDefaults) {
       maybeRegisterFreeMCPTool(
         "configure_session",
-        "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions.",
+        "View/set session defaults for recurring parameters (tab, timeout, etc.). Without params: show current defaults and auto-promote suggestions. With autoPromote: true: apply all suggestions. Use profile param BEFORE any browser interaction to launch Chrome with a named profile.",
         {
           defaults: configureSessionSchema.shape.defaults,
           autoPromote: configureSessionSchema.shape.autoPromote,
+          profile: configureSessionSchema.shape.profile,
         },
-        wrap(async (params) => {
-          return configureSessionHandler(params as unknown as ConfigureSessionParams, this._browserSession.sessionDefaults!);
-        }, "configure_session"),
+        async (params) => {
+          return configureSessionHandler(
+            params as unknown as ConfigureSessionParams,
+            this._browserSession.sessionDefaults!,
+            this._browserSession.isReady,
+          );
+        },
       );
     }
 
@@ -1949,7 +1956,11 @@ export class ToolRegistry implements ToolRegistryPublic {
     });
     if (this._browserSession.sessionDefaults) {
       this._handlers.set("configure_session", async (params) => {
-        return configureSessionHandler(params as unknown as ConfigureSessionParams, this._browserSession.sessionDefaults!);
+        return configureSessionHandler(
+          params as unknown as ConfigureSessionParams,
+          this._browserSession.sessionDefaults!,
+          this._browserSession.isReady,
+        );
       });
     }
 

@@ -71,24 +71,28 @@ if (isMainModule) {
     // Wenn dispatchTopLevelCli einen Subcommand erkennt, beendet es den
     // Prozess via process.exit(). Sonst → false zurueck → Server starten.
     //
-    // Story 22.3: --attach Flag parsen. Wird BEVOR startServer() an diese
-    // Option weitergereicht.
     const attach = process.argv.includes("--attach");
-
-    // Story 9.1: --script Flag parsen. Signalisiert dem MCP-Server, dass
-    // externe CDP-Clients (z.B. Python Script API) erwartet werden und
-    // extern erstellte Tabs ignoriert werden sollen.
     const script = process.argv.includes("--script");
 
-    // M2-Fix: Filter --attach and --script from argv before dispatch so that e.g.
-    // `public-browser --attach version` correctly dispatches "version"
-    // instead of treating "--attach" as argv[2] (unknown command → server start).
-    const filteredArgv = process.argv.filter((arg) => arg !== "--attach" && arg !== "--script");
+    // --profile <name>: extract the value following the flag
+    let profile: string | undefined;
+    const profileIdx = process.argv.indexOf("--profile");
+    if (profileIdx !== -1 && profileIdx + 1 < process.argv.length) {
+      profile = process.argv[profileIdx + 1];
+    }
+
+    // Filter flags (and --profile's value) from argv before dispatch
+    const flagsToFilter = new Set(["--attach", "--script", "--profile"]);
+    const filteredArgv = process.argv.filter((arg, idx) => {
+      if (flagsToFilter.has(arg)) return false;
+      if (idx > 0 && process.argv[idx - 1] === "--profile") return false;
+      return true;
+    });
 
     dispatchTopLevelCli(filteredArgv, import.meta.url)
       .then((handled) => {
         if (handled) return;
-        return startServer({ attach, script });
+        return startServer({ attach, script, profile });
       })
       .catch((err) => {
         console.error("Fatal:", err);

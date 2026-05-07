@@ -13,6 +13,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "node:url";
+import { discoverProfiles, getChromeUserDataDir } from "../cdp/chrome-profiles.js";
 
 /**
  * Anzahl Tools die der MCP-Server registriert.
@@ -32,6 +33,7 @@ const KNOWN_SUBCOMMANDS = [
   "--version",
   "-v",
   "status",
+  "profiles",
   "help",
   "--help",
   "-h",
@@ -130,6 +132,12 @@ export async function dispatchTopLevelCli(
       return true;
     }
 
+    case "profiles": {
+      printProfiles();
+      process.exit(0);
+      return true;
+    }
+
     case "help":
     case "--help":
     case "-h": {
@@ -145,24 +153,58 @@ export async function dispatchTopLevelCli(
   }
 }
 
+/** Druckt die verfuegbaren Chrome-Profile. */
+function printProfiles(): void {
+  const root = getChromeUserDataDir();
+  if (!root) {
+    console.log("Chrome user data directory not found.");
+    return;
+  }
+
+  const profiles = discoverProfiles(root);
+  if (profiles.length === 0) {
+    console.log("No Chrome profiles found.");
+    return;
+  }
+
+  console.log("Available Chrome profiles:");
+  console.log("");
+  for (const p of profiles) {
+    console.log(`  "${p.name}" (${p.directory})`);
+  }
+  console.log("");
+  console.log("Usage:  public-browser --profile \"<name>\"");
+  console.log("   or:  PUBLIC_BROWSER_PROFILE=\"<name>\" npx public-browser");
+}
+
 /** Druckt den Help-Text. */
 function printHelp(): void {
   console.log("Public Browser MCP Server");
   console.log("");
   console.log("Usage:");
   console.log("  public-browser [command]");
-  console.log("  public-browser --attach        Start MCP server in attach-only mode");
+  console.log("  public-browser --profile \"Julian\"   Start with a Chrome profile");
+  console.log("  public-browser --attach             Start in attach-only mode");
   console.log("");
   console.log("Commands:");
   console.log("  version                Show version information");
   console.log("  status                 Show tool count");
+  console.log("  profiles               List available Chrome profiles");
   console.log("  help                   Show this help text");
   console.log("");
   console.log("Flags:");
+  console.log("  --profile <name>       Launch Chrome with a named profile (e.g. \"Julian\").");
+  console.log("                         Preserves cookies, logins, extensions, and history.");
+  console.log("                         If Chrome is already running with the profile,");
+  console.log("                         attaches via CDP instead of launching a new instance.");
   console.log("  --attach               Connect to existing Chrome on port 9222 (no auto-launch).");
   console.log("                         Creates its own tab and cleans it up on exit.");
-  console.log("                         Use from trigger scripts when another MCP session is active.");
   console.log("  --script               Enable Script API (HTTP server on port 9223) for Python clients.");
+  console.log("");
+  console.log("Environment variables:");
+  console.log("  PUBLIC_BROWSER_PROFILE   Chrome profile name (same as --profile)");
+  console.log("  SILBERCUE_CHROME_HEADLESS=true    Run in headless mode");
+  console.log("  SILBERCUE_CHROME_PORT=<port>      CDP port (default: 9222)");
   console.log("");
   console.log("Without a command, starts the MCP server on stdio.");
   console.log("");

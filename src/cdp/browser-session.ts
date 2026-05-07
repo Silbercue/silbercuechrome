@@ -27,6 +27,7 @@
  */
 
 import { ChromeLauncher, type ChromeConnection } from "./chrome-launcher.js";
+import { resolveProfileSpec, isChromeRunningWithProfile } from "./chrome-profiles.js";
 import { SessionManager } from "./session-manager.js";
 import { DialogHandler } from "./dialog-handler.js";
 import { ConsoleCollector } from "./console-collector.js";
@@ -102,6 +103,8 @@ export interface IBrowserSession {
 
 export interface BrowserSessionOptions {
   profilePath?: string;
+  profileDirectory?: string;
+  isRealProfile?: boolean;
   headless?: boolean;
   autoLaunch?: boolean;
   /**
@@ -135,7 +138,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export class BrowserSession implements IBrowserSession {
-  private readonly _launcher: ChromeLauncher;
+  private _launcher: ChromeLauncher;
   private readonly _options: BrowserSessionOptions;
   private readonly _establishedDelays: number[];
   private readonly _freshDelays: number[];
@@ -184,6 +187,8 @@ export class BrowserSession implements IBrowserSession {
     this._cdpPort = options.cdpPort ?? 9222;
     this._launcher = new ChromeLauncher({
       profilePath: options.profilePath,
+      profileDirectory: options.profileDirectory,
+      isRealProfile: options.isRealProfile ?? false,
       headless: options.headless ?? false,
       autoLaunch: options.autoLaunch ?? true,
       port: this._cdpPort,
@@ -200,6 +205,43 @@ export class BrowserSession implements IBrowserSession {
     // Tests can inject shorter values for speed.
     this._establishedDelays = options.retryTimings?.establishedDelays ?? [0, 250, 500];
     this._freshDelays = options.retryTimings?.freshDelays ?? [0, 400];
+  }
+
+  /**
+   * If configure_session set a profile before the first launch,
+   * recreate the launcher with resolved profile settings.
+   */
+  private _applyDeferredProfile(): void {
+    const profileSpec = this.sessionDefaults.getDefault("_profile") as string | undefined;
+    if (!profileSpec) return;
+
+    const resolved = resolveProfileSpec(profileSpec);
+    const chromeRunning = isChromeRunningWithProfile(resolved.userDataDir);
+
+    if (chromeRunning) {
+      // Chrome is running with this profile. We can only attach if CDP is available.
+      // Set autoLaunch=false so the launcher tries WebSocket only. If that fails,
+      // the error message from connect() will tell the user what to do.
+      debug("BrowserSession: Chrome running with profile %s — will try CDP attach", profileSpec);
+    }
+
+    this._launcher = new ChromeLauncher({
+      profilePath: resolved.userDataDir,
+      profileDirectory: resolved.profileDirectory,
+      isRealProfile: resolved.isRealProfile,
+      headless: this._options.headless ?? false,
+      autoLaunch: chromeRunning ? false : (this._options.autoLaunch ?? true),
+      port: this._cdpPort,
+      autoReconnect: false,
+    });
+
+    debug(
+      "BrowserSession: deferred profile applied — %s → %s/%s (chromeRunning=%s)",
+      profileSpec,
+      resolved.userDataDir,
+      resolved.profileDirectory,
+      chromeRunning,
+    );
   }
 
   // ── Public getters ──────────────────────────────────────────────────
@@ -376,6 +418,9 @@ export class BrowserSession implements IBrowserSession {
       this._relaunchedAfterLoss = true;
       return;
     }
+
+    // Profile from configure_session: if set before first launch, recreate launcher
+    this._applyDeferredProfile();
 
     // Policy branch B — fresh session: full connect (WebSocket first, then
     // auto-launch) with a single retry for flaky startup conditions. If

@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, copyFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm, mkdir } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -23,8 +23,12 @@ export interface ChromeConnectionOptions {
   autoLaunch?: boolean;
   /** Launch Chrome in headless mode (default: false — browser is visible by default) */
   headless?: boolean;
-  /** Pfad zu einem echten Chrome-Profil (user-data-dir). Opt-in: nur gesetzt = aktiv. */
+  /** Chrome user-data-dir (root). When set with profileDirectory, launches with a real profile. */
   profilePath?: string;
+  /** Chrome --profile-directory value (e.g. "Profile 1"). Requires profilePath. */
+  profileDirectory?: string;
+  /** Whether this is a real user profile (preserves extensions, sync, etc.) */
+  isRealProfile?: boolean;
   /**
    * Whether ChromeConnection should attempt a background reconnect loop
    * when the CDP transport closes or the Chrome child process exits.
@@ -44,15 +48,19 @@ export interface LaunchOptions {
   headless?: boolean;
   /** Wenn gesetzt: Chrome nutzt dieses Verzeichnis als user-data-dir statt eines Temp-Verzeichnisses */
   profilePath?: string;
+  /** Chrome --profile-directory value (e.g. "Profile 1"). Requires profilePath. */
+  profileDirectory?: string;
+  /** Real user profile: don't disable extensions/sync. */
+  isRealProfile?: boolean;
   /** CDP debugging port for --remote-debugging-port flag (default: 9222) */
   port?: number;
 }
 
 interface LaunchResult {
   cdpClient: CdpClient;
-  transport: PipeTransport;
+  transport: CdpTransport;
   process: ChildProcess;
-  transportType: "pipe";
+  transportType: TransportType;
 }
 
 // ── AutoLaunch Resolution (Story 10.2) ────────────────────────────────
@@ -139,23 +147,56 @@ export function findChromePath(): string | null {
   return null;
 }
 
-// ── Chrome Spawn with CDP-Pipe (Task 2) ───────────────────────────────
+// ── Chrome Spawn (Task 2) ────────────────────────────────────────────
 
-const CHROME_FLAGS = [
-  "--remote-debugging-pipe",
+const CHROME_FLAGS_CORE = [
   "--no-first-run",
   "--no-default-browser-check",
   "--disable-default-apps",
-  "--disable-extensions",
   "--disable-background-networking",
   "--disable-background-timer-throttling",
   "--disable-backgrounding-occluded-windows",
   "--disable-renderer-backgrounding",
   "--enable-features=CDPScreenshotNewSurface",
-  "--disable-sync",
   "--mute-audio",
   "--disable-blink-features=AutomationControlled",
 ];
+
+const CHROME_FLAGS_ISOLATED = [
+  "--disable-extensions",
+  "--disable-sync",
+];
+
+/**
+ * Poll /json/version until Chrome responds, then connect via WebSocket.
+ * Used for real profile launches where --remote-debugging-pipe is not available.
+ */
+async function pollAndConnectWebSocket(
+  port: number,
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<CdpTransport> {
+  const start = Date.now();
+  const pollInterval = 500;
+  let lastError: Error | undefined;
+
+  while (Date.now() - start < timeoutMs) {
+    if (child.exitCode !== null) {
+      throw new Error(`Chrome exited with code ${child.exitCode} before CDP was ready`);
+    }
+    try {
+      const versionInfo = await fetchJsonVersion(port, 2000);
+      if (versionInfo.webSocketDebuggerUrl) {
+        return WebSocketTransport.connect(versionInfo.webSocketDebuggerUrl as string, { timeoutMs: 5000 });
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    await new Promise((r) => setTimeout(r, pollInterval));
+  }
+
+  throw lastError ?? new Error(`Chrome did not respond on port ${port} within ${timeoutMs}ms`);
+}
 
 export async function launchChrome(
   options?: LaunchOptions,
@@ -169,16 +210,48 @@ export async function launchChrome(
 
   let userDataDir: string;
   let tmpDir: string | undefined;
+  const isRealProfile = options?.isRealProfile ?? false;
 
-  if (options?.profilePath) {
-    // Validate that the profile path exists
+  if (isRealProfile && options?.profilePath && options?.profileDirectory) {
+    // Real profile: Chrome rejects --remote-debugging-port on the default
+    // user-data-dir. Workaround: create a wrapper dir that symlinks the
+    // profile folder. Chrome sees a "non-default" dir but uses the real data.
+    if (!existsSync(options.profilePath)) {
+      throw new Error(
+        `Chrome profile path does not exist: ${options.profilePath}`,
+      );
+    }
+    const profileSubdir = join(options.profilePath, options.profileDirectory);
+    if (!existsSync(profileSubdir)) {
+      throw new Error(
+        `Chrome profile directory does not exist: ${profileSubdir}`,
+      );
+    }
+    tmpDir = join(
+      tmpdir(),
+      `public-browser-profile-${randomBytes(4).toString("hex")}`,
+    );
+    await mkdir(tmpDir, { recursive: true });
+
+    // Copy Local State (profile metadata) and create First Run marker
+    const localStatePath = join(options.profilePath, "Local State");
+    if (existsSync(localStatePath)) {
+      copyFileSync(localStatePath, join(tmpDir, "Local State"));
+    }
+    writeFileSync(join(tmpDir, "First Run"), "");
+
+    // Symlink the actual profile directory into the wrapper
+    symlinkSync(profileSubdir, join(tmpDir, options.profileDirectory));
+
+    userDataDir = tmpDir;
+  } else if (options?.profilePath) {
+    // Raw path mode (backward compat)
     if (!existsSync(options.profilePath)) {
       throw new Error(
         `Chrome profile path does not exist: ${options.profilePath}`,
       );
     }
     userDataDir = options.profilePath;
-    // No tmpDir — profile directory must NEVER be deleted
   } else {
     // Default: isolated temp profile
     tmpDir = join(
@@ -190,25 +263,52 @@ export async function launchChrome(
   }
 
   const port = options?.port ?? 9222;
-  const flags = [...CHROME_FLAGS, `--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`];
+  const baseFlags = isRealProfile
+    ? [...CHROME_FLAGS_CORE]
+    : [...CHROME_FLAGS_CORE, ...CHROME_FLAGS_ISOLATED];
+
+  // Real profiles: WebSocket only (Chrome rejects --remote-debugging-pipe
+  // with the default user-data-dir). Temp profiles: pipe for lower latency.
+  if (!isRealProfile) {
+    baseFlags.unshift("--remote-debugging-pipe");
+  }
+
+  const flags = [...baseFlags, `--remote-debugging-port=${port}`, `--user-data-dir=${userDataDir}`];
+
+  if (options?.profileDirectory) {
+    flags.push(`--profile-directory=${options.profileDirectory}`);
+  }
+
   if (options?.headless !== false) {
     flags.unshift("--headless");
   }
 
   debug("Spawning Chrome: %s %s", chromePath, flags.join(" "));
 
+  // stdio layout: real profiles don't use pipe FDs 3/4
+  const stdioConfig: ("ignore" | "pipe")[] = isRealProfile
+    ? ["ignore", "ignore", "pipe"]
+    : ["ignore", "ignore", "pipe", "pipe", "pipe"];
+
   const child = spawn(chromePath, flags, {
-    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+    stdio: stdioConfig,
   });
 
   try {
+    if (isRealProfile) {
+      // WebSocket path: poll /json/version until Chrome is ready, then connect
+      const wsTransport = await pollAndConnectWebSocket(port, child, 15_000);
+      const cdpClient = new CdpClient(wsTransport);
+      await cdpClient.send("Browser.getVersion");
+      return { cdpClient, transport: wsTransport, process: child, transportType: "websocket" as TransportType };
+    }
+
+    // Pipe path (default for temp profiles)
     const cdpReadable = child.stdio[4] as Readable;
     const cdpWritable = child.stdio[3] as Writable;
     const transport = new PipeTransport(cdpReadable, cdpWritable);
     const cdpClient = new CdpClient(transport);
 
-    // Wait for Chrome to be ready — Browser.getVersion must succeed
-    // B1: 5s pipe startup timeout (NFR11/NFR14 compliance)
     await Promise.race([
       cdpClient.send("Browser.getVersion"),
       new Promise<never>((_, reject) =>
@@ -576,6 +676,8 @@ export class ChromeLauncher {
   private readonly _autoLaunch: boolean;
   private readonly _headless: boolean;
   private readonly _profilePath: string | undefined;
+  private readonly _profileDirectory: string | undefined;
+  private readonly _isRealProfile: boolean;
   private readonly _autoReconnect: boolean;
 
   constructor(options?: ChromeConnectionOptions) {
@@ -583,6 +685,8 @@ export class ChromeLauncher {
     this._autoLaunch = options?.autoLaunch ?? true;
     this._headless = options?.headless ?? false;
     this._profilePath = options?.profilePath;
+    this._profileDirectory = options?.profileDirectory;
+    this._isRealProfile = options?.isRealProfile ?? false;
     this._autoReconnect = options?.autoReconnect ?? true;
   }
 
@@ -617,7 +721,13 @@ export class ChromeLauncher {
     }
 
     debug("Launching Chrome...");
-    const result = await launchChrome({ headless: this._headless, profilePath: this._profilePath, port: this._port });
+    const result = await launchChrome({
+      headless: this._headless,
+      profilePath: this._profilePath,
+      profileDirectory: this._profileDirectory,
+      isRealProfile: this._isRealProfile,
+      port: this._port,
+    });
 
     // Extract tmpDir from the spawn args — only for temp profiles (no profilePath)
     let tmpDir: string | undefined;
