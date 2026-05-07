@@ -96,6 +96,37 @@ This exercises three core tools in sequence: `navigate` loads the page, `view_pa
 claude mcp remove --scope user public-browser
 ```
 
+## Chrome Profiles
+
+By default, Public Browser starts Chrome with a fresh temp profile — no cookies, no logins, no extensions. For tasks like research on sites that block anonymous visitors, you can launch Chrome with your real profile instead.
+
+### List available profiles
+
+```bash
+npx public-browser profiles
+```
+
+### Launch with a profile
+
+Three ways — pick whichever fits your setup:
+
+```bash
+# CLI flag
+npx public-browser --profile "Julian"
+
+# Environment variable
+PUBLIC_BROWSER_PROFILE="Julian" npx public-browser
+
+# MCP tool (call BEFORE any browser interaction)
+configure_session({ profile: "Julian" })
+```
+
+When using a real profile, Public Browser preserves extensions, cookies, logins, and sync. It creates a lightweight wrapper directory with a symlink to your real profile data — Chrome gets a "non-default" data dir (required for remote debugging) while using your actual profile.
+
+### If Chrome is already open
+
+Public Browser detects this via lock-file inspection. If Chrome is running with remote debugging enabled, it attaches via CDP. If not, it shows a clear error asking you to close Chrome first.
+
 ## Script API (Python)
 
 A second way to use Public Browser — deterministic browser automation from Python, without an LLM in the loop. Scripts use the same tool implementations as the MCP server (Shared Core) — every improvement to `click`, `navigate`, `fill_form` etc. automatically benefits your scripts too. The MCP server handles AI-driven workflows; the Script API is for repeatable scripts you write yourself.
