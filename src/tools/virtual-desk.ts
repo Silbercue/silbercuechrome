@@ -3,6 +3,7 @@ import type { CdpClient } from "../cdp/cdp-client.js";
 import type { ToolResponse, ConnectionStatus } from "../types.js";
 import type { TabStateCache } from "../cache/tab-state-cache.js";
 import { wrapCdpError } from "./error-utils.js";
+import { VERSION } from "../version.js";
 
 export const virtualDeskSchema = z.object({});
 export type VirtualDeskParams = z.infer<typeof virtualDeskSchema>;
@@ -165,9 +166,11 @@ export async function virtualDeskHandler(
       );
     }
 
+    lines.push(`Server: public-browser v${VERSION}`);
+
     return {
       content: [{ type: "text", text: lines.join("\n") }],
-      _meta: { elapsedMs: Math.round(performance.now() - start), method, tabCount: pageTabs.length },
+      _meta: { elapsedMs: Math.round(performance.now() - start), method, tabCount: pageTabs.length, serverVersion: VERSION },
     };
   } catch (err) {
     const elapsedMs = Math.round(performance.now() - start);
