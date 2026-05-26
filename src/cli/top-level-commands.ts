@@ -23,9 +23,9 @@ import { discoverProfiles, getChromeUserDataDir } from "../cdp/chrome-profiles.j
  * smoke-test (`test-hardest/smoke-test.mjs`) — bei Aenderungen muss die
  * Zahl hier nachgezogen werden.
  *
- * Aktuelle Zaehlung: 23 Tools (inkl. dom_snapshot, switch_tab, virtual_desk, drag, download).
+ * Aktuelle Zaehlung: 24 Tools (inkl. dom_snapshot, switch_tab, virtual_desk, drag, download, set_page_data).
  */
-export const FREE_TIER_TOOL_COUNT = 23;
+export const FREE_TIER_TOOL_COUNT = 24;
 
 /** Liste der bekannten Subcommands fuer Dispatch + Help. */
 const KNOWN_SUBCOMMANDS = [

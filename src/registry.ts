@@ -47,6 +47,8 @@ import { networkMonitorSchema, networkMonitorHandler } from "./tools/network-mon
 import type { NetworkMonitorParams } from "./tools/network-monitor.js";
 import { configureSessionSchema, configureSessionHandler } from "./tools/configure-session.js";
 import type { ConfigureSessionParams } from "./tools/configure-session.js";
+import { setPageDataSchema, setPageDataHandler } from "./tools/set-page-data.js";
+import type { SetPageDataParams } from "./tools/set-page-data.js";
 import { pressKeySchema, pressKeyHandler } from "./tools/press-key.js";
 import type { PressKeyParams } from "./tools/press-key.js";
 import { scrollSchema, scrollHandler } from "./tools/scroll.js";
@@ -150,7 +152,9 @@ export const ALL_FREE_TOOL_NAMES: readonly string[] = [
   // 10. Meta
   "configure_session",
   "run_plan",
-  // 11. Evaluate (last resort)
+  // 11. Binary transfer (Story 22.4)
+  "set_page_data",
+  // 12. Evaluate (last resort)
   "evaluate",
 ] as const;
 
@@ -1776,6 +1780,22 @@ export class ToolRegistry implements ToolRegistryPublic {
       }, "run_plan"),
     );
 
+    // Story 22.4: set_page_data — write large payloads (>1 MB) into the page,
+    // bypassing the CDP 1 MB-per-message limit via server-side chunking.
+    maybeRegisterFreeMCPTool(
+      "set_page_data",
+      "Write a large payload (>1 MB) to window.__pb_data[key] in the page, bypassing the CDP 1 MB-per-message limit via server-side chunking. Use when: passing big base64 images / JSON / fixtures to a debug hook (window.__yourHook(data)), stubbing fetch responses with large bodies, or feeding binary data to a custom drop-zone. Sources: inline (pass `data` directly — useful for known small payloads) or file (pass absolute `path`, server reads as binary). After this call the page can read window.__pb_data['<key>'] (string OR ArrayBuffer depending on encoding) and window.__pb_data['<key>__complete'] === true once all chunks landed. Note: each call chunks sequentially over the CDP WebSocket — do NOT issue multiple set_page_data calls for the same key in parallel; concurrent writes would race on window.__pb_data[key]. Do NOT use for: small (<200 KB) payloads where a single evaluate works, or where file_upload with an <input type=file> would suffice.",
+      {
+        key: setPageDataSchema.shape.key,
+        source: setPageDataSchema.shape.source,
+        encoding: setPageDataSchema.shape.encoding,
+        chunkSize: setPageDataSchema.shape.chunkSize,
+      },
+      wrap(async (params) => {
+        return setPageDataHandler(params as unknown as SetPageDataParams, this.cdpClient, this.sessionId);
+      }, "set_page_data"),
+    );
+
     // --- 10. Last resort: evaluate (intentionally registered last so LLMs
     // don't default to it for text/element tasks — Positional Bias fix) ---
     maybeRegisterFreeMCPTool(
@@ -1953,6 +1973,9 @@ export class ToolRegistry implements ToolRegistryPublic {
         };
       }
       return downloadHandler(params as unknown as DownloadParams, collector);
+    });
+    this._handlers.set("set_page_data", async (params, sessionIdOverride?) => {
+      return setPageDataHandler(params as unknown as SetPageDataParams, this.cdpClient, sessionIdOverride ?? this.sessionId);
     });
     if (this._browserSession.sessionDefaults) {
       this._handlers.set("configure_session", async (params) => {

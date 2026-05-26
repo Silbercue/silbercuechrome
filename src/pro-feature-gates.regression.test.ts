@@ -103,7 +103,7 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
       }
     });
 
-    it("Free-Tier FULL_TOOLS-Modus registriert alle 22 Tools inkl. dialog/console/network/drag", () => {
+    it("Free-Tier FULL_TOOLS-Modus registriert alle 24 Tools inkl. dialog/console/network/drag/set_page_data", () => {
       // Story 18.3 Review-Fix M2: Zweite Assertion — fuer den FULL_TOOLS-
       // Modus muss der Guard auch H1-Regressions abfangen (handle_dialog /
       // console_logs / network_monitor unconditional registriert).
@@ -129,8 +129,8 @@ describe("Free-Tier Pro-Feature-Fallback Regressions (Story 15.6)", () => {
           (call: unknown[]) => call[0] as string,
         );
         expect(registeredNames).not.toContain("inspect_element");
-        // Full-Set exakt 23 Tools (10 Default + 12 Extended + drag aus Story 18.6, download aus Story 22.2).
-        expect(registeredNames.length).toBe(23);
+        // Full-Set exakt 24 Tools (10 Default + 12 Extended + drag aus Story 18.6, download aus Story 22.2, set_page_data aus Story 22.4).
+        expect(registeredNames.length).toBe(24);
         // Explizit die drei Collector-gated Tools — die Regression-Gefahr
         // lebt hier, siehe Story 18.3 Review H1/H2.
         expect(registeredNames).toContain("handle_dialog");

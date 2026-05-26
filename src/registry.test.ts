@@ -66,7 +66,7 @@ describe("ToolRegistry", () => {
     // Story 18.3 Review-Fix H1: `handle_dialog`, `console_logs` und
     // `network_monitor` werden seit dem H1-Fix **unbedingt** registriert
     // (Runtime-Guard im Handler statt Registration-Gate), damit der
-    // FULL_TOOLS-Export tatsaechlich alle 21 Tools enthaelt — auch im
+    // FULL_TOOLS-Export tatsaechlich alle 24 Tools enthaelt — auch im
     // Legacy-Test-Konstruktor, in dem die zugehoerigen Collectors undefined
     // sind. Zuvor waren es nur 18.
     //
@@ -74,12 +74,13 @@ describe("ToolRegistry", () => {
     // fill_form, press_key, scroll, drag, navigate, switch_tab, tab_status,
     // wait_for, observe, screenshot, dom_snapshot, handle_dialog,
     // file_upload, console_logs, network_monitor, download, configure_session,
-    // run_plan, evaluate = 23 Tools.
+    // set_page_data, run_plan, evaluate = 24 Tools.
     //
     // Story 18.6 (FR-028): `drag` ist im Full-Set, nicht im Default-Set.
     // Story 22.2: `download` als Extended-Tool hinzugefuegt.
+    // Story 22.4: `set_page_data` als Extended-Tool hinzugefuegt.
     // Default-Set bleibt stabil bei 10 (siehe DEFAULT_TOOL_NAMES).
-    expect(toolFn).toHaveBeenCalledTimes(23);
+    expect(toolFn).toHaveBeenCalledTimes(24);
     expect(toolFn).toHaveBeenCalledWith(
       "evaluate",
       expect.stringMatching(/^Execute JavaScript in the browser page context.*Bad uses:.*automatic recovery after a click\/type\/fill_form failure/s),
@@ -3340,7 +3341,7 @@ describe("ToolRegistry", () => {
     ];
 
     it("default-Modus (kein Opt-Out): server.tool() wird mit vollem Tool-Satz aufgerufen — FR-035 Revision", () => {
-      // Post-Revision 2026-04-18: Default ist Full-Set (23 Tools).
+      // Post-Revision 2026-04-18: Default ist Full-Set (24 Tools, +1 Story 22.4).
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
       const mockCdpClient = {} as never;
@@ -3348,7 +3349,7 @@ describe("ToolRegistry", () => {
       const registry = new ToolRegistry(mockServer, mockCdpClient, "session-1", {} as never);
       registry.registerAll();
 
-      expect(toolFn).toHaveBeenCalledTimes(23);
+      expect(toolFn).toHaveBeenCalledTimes(24);
     });
 
     it("minimal-Modus via MINIMAL_TOOLS=true: server.tool() wird genau mit den 10 Default-Tools aufgerufen — in stabiler Reihenfolge", () => {
@@ -3405,17 +3406,18 @@ describe("ToolRegistry", () => {
         registry.registerAll();
 
         // Nicht-true Werte => Full-Set bleibt aktiv.
-        expect(toolFn).toHaveBeenCalledTimes(23);
+        expect(toolFn).toHaveBeenCalledTimes(24);
       }
     });
 
-    it("FULL_TOOLS=true: server.tool() wird mit allen 21 Free-Tools aufgerufen — inkl. handle_dialog/console_logs/network_monitor", () => {
+    it("FULL_TOOLS=true: server.tool() wird mit allen 24 Free-Tools aufgerufen — inkl. handle_dialog/console_logs/network_monitor", () => {
       // Story 18.3 Review-Fix H3: Dieser Test bildet die **Produktions-
       // Realitaet** ab. `handle_dialog`, `console_logs`, `network_monitor`
       // werden seit dem H1-Fix unbedingt registriert — Runtime-Guards im
       // Handler uebernehmen die Collector-Existenz-Pruefung. Der Test muss
-      // deshalb alle elf Extended-Tools und die zehn Default-Tools
-      // verifizieren, ohne irgendwelche "optional skip"-Logik.
+      // deshalb alle 12 Extended-Tools, die 10 Default-Tools, `drag` (Story
+      // 18.6 FR-028), `download` (Story 22.2) und `set_page_data` (Story
+      // 22.4) verifizieren, ohne irgendwelche "optional skip"-Logik.
       process.env.SILBERCUE_CHROME_FULL_TOOLS = "true";
       const toolFn = vi.fn();
       const mockServer = { tool: toolFn } as never;
@@ -3451,8 +3453,8 @@ describe("ToolRegistry", () => {
         expect(registeredNames).toContain(name);
       }
 
-      // Insgesamt 10 Default + 12 Extended + drag (Story 18.6) = 23 Tools.
-      expect(toolFn).toHaveBeenCalledTimes(23);
+      // Insgesamt 10 Default + 12 Extended + drag (Story 18.6) + set_page_data (Story 22.4) = 24 Tools.
+      expect(toolFn).toHaveBeenCalledTimes(24);
     });
 
     it("FULL_TOOLS=true: _handlers-Map enthaelt alle Entries — inkl. handle_dialog/console_logs/network_monitor/drag", () => {
@@ -3471,7 +3473,7 @@ describe("ToolRegistry", () => {
       const handlers = (registry as unknown as { _handlers: Map<string, unknown> })._handlers;
 
       // `run_plan` ist bewusst NICHT im _handlers-Dispatcher (Recursion-
-      // Schutz, siehe Kommentar in registerAll()). Alle anderen 21 Tools
+      // Schutz, siehe Kommentar in registerAll()). Alle anderen Tools
       // muessen registriert sein — inklusive `drag` aus Story 18.6 (FR-028),
       // das im Full-Set ueber MCP exponiert wird und unabhaengig davon im
       // _handlers-Dispatcher verfuegbar ist (damit run_plan es nutzen kann).
@@ -3556,7 +3558,7 @@ describe("ToolRegistry", () => {
       expect(result._meta?.method).toBe("network_monitor");
     });
 
-    it("FULL_TOOLS=true mit echten Collector-Instanzen: tools/list enthaelt exakt 21 Tools und handle_dialog/console_logs/network_monitor sind **funktional**", async () => {
+    it("FULL_TOOLS=true mit echten Collector-Instanzen: tools/list enthaelt exakt 24 Tools und handle_dialog/console_logs/network_monitor sind **funktional**", async () => {
       // Story 18.3 Review-Fix H3: Der Test injiziert Mock-Collectors via
       // Legacy-Konstruktor (Parameter 7, 10, 11), damit sowohl die
       // `tools/list`-Registrierung als auch der Runtime-Dispatch der
@@ -3600,8 +3602,8 @@ describe("ToolRegistry", () => {
       registry.registerAll();
 
       const registeredNames = toolFn.mock.calls.map((call: unknown[]) => call[0] as string);
-      // Exakt 23 Tools: 10 Default + 12 Extended + drag (Story 18.6 FR-028, Story 22.2 download).
-      expect(toolFn).toHaveBeenCalledTimes(23);
+      // Exakt 24 Tools: 10 Default + 12 Extended + drag (Story 18.6 FR-028) + download (Story 22.2) + set_page_data (Story 22.4).
+      expect(toolFn).toHaveBeenCalledTimes(24);
       expect(registeredNames).toContain("handle_dialog");
       expect(registeredNames).toContain("console_logs");
       expect(registeredNames).toContain("network_monitor");
